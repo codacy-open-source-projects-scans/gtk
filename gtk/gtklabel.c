@@ -420,6 +420,7 @@ static void gtk_label_do_popup                   (GtkLabel      *self,
                                                   double         y);
 static void gtk_label_ensure_select_info  (GtkLabel *self);
 static void gtk_label_clear_select_info   (GtkLabel *self);
+static void gtk_label_clear_provider_info (GtkLabel *self);
 static void gtk_label_clear_layout        (GtkLabel *self);
 static void gtk_label_ensure_layout       (GtkLabel *self);
 static void gtk_label_select_region_index (GtkLabel *self,
@@ -1524,6 +1525,7 @@ gtk_label_dispose (GObject *object)
 
   gtk_label_set_mnemonic_widget (self, NULL);
   gtk_label_clear_select_info (self);
+  gtk_label_clear_provider_info (self);
 
   G_OBJECT_CLASS (gtk_label_parent_class)->dispose (object);
 }
@@ -1562,7 +1564,7 @@ gtk_label_finalize (GObject *object)
   g_clear_pointer (&self->attrs, pango_attr_list_unref);
   g_clear_pointer (&self->markup_attrs, pango_attr_list_unref);
 
-  if (self->select_info)
+  if (self->select_info && self->select_info->provider)
     g_object_unref (self->select_info->provider);
 
   gtk_label_clear_links (self);
@@ -4925,7 +4927,7 @@ gtk_label_clear_select_info (GtkLabel *self)
       gtk_widget_remove_controller (GTK_WIDGET (self), self->select_info->motion_controller);
       gtk_widget_remove_controller (GTK_WIDGET (self), self->select_info->focus_controller);
       GTK_LABEL_CONTENT (self->select_info->provider)->label = NULL;
-      g_object_unref (self->select_info->provider);
+      g_clear_object (&self->select_info->provider);
 
       g_free (self->select_info);
       self->select_info = NULL;
@@ -4934,6 +4936,15 @@ gtk_label_clear_select_info (GtkLabel *self)
 
       gtk_widget_set_focusable (GTK_WIDGET (self), FALSE);
     }
+}
+
+static void
+gtk_label_clear_provider_info (GtkLabel *self)
+{
+  if (self->select_info == NULL)
+    return;
+
+  GTK_LABEL_CONTENT (self->select_info->provider)->label = NULL;
 }
 
 /**
@@ -6179,6 +6190,55 @@ gtk_label_accessible_text_get_attributes (GtkAccessibleText        *self,
   return TRUE;
 }
 
+static gboolean
+gtk_label_accessible_text_get_extents (GtkAccessibleText *self,
+                                       unsigned int       start,
+                                       unsigned int       end,
+                                       graphene_rect_t   *extents)
+{
+  GtkLabel *label = GTK_LABEL (self);
+  PangoLayout *layout;
+  const char *text;
+  float lx, ly;
+  cairo_region_t *range_clip;
+  cairo_rectangle_int_t clip_rect;
+  int range[2];
+
+  layout = label->layout;
+  text = label->text;
+  get_layout_location (label, &lx, &ly);
+
+  range[0] = g_utf8_pointer_to_offset (text, text + start);
+  range[1] = g_utf8_pointer_to_offset (text, text + end);
+
+  range_clip = gdk_pango_layout_get_clip_region (layout, lx, ly, range, 1);
+  cairo_region_get_extents (range_clip, &clip_rect);
+  cairo_region_destroy (range_clip);
+
+  extents->origin.x = clip_rect.x;
+  extents->origin.y = clip_rect.y;
+  extents->size.width = clip_rect.width;
+  extents->size.height = clip_rect.height;
+
+  return TRUE;
+}
+
+static gboolean
+gtk_label_accessible_text_get_offset (GtkAccessibleText      *self,
+                                      const graphene_point_t *point,
+                                      unsigned int           *offset)
+{
+  GtkLabel *label = GTK_LABEL (self);
+  int index;
+
+  if (!get_layout_index (label, roundf (point->x), roundf (point->y), &index))
+    return FALSE;
+
+  *offset = (unsigned int) g_utf8_pointer_to_offset (label->text, label->text + index);
+
+  return TRUE;
+}
+
 static void
 gtk_label_accessible_text_init (GtkAccessibleTextInterface *iface)
 {
@@ -6188,6 +6248,8 @@ gtk_label_accessible_text_init (GtkAccessibleTextInterface *iface)
   iface->get_selection = gtk_label_accessible_text_get_selection;
   iface->get_attributes = gtk_label_accessible_text_get_attributes;
   iface->get_default_attributes = gtk_label_accessible_text_get_default_attributes;
+  iface->get_extents = gtk_label_accessible_text_get_extents;
+  iface->get_offset = gtk_label_accessible_text_get_offset;
 }
 
 /* }}} */

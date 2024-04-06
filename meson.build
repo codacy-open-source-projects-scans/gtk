@@ -1,5 +1,5 @@
 project('gtk', 'c',
-        version: '4.14.2',
+        version: '4.15.0',
         default_options: [
           'buildtype=debugoptimized',
           'warning_level=1',
@@ -13,10 +13,10 @@ project('gtk', 'c',
 # keep these numbers in sync with wrap files where there exist
 glib_req           = '>= 2.76.0'
 introspection_req  = '>= 1.76.0' # keep this in sync with glib
-pango_req          = '>= 1.50.0' # keep this in sync with .gitlab-ci/test-msys.sh
+pango_req          = '>= 1.52.0' # keep this in sync with .gitlab-ci/test-msys.sh
 harfbuzz_req       = '>= 2.6.0'
 fribidi_req        = '>= 1.0.6'
-cairo_req          = '>= 1.14.0'
+cairo_req          = '>= 1.18.0'
 gdk_pixbuf_req     = '>= 2.30.0'
 wayland_proto_req  = '>= 1.31'
 wayland_req        = '>= 1.21.0'
