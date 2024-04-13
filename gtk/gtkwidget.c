@@ -6551,6 +6551,8 @@ gtk_widget_update_default_pango_context (GtkWidget *widget)
  *
  * When not set, the default font options for the `GdkDisplay`
  * will be used.
+ *
+ * Deprecated: 4.16
  */
 void
 gtk_widget_set_font_options (GtkWidget                  *widget,
@@ -6580,8 +6582,9 @@ gtk_widget_set_font_options (GtkWidget                  *widget,
  *
  * Seee [method@Gtk.Widget.set_font_options].
  *
- * Returns: (transfer none) (nullable): the `cairo_font_options_t`
- *   of widget
+ * Returns: (transfer none) (nullable): the `cairo_font_options_t` of widget
+ *
+ * Deprecated: 4.16
  */
 const cairo_font_options_t *
 gtk_widget_get_font_options (GtkWidget *widget)
@@ -8638,28 +8641,26 @@ gtk_widget_accessible_get_bounds (GtkAccessible *self,
   parent = gtk_widget_get_parent (widget);
   if (parent != NULL)
     {
-      graphene_point_t p;
-      if (!gtk_widget_compute_point (widget, parent, &GRAPHENE_POINT_INIT (0, 0), &p))
-        graphene_point_init (&p, 0, 0);
-      *x = floorf (p.x);
-      *y = floorf (p.y);
       bounds_relative_to = parent;
     }
   else
     {
-      *x = *y = 0;
       bounds_relative_to = widget;
     }
 
   if (!gtk_widget_compute_bounds (widget, bounds_relative_to, &bounds))
     {
+      *x = 0;
+      *y = 0;
       *width = 0;
       *height = 0;
     }
   else
     {
-      *width = ceilf (graphene_rect_get_width (&bounds));
-      *height = ceilf (graphene_rect_get_height (&bounds));
+      *x = floorf (graphene_rect_get_x (&bounds));
+      *y = floorf (graphene_rect_get_y (&bounds));
+      *width = ceil (*x + graphene_rect_get_width (&bounds)) - *x;
+      *height = ceil (*y + graphene_rect_get_height (&bounds)) - *y;
     }
 
   return TRUE;
