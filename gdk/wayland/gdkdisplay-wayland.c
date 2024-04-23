@@ -105,6 +105,9 @@
 #endif
 
 static void _gdk_wayland_display_load_cursor_theme (GdkWaylandDisplay *display_wayland);
+static void _gdk_wayland_display_set_cursor_theme  (GdkDisplay        *display,
+                                                    const char        *name,
+                                                    int                size);
 
 G_DEFINE_TYPE (GdkWaylandDisplay, gdk_wayland_display, GDK_TYPE_DISPLAY)
 
@@ -310,7 +313,9 @@ linux_dmabuf_main_device (void *data,
                           struct zwp_linux_dmabuf_feedback_v1 *zwp_linux_dmabuf_feedback_v1,
                           struct wl_array *device)
 {
-  dev_t dev G_GNUC_UNUSED = *(dev_t *)device->data;
+  dev_t dev G_GNUC_UNUSED;
+
+  memcpy (&dev, device->data, sizeof (dev_t));
 
   GDK_DEBUG (MISC, "got dmabuf main device: %u %u", major (dev), minor (dev));
 }
@@ -327,7 +332,9 @@ linux_dmabuf_tranche_target_device (void *data,
                                     struct zwp_linux_dmabuf_feedback_v1 *zwp_linux_dmabuf_feedback_v1,
                                     struct wl_array *device)
 {
-  dev_t dev G_GNUC_UNUSED = *(dev_t *)device->data;
+  dev_t dev G_GNUC_UNUSED;
+
+  memcpy (&dev, device->data, sizeof (dev_t));
 
   GDK_DEBUG (MISC, "got dmabuf tranche target device: %u %u", major (dev), minor (dev));
 }
@@ -437,7 +444,7 @@ gdk_registry_handle_global (void               *data,
     {
       display_wayland->compositor =
         wl_registry_bind (display_wayland->wl_registry, id,
-                          &wl_compositor_interface, MIN (version, 5));
+                          &wl_compositor_interface, MIN (version, 6));
     }
   else if (strcmp (interface, "wl_shm") == 0)
     {
@@ -606,7 +613,13 @@ gdk_registry_handle_global (void               *data,
                           &wp_presentation_interface,
                           MIN (version, 1));
     }
-
+  else if (strcmp (interface, wp_single_pixel_buffer_manager_v1_interface.name) == 0)
+    {
+      display_wayland->single_pixel_buffer =
+        wl_registry_bind (display_wayland->wl_registry, id,
+                          &wp_single_pixel_buffer_manager_v1_interface,
+                          MIN (version, 1));
+    }
 
   g_hash_table_insert (display_wayland->known_globals,
                        GUINT_TO_POINTER (id), g_strdup (interface));
@@ -817,6 +830,7 @@ gdk_wayland_display_dispose (GObject *object)
   g_clear_pointer (&display_wayland->fractional_scale, wp_fractional_scale_manager_v1_destroy);
   g_clear_pointer (&display_wayland->viewporter, wp_viewporter_destroy);
   g_clear_pointer (&display_wayland->presentation, wp_presentation_destroy);
+  g_clear_pointer (&display_wayland->single_pixel_buffer, wp_single_pixel_buffer_manager_v1_destroy);
   g_clear_pointer (&display_wayland->linux_dmabuf, zwp_linux_dmabuf_v1_destroy);
   g_clear_pointer (&display_wayland->linux_dmabuf_feedback, zwp_linux_dmabuf_feedback_v1_destroy);
   if (display_wayland->linux_dmabuf_formats)
@@ -1122,7 +1136,7 @@ G_GNUC_END_IGNORE_DEPRECATIONS
   display_class->get_monitors = gdk_wayland_display_get_monitors;
   display_class->get_monitor_at_surface = gdk_wayland_display_get_monitor_at_surface;
   display_class->get_setting = gdk_wayland_display_get_setting;
-  display_class->set_cursor_theme = gdk_wayland_display_set_cursor_theme;
+  display_class->set_cursor_theme = _gdk_wayland_display_set_cursor_theme;
 }
 
 static void
@@ -1195,11 +1209,22 @@ get_cursor_theme (GdkWaylandDisplay *display_wayland,
  * @size: the size to use for cursors
  *
  * Sets the cursor theme for the given @display.
+ *
+ * Deprecated: 4.16: Use the cursor-related properties of
+ *   [GtkSettings](../gtk4/class.Settings.html) to set the cursor theme
  */
 void
 gdk_wayland_display_set_cursor_theme (GdkDisplay *display,
                                       const char *name,
                                       int         size)
+{
+  _gdk_wayland_display_set_cursor_theme (display, name, size);
+}
+
+static void
+_gdk_wayland_display_set_cursor_theme (GdkDisplay *display,
+                                       const char *name,
+                                       int         size)
 {
   GdkWaylandDisplay *display_wayland = GDK_WAYLAND_DISPLAY(display);
   struct wl_cursor_theme *theme;
@@ -1268,7 +1293,7 @@ _gdk_wayland_display_load_cursor_theme (GdkWaylandDisplay *display_wayland)
   else
     name = "default";
 
-  gdk_wayland_display_set_cursor_theme (GDK_DISPLAY (display_wayland), name, size);
+  _gdk_wayland_display_set_cursor_theme (GDK_DISPLAY (display_wayland), name, size);
   g_value_unset (&v);
 
   gdk_profiler_end_mark (before, "Wayland cursor theme load", NULL);
@@ -1804,6 +1829,7 @@ static TranslationEntry translations[] = {
   { FALSE, "org.gnome.desktop.interface", "font-hinting", "gtk-xft-hinting", G_TYPE_NONE, { .i = 1 } },
   { FALSE, "org.gnome.desktop.interface", "font-hinting", "gtk-xft-hintstyle", G_TYPE_NONE, { .i = 1 } },
   { FALSE, "org.gnome.desktop.interface", "font-rgba-order", "gtk-xft-rgba", G_TYPE_NONE, { .i = 0 } },
+  { FALSE, "org.gnome.desktop.interface", "font-rendering", "gtk-font-rendering", G_TYPE_ENUM, { .i = 0 } },
   { FALSE, "org.gnome.settings-daemon.plugins.xsettings", "antialiasing", "gtk-xft-antialias", G_TYPE_NONE, { .i = 1 } },
   { FALSE, "org.gnome.settings-daemon.plugins.xsettings", "hinting", "gtk-xft-hinting", G_TYPE_NONE, { .i = 1 } },
   { FALSE, "org.gnome.settings-daemon.plugins.xsettings", "hinting", "gtk-xft-hintstyle", G_TYPE_NONE, { .i = 1 } },
@@ -1895,6 +1921,7 @@ apply_portal_setting (TranslationEntry *entry,
       entry->fallback.s = g_intern_string (g_variant_get_string (value, NULL));
       break;
     case G_TYPE_INT:
+    case G_TYPE_ENUM:
       entry->fallback.i = g_variant_get_int32 (value);
       break;
     case G_TYPE_BOOLEAN:
@@ -2144,6 +2171,9 @@ set_value_from_entry (GdkDisplay       *display,
         case G_TYPE_BOOLEAN:
           g_value_set_boolean (value, entry->fallback.b);
           break;
+        case G_TYPE_ENUM:
+          g_value_set_enum (value, entry->fallback.i);
+          break;
         case G_TYPE_NONE:
           if (g_str_equal (entry->setting, "gtk-fontconfig-timestamp"))
             g_value_set_uint (value, (guint)entry->fallback.i);
@@ -2193,6 +2223,11 @@ set_value_from_entry (GdkDisplay       *display,
       g_value_set_boolean (value, settings && entry->valid
                                   ? g_settings_get_boolean (settings, entry->key)
                                   : entry->fallback.b);
+      break;
+    case G_TYPE_ENUM:
+      g_value_set_enum (value, settings && entry->valid
+                               ? g_settings_get_enum (settings, entry->key)
+                               : entry->fallback.i);
       break;
     case G_TYPE_NONE:
       if (g_str_equal (entry->setting, "gtk-fontconfig-timestamp"))

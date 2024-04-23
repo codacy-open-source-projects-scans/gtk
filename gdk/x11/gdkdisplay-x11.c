@@ -665,7 +665,6 @@ gdk_x11_display_translate_event (GdkEventTranslator *translator,
       if (x11_screen->wmspec_check_window == xevent->xdestroywindow.window)
         {
           x11_screen->wmspec_check_window = None;
-          x11_screen->last_wmspec_check_time = 0;
           g_free (x11_screen->window_manager_name);
           x11_screen->window_manager_name = g_strdup ("unknown");
 
@@ -3079,7 +3078,7 @@ G_GNUC_END_IGNORE_DEPRECATIONS
 
   display_class->get_monitors = gdk_x11_display_get_monitors;
   display_class->get_setting = gdk_x11_display_get_setting;
-  display_class->set_cursor_theme = gdk_x11_display_set_cursor_theme;
+  display_class->set_cursor_theme = _gdk_x11_display_set_cursor_theme;
 
   class->xevent = gdk_event_source_xevent;
 
