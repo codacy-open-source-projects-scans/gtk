@@ -29,6 +29,7 @@
 #include "gdkdmabuffourccprivate.h"
 #include "gdkdmabuftextureprivate.h"
 #include "gdkdisplayprivate.h"
+#include "gdkprofilerprivate.h"
 #include <glib/gi18n-lib.h>
 #include <math.h>
 
@@ -1110,6 +1111,7 @@ gdk_display_load_pipeline_cache (GdkDisplay *display)
 static gboolean
 gdk_vulkan_save_pipeline_cache (GdkDisplay *display)
 {
+  G_GNUC_UNUSED gint64 begin_time = GDK_PROFILER_CURRENT_TIME;
   GError *error = NULL;
   VkDevice device;
   VkPipelineCache cache;
@@ -1124,13 +1126,12 @@ gdk_vulkan_save_pipeline_cache (GdkDisplay *display)
   GDK_VK_CHECK (vkGetPipelineCacheData, device, cache, &size, NULL);
   if (size == 0)
     return TRUE;
-  
+
   if (size == display->vk_pipeline_cache_size)
     {
       GDK_DEBUG (VULKAN, "pipeline cache size (%zu bytes) unchanged, skipping save", size);
       return TRUE;
     }
-
 
   data = g_malloc (size);
   if (GDK_VK_CHECK (vkGetPipelineCacheData, device, cache, &size, data) != VK_SUCCESS)
@@ -1151,7 +1152,7 @@ gdk_vulkan_save_pipeline_cache (GdkDisplay *display)
 
   file = gdk_vulkan_get_pipeline_cache_file (display);
 
-  GDK_DEBUG (VULKAN, "Saving pipeline cache to %s", g_file_peek_path (file));
+  GDK_DEBUG (VULKAN, "Saving pipeline cache of size %lu to %s", size, g_file_peek_path (file));
 
   if (!g_file_replace_contents (file,
                                 data,
@@ -1166,7 +1167,7 @@ gdk_vulkan_save_pipeline_cache (GdkDisplay *display)
       if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_WRONG_ETAG))
         {
           VkPipelineCache new_cache;
-          
+
           GDK_DEBUG (VULKAN, "Pipeline cache file modified, merging into current");
           new_cache = gdk_display_load_pipeline_cache (display);
           if (new_cache)
@@ -1193,10 +1194,15 @@ gdk_vulkan_save_pipeline_cache (GdkDisplay *display)
       return FALSE;
     }
 
+  gdk_profiler_end_markf (begin_time,
+                          "Save Vulkan pipeline cache", "%s size %lu",
+                          g_file_peek_path (file), size);
+
   g_object_unref (file);
   g_free (data);
   g_free (display->vk_pipeline_cache_etag);
   display->vk_pipeline_cache_etag = etag;
+  display->vk_pipeline_cache_size = size;
 
   return TRUE;
 }
@@ -1236,6 +1242,11 @@ gdk_display_create_pipeline_cache (GdkDisplay *display)
                                            },
                                            NULL,
                                            &display->vk_pipeline_cache);
+      GDK_DEBUG (VULKAN, "Creating empty pipeline cache");
+    }
+  else
+    {
+      GDK_DEBUG (VULKAN, "Loading pipeline cache (%lu bytes)", display->vk_pipeline_cache_size);
     }
 }
 
@@ -1345,6 +1356,7 @@ static gboolean
 gdk_display_create_vulkan_device (GdkDisplay  *display,
                                   GError     **error)
 {
+  G_GNUC_UNUSED gint64 start_time = GDK_PROFILER_CURRENT_TIME;
   uint32_t i, j, k;
   const char *override;
   gboolean list_devices;
@@ -1553,6 +1565,8 @@ gdk_display_create_vulkan_device (GdkDisplay  *display,
                                        "Hum, what? This should not happen.")));
                 }
 
+              gdk_profiler_end_mark (start_time, "Create Vulkan device", NULL);
+
               return TRUE;
             }
         }
@@ -1591,6 +1605,7 @@ static gboolean
 gdk_display_create_vulkan_instance (GdkDisplay  *display,
                                     GError     **error)
 {
+  G_GNUC_UNUSED gint64 start_time = GDK_PROFILER_CURRENT_TIME;
   uint32_t i;
   GPtrArray *used_extensions;
   GPtrArray *used_layers;
@@ -1751,6 +1766,8 @@ gdk_display_create_vulkan_instance (GdkDisplay  *display,
   gdk_display_create_pipeline_cache (display);
 
   display->vk_shader_modules = g_hash_table_new (g_str_hash, g_str_equal);
+
+  gdk_profiler_end_mark (start_time, "Create Vulkan instance", NULL);
 
   return TRUE;
 }
