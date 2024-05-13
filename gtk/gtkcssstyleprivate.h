@@ -24,6 +24,8 @@
 
 #include "gtk/gtkbitmaskprivate.h"
 #include "gtk/gtkcssvalueprivate.h"
+#include "gtk/gtkcssvariablesetprivate.h"
+#include "gtk/css/gtkcssvariablevalueprivate.h"
 
 G_BEGIN_DECLS
 
@@ -232,6 +234,10 @@ struct _GtkCssStyle
   GtkCssTransitionValues  *transition;
   GtkCssSizeValues        *size;
   GtkCssOtherValues       *other;
+  GtkCssVariableSet       *variables;
+
+  GtkCssValue             *variable_values;
+  int                      n_variable_values;
 };
 
 struct _GtkCssStyleClass
@@ -246,6 +252,9 @@ struct _GtkCssStyleClass
   gboolean              (* is_static)                           (GtkCssStyle            *style);
 
   GtkCssStaticStyle *   (* get_static_style)                    (GtkCssStyle            *style);
+
+  GtkCssValue *         (* get_original_value)                  (GtkCssStyle            *style,
+                                                                 guint                   id);
 };
 
 GType                   gtk_css_style_get_type                  (void) G_GNUC_CONST;
@@ -257,6 +266,9 @@ GtkCssSection *         gtk_css_style_get_section               (GtkCssStyle    
 gboolean                gtk_css_style_is_static                 (GtkCssStyle            *style) G_GNUC_PURE;
 GtkCssStaticStyle *     gtk_css_style_get_static_style          (GtkCssStyle            *style);
 
+GtkCssValue *           gtk_css_style_get_original_value        (GtkCssStyle            *style,
+                                                                 guint                   id) G_GNUC_PURE;
+
 char *                  gtk_css_style_to_string                 (GtkCssStyle            *style);
 gboolean                gtk_css_style_print                     (GtkCssStyle            *style,
                                                                  GString                *string,
@@ -267,6 +279,13 @@ PangoTextTransform      gtk_css_style_get_pango_text_transform  (GtkCssStyle    
 char *                  gtk_css_style_compute_font_features     (GtkCssStyle            *style);
 PangoAttrList *         gtk_css_style_get_pango_attributes      (GtkCssStyle            *style);
 PangoFontDescription *  gtk_css_style_get_pango_font            (GtkCssStyle            *style);
+
+void                    gtk_css_style_lookup_symbolic_colors    (GtkCssStyle            *style,
+                                                                 GdkRGBA                 color_out[4]);
+
+GtkCssVariableValue *   gtk_css_style_get_custom_property       (GtkCssStyle            *style,
+                                                                 int                     id);
+GArray *                gtk_css_style_list_custom_properties    (GtkCssStyle            *style);
 
 GtkCssValues *gtk_css_values_new   (GtkCssValuesType  type);
 GtkCssValues *gtk_css_values_ref   (GtkCssValues     *values);
@@ -314,6 +333,10 @@ void gtk_css_size_values_compute_changes_and_affects (GtkCssStyle *style1,
                                                       GtkBitmask    **changes,
                                                       GtkCssAffects *affects);
 void gtk_css_other_values_compute_changes_and_affects (GtkCssStyle *style1,
+                                                      GtkCssStyle *style2,
+                                                      GtkBitmask    **changes,
+                                                      GtkCssAffects *affects);
+void gtk_css_custom_values_compute_changes_and_affects (GtkCssStyle *style1,
                                                       GtkCssStyle *style2,
                                                       GtkBitmask    **changes,
                                                       GtkCssAffects *affects);
