@@ -367,7 +367,7 @@ gtk_css_style_print (GtkCssStyle *style,
       value = gtk_css_style_get_value (style, i);
 
       g_string_append_printf (string, "%*s%s: ", indent, "", name);
-      _gtk_css_value_print (value, string);
+      gtk_css_value_print (value, string);
       g_string_append_c (string, ';');
 
       if (section)
@@ -683,7 +683,7 @@ gtk_css_style_get_pango_attributes (GtkCssStyle *style)
     }
 
   /* letter-spacing */
-  letter_spacing = _gtk_css_number_value_get (style->font->letter_spacing, 100);
+  letter_spacing = gtk_css_number_value_get (style->font->letter_spacing, 100);
   if (letter_spacing != 0)
     {
       attrs = add_pango_attr (attrs, pango_attr_letter_spacing_new (letter_spacing * PANGO_SCALE));
@@ -781,13 +781,13 @@ gtk_css_style_get_pango_font (GtkCssStyle *style)
     }
 
   v = style->core->font_size;
-  pango_font_description_set_absolute_size (description, round (_gtk_css_number_value_get (v, 100) * PANGO_SCALE));
+  pango_font_description_set_absolute_size (description, round (gtk_css_number_value_get (v, 100) * PANGO_SCALE));
 
   v = style->font->font_style;
   pango_font_description_set_style (description, _gtk_css_font_style_value_get (v));
 
   v = style->font->font_weight;
-  pango_font_description_set_weight (description, _gtk_css_number_value_get (v, 100));
+  pango_font_description_set_weight (description, gtk_css_number_value_get (v, 100));
 
   v = style->font->font_stretch;
   pango_font_description_set_stretch (description, _gtk_css_font_stretch_value_get (v));
@@ -860,10 +860,9 @@ GtkCssValues *gtk_css_values_ref (GtkCssValues *values)
 static void
 gtk_css_values_free (GtkCssValues *values)
 {
-  int i;
   GtkCssValue **v = GET_VALUES (values);
 
-  for (i = 0; i < N_VALUES (values->type); i++)
+  for (int i = 0; i < N_VALUES (values->type); i++)
     {
       if (v[i])
         gtk_css_value_unref (v[i]);
@@ -888,14 +887,13 @@ gtk_css_values_copy (GtkCssValues *values)
 {
   GtkCssValues *copy;
   GtkCssValue **v, **v2;
-  int i;
 
-  copy = gtk_css_values_new (TYPE_INDEX(values->type));
+  copy = gtk_css_values_new (TYPE_INDEX (values->type));
 
   v = GET_VALUES (values);
   v2 = GET_VALUES (copy);
 
-  for (i = 0; i < N_VALUES (values->type); i++)
+  for (int i = 0; i < N_VALUES (values->type); i++)
     {
       if (v[i])
         v2[i] = gtk_css_value_ref (v[i]);
@@ -909,7 +907,7 @@ gtk_css_values_new (GtkCssValuesType type)
 {
   GtkCssValues *values;
 
-  values = (GtkCssValues *)g_malloc0 (VALUES_SIZE(type));
+  values = (GtkCssValues *) g_malloc0 (VALUES_SIZE (type));
   values->ref_count = 1;
   values->type = type;
 
