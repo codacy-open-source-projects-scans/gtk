@@ -22,11 +22,13 @@
 #include "gtkcssstylepropertyprivate.h"
 #include "gtkprivate.h"
 #include "gtkstylepropertyprivate.h"
+#include "gtkcssnumbervalueprivate.h"
 #include "gtkcssstyleprivate.h"
 #include "gtkstyleproviderprivate.h"
 
 #include "gdk/gdkhslaprivate.h"
 #include "gdk/gdkrgbaprivate.h"
+#include "gtkcolorutilsprivate.h"
 
 typedef enum {
   COLOR_TYPE_LITERAL,
@@ -693,13 +695,511 @@ gtk_css_color_value_can_parse (GtkCssParser *parser)
       || gtk_css_parser_has_function (parser, "hsl")
       || gtk_css_parser_has_function (parser, "hsla")
       || gtk_css_parser_has_function (parser, "rgb")
-      || gtk_css_parser_has_function (parser, "rgba");
+      || gtk_css_parser_has_function (parser, "rgba")
+      || gtk_css_parser_has_function (parser, "hwb")
+      || gtk_css_parser_has_function (parser, "oklab")
+      || gtk_css_parser_has_function (parser, "oklch");
+}
+
+typedef struct
+{
+  GdkRGBA *rgba;
+  gboolean use_percentages;
+} ParseRGBAData;
+
+typedef enum
+{
+  COLOR_SYNTAX_DETECTING,
+  COLOR_SYNTAX_MODERN,
+  COLOR_SYNTAX_LEGACY,
+} ColorSyntax;
+
+static gboolean
+parse_rgb_channel_value (GtkCssParser  *parser,
+                         float         *value,
+                         ColorSyntax    syntax,
+                         ParseRGBAData *data)
+{
+  gboolean has_percentage =
+    gtk_css_token_is (gtk_css_parser_get_token (parser), GTK_CSS_TOKEN_PERCENTAGE);
+  GtkCssValue *val;
+
+  switch (syntax)
+  {
+    case COLOR_SYNTAX_DETECTING:
+      data->use_percentages = has_percentage;
+      break;
+
+    case COLOR_SYNTAX_LEGACY:
+      if (data->use_percentages != has_percentage)
+        {
+          gtk_css_parser_error_syntax (parser, "Legacy color syntax doesn't allow mixing numbers and percentages");
+          return FALSE;
+        }
+
+      break;
+
+    case COLOR_SYNTAX_MODERN:
+      break;
+
+    default:
+      g_assert_not_reached ();
+  }
+
+  val = gtk_css_number_value_parse (parser, GTK_CSS_PARSE_NUMBER | GTK_CSS_PARSE_PERCENT);
+  if (val == NULL)
+    return FALSE;
+
+  *value = gtk_css_number_value_get_canonical (val, 255);
+  *value = CLAMP (*value, 0.0, 255.0) / 255.0;
+
+  gtk_css_value_unref (val);
+
+  return TRUE;
+}
+
+static gboolean
+parse_alpha_value (GtkCssParser *parser,
+                   float        *value,
+                   ColorSyntax   syntax)
+{
+  GtkCssNumberParseFlags flags = GTK_CSS_PARSE_NUMBER;
+  GtkCssValue *val;
+
+  if (syntax == COLOR_SYNTAX_MODERN)
+    flags |= GTK_CSS_PARSE_PERCENT;
+
+  val = gtk_css_number_value_parse (parser, flags);
+  if (val == NULL)
+    return FALSE;
+
+  *value = gtk_css_number_value_get_canonical (val, 1);
+  *value = CLAMP (*value, 0.0, 1.0);
+
+  gtk_css_value_unref (val);
+
+  return TRUE;
+}
+
+static gboolean
+parse_hsl_channel_value (GtkCssParser  *parser,
+                         float         *value,
+                         ColorSyntax    syntax)
+{
+  GtkCssNumberParseFlags flags = GTK_CSS_PARSE_PERCENT;
+  GtkCssValue *val;
+
+  if (syntax == COLOR_SYNTAX_MODERN)
+    flags |= GTK_CSS_PARSE_NUMBER;
+
+  val = gtk_css_number_value_parse (parser, flags);
+  if (val == NULL)
+    return FALSE;
+
+  *value = gtk_css_number_value_get_canonical (val, 100);
+  *value = CLAMP (*value, 0.0, 100.0) / 100.0;
+
+  gtk_css_value_unref (val);
+
+  return TRUE;
+}
+
+static gboolean
+parse_hwb_channel_value (GtkCssParser  *parser,
+                         float         *value)
+{
+  GtkCssNumberParseFlags flags = GTK_CSS_PARSE_PERCENT | GTK_CSS_PARSE_NUMBER;
+  GtkCssValue *val;
+
+  val = gtk_css_number_value_parse (parser, flags);
+  if (val == NULL)
+    return FALSE;
+
+  *value = gtk_css_number_value_get_canonical (val, 100);
+  *value = CLAMP (*value, 0.0, 100.0);
+
+  gtk_css_value_unref (val);
+
+  return TRUE;
+}
+
+static gboolean
+parse_hue_value (GtkCssParser *parser,
+                 float        *value)
+{
+  GtkCssValue *hue;
+
+  hue = gtk_css_number_value_parse (parser, GTK_CSS_PARSE_NUMBER | GTK_CSS_PARSE_ANGLE);
+  if (hue == NULL)
+    return FALSE;
+
+  *value = gtk_css_number_value_get_canonical (hue, 360);
+
+  gtk_css_value_unref (hue);
+
+  return TRUE;
+}
+
+static gboolean
+parse_ok_L_value (GtkCssParser  *parser,
+                  float         *value)
+{
+  GtkCssNumberParseFlags flags = GTK_CSS_PARSE_PERCENT | GTK_CSS_PARSE_NUMBER;
+  GtkCssValue *val;
+
+  val = gtk_css_number_value_parse (parser, flags);
+  if (val == NULL)
+    return FALSE;
+
+  *value = gtk_css_number_value_get_canonical (val, 1);
+  *value = CLAMP (*value, 0.0, 1.0);
+
+  gtk_css_value_unref (val);
+
+  return TRUE;
+}
+
+static gboolean
+parse_ok_C_value (GtkCssParser  *parser,
+                  float         *value)
+{
+  GtkCssNumberParseFlags flags = GTK_CSS_PARSE_PERCENT | GTK_CSS_PARSE_NUMBER;
+  GtkCssValue *val;
+
+  val = gtk_css_number_value_parse (parser, flags);
+  if (val == NULL)
+    return FALSE;
+
+  *value = gtk_css_number_value_get_canonical (val, 1);
+  *value = MAX (*value, 0.0);
+
+  gtk_css_value_unref (val);
+
+  return TRUE;
+}
+
+static gboolean
+parse_ok_ab_value (GtkCssParser  *parser,
+                   float         *value)
+{
+  GtkCssNumberParseFlags flags = GTK_CSS_PARSE_PERCENT | GTK_CSS_PARSE_NUMBER;
+  GtkCssValue *val;
+
+  val = gtk_css_number_value_parse (parser, flags);
+  if (val == NULL)
+    return FALSE;
+
+  *value = gtk_css_number_value_get_canonical (val, 0.4);
+
+  gtk_css_value_unref (val);
+
+  return TRUE;
+}
+
+static guint
+parse_rgba_color_channel (GtkCssParser *parser,
+                          guint         arg,
+                          ColorSyntax   syntax,
+                          gpointer      data)
+{
+  ParseRGBAData *rgba_data = data;
+  GdkRGBA *rgba = rgba_data->rgba;
+
+  switch (arg)
+  {
+    case 0:
+      if (!parse_rgb_channel_value (parser, &rgba->red, syntax, rgba_data))
+        return 0;
+      return 1;
+
+    case 1:
+      if (!parse_rgb_channel_value (parser, &rgba->green, syntax, rgba_data))
+        return 0;
+      return 1;
+
+    case 2:
+      if (!parse_rgb_channel_value (parser, &rgba->blue, syntax, rgba_data))
+        return 0;
+      return 1;
+
+    case 3:
+      if (!parse_alpha_value (parser, &rgba->alpha, syntax))
+        return 0;
+      return 1;
+
+    default:
+      g_assert_not_reached ();
+      return 0;
+  }
+}
+
+static guint
+parse_hsla_color_channel (GtkCssParser *parser,
+                          guint         arg,
+                          ColorSyntax   syntax,
+                          gpointer      data)
+{
+  GdkHSLA *hsla = data;
+
+  switch (arg)
+  {
+    case 0:
+      if (!parse_hue_value (parser, &hsla->hue))
+        return 0;
+      return 1;
+
+    case 1:
+      if (!parse_hsl_channel_value (parser, &hsla->saturation, syntax))
+        return 0;
+      return 1;
+
+    case 2:
+      if (!parse_hsl_channel_value (parser, &hsla->lightness, syntax))
+        return 0;
+      return 1;
+
+    case 3:
+      if (!parse_alpha_value (parser, &hsla->alpha, syntax))
+        return 0;
+      return 1;
+
+    default:
+      g_assert_not_reached ();
+      return 0;
+  }
+}
+
+typedef struct {
+  float hue, white, black, alpha;
+} HwbData;
+
+static guint
+parse_hwb_color_channel (GtkCssParser *parser,
+                         guint         arg,
+                         ColorSyntax   syntax,
+                         gpointer      data)
+{
+  HwbData *hwb = data;
+
+  switch (arg)
+  {
+    case 0:
+      if (!parse_hue_value (parser, &hwb->hue))
+        return 0;
+      return 1;
+
+    case 1:
+      if (!parse_hwb_channel_value (parser, &hwb->white))
+        return 0;
+      return 1;
+
+    case 2:
+      if (!parse_hwb_channel_value (parser, &hwb->black))
+        return 0;
+      return 1;
+
+    case 3:
+      if (!parse_alpha_value (parser, &hwb->alpha, syntax))
+        return 0;
+      return 1;
+
+    default:
+      g_assert_not_reached ();
+      return 0;
+  }
+}
+
+typedef struct {
+  float L, a, b, alpha;
+} LabData;
+
+static guint
+parse_oklab_color_channel (GtkCssParser *parser,
+                           guint         arg,
+                           ColorSyntax   syntax,
+                           gpointer      data)
+{
+  LabData *oklab = data;
+
+  switch (arg)
+  {
+    case 0:
+      if (!parse_ok_L_value (parser, &oklab->L))
+        return 0;
+      return 1;
+
+    case 1:
+      if (!parse_ok_ab_value (parser, &oklab->a))
+        return 0;
+      return 1;
+
+    case 2:
+      if (!parse_ok_ab_value (parser, &oklab->b))
+        return 0;
+      return 1;
+
+    case 3:
+      if (!parse_alpha_value (parser, &oklab->alpha, syntax))
+        return 0;
+      return 1;
+
+    default:
+      g_assert_not_reached ();
+      return 0;
+  }
+}
+
+typedef struct {
+  float L, C, H, alpha;
+} LchData;
+
+static guint
+parse_oklch_color_channel (GtkCssParser *parser,
+                           guint         arg,
+                           ColorSyntax   syntax,
+                           gpointer      data)
+{
+  LchData *oklch = data;
+
+  switch (arg)
+  {
+    case 0:
+      if (!parse_ok_L_value (parser, &oklch->L))
+        return 0;
+      return 1;
+
+    case 1:
+      if (!parse_ok_C_value (parser, &oklch->C))
+        return 0;
+      return 1;
+
+    case 2:
+      if (!parse_hue_value (parser, &oklch->H))
+        return 0;
+      return 1;
+
+    case 3:
+      if (!parse_alpha_value (parser, &oklch->alpha, syntax))
+        return 0;
+      return 1;
+
+    default:
+      g_assert_not_reached ();
+      return 0;
+  }
+}
+
+static gboolean
+parse_color_function (GtkCssParser *self,
+                      ColorSyntax   syntax,
+                      gboolean      allow_alpha,
+                      gboolean      require_alpha,
+                      guint (* parse_func) (GtkCssParser *, guint, ColorSyntax, gpointer),
+                      gpointer      data)
+{
+  const GtkCssToken *token;
+  gboolean result = FALSE;
+  char function_name[64];
+  guint arg;
+  guint min_args = 3;
+  guint max_args = 4;
+
+  token = gtk_css_parser_get_token (self);
+  g_return_val_if_fail (gtk_css_token_is (token, GTK_CSS_TOKEN_FUNCTION), FALSE);
+
+  g_strlcpy (function_name, gtk_css_token_get_string (token), 64);
+  gtk_css_parser_start_block (self);
+
+  arg = 0;
+  while (TRUE)
+    {
+      guint parse_args = parse_func (self, arg, syntax, data);
+      if (parse_args == 0)
+        break;
+      arg += parse_args;
+      token = gtk_css_parser_get_token (self);
+
+      if (syntax == COLOR_SYNTAX_DETECTING)
+        {
+          if (gtk_css_token_is (token, GTK_CSS_TOKEN_COMMA))
+            {
+              syntax = COLOR_SYNTAX_LEGACY;
+              min_args = require_alpha ? 4 : 3;
+              max_args = allow_alpha ? 4 : 3;
+            }
+          else
+            {
+              syntax = COLOR_SYNTAX_MODERN;
+            }
+        }
+
+      if (gtk_css_token_is (token, GTK_CSS_TOKEN_EOF))
+        {
+          if (arg < min_args)
+            {
+              gtk_css_parser_error_syntax (self, "%s() requires at least %u arguments", function_name, min_args);
+              break;
+            }
+          else
+            {
+              result = TRUE;
+              break;
+            }
+        }
+      else if (gtk_css_token_is (token, GTK_CSS_TOKEN_COMMA))
+        {
+          if (syntax == COLOR_SYNTAX_MODERN)
+            {
+              gtk_css_parser_error_syntax (self, "Commas aren't allowed in modern %s() syntax", function_name);
+              break;
+            }
+
+          if (arg >= max_args)
+            {
+              gtk_css_parser_error_syntax (self, "Expected ')' at end of %s()", function_name);
+              break;
+            }
+
+          gtk_css_parser_consume_token (self);
+          continue;
+        }
+      else if (syntax == COLOR_SYNTAX_LEGACY)
+        {
+          gtk_css_parser_error_syntax (self, "Unexpected data at end of %s() argument", function_name);
+          break;
+        }
+      else if (arg == 3)
+        {
+          if (gtk_css_token_is_delim (token, '/'))
+            {
+              gtk_css_parser_consume_token (self);
+              continue;
+            }
+
+          if (arg >= max_args)
+            {
+              gtk_css_parser_error_syntax (self, "Expected ')' at end of %s()", function_name);
+              break;
+            }
+
+          gtk_css_parser_error_syntax (self, "Expected '/' or ')'");
+          break;
+        }
+      else if (arg >= max_args)
+        {
+          gtk_css_parser_error_syntax (self, "Expected ')' at end of %s()", function_name);
+          break;
+        }
+    }
+
+  gtk_css_parser_end_block (self);
+
+  return result;
 }
 
 GtkCssValue *
 gtk_css_color_value_parse (GtkCssParser *parser)
 {
-  ColorFunctionData data = { NULL, };
   GtkCssValue *value;
   GdkRGBA rgba;
 
@@ -711,13 +1211,99 @@ gtk_css_color_value_parse (GtkCssParser *parser)
     {
       const GtkCssToken *token = gtk_css_parser_get_token (parser);
 
+      gtk_css_parser_warn_deprecated (parser, "@define-color and named colors are deprecated");
+
       value = gtk_css_color_value_new_name (gtk_css_token_get_string (token));
       gtk_css_parser_consume_token (parser);
 
       return value;
     }
+  else if (gtk_css_parser_has_function (parser, "rgb") || gtk_css_parser_has_function (parser, "rgba"))
+    {
+      gboolean has_alpha;
+      ParseRGBAData data = { NULL, };
+      data.rgba = &rgba;
+
+      rgba.alpha = 1.0;
+
+      has_alpha = gtk_css_parser_has_function (parser, "rgba");
+
+      if (!parse_color_function (parser, COLOR_SYNTAX_DETECTING, has_alpha, has_alpha, parse_rgba_color_channel, &data))
+        return NULL;
+
+      return gtk_css_color_value_new_literal (&rgba);
+    }
+  else if (gtk_css_parser_has_function (parser, "hsl") || gtk_css_parser_has_function (parser, "hsla"))
+    {
+      GdkHSLA hsla;
+
+      hsla.alpha = 1.0;
+
+      if (!parse_color_function (parser, COLOR_SYNTAX_DETECTING, TRUE, FALSE, parse_hsla_color_channel, &hsla))
+        return NULL;
+
+      _gdk_rgba_init_from_hsla (&rgba, &hsla);
+
+      return gtk_css_color_value_new_literal (&rgba);
+    }
+  else if (gtk_css_parser_has_function (parser, "hwb"))
+    {
+      HwbData hwb = { 0, };
+      float red, green, blue;
+
+      hwb.alpha = 1.0;
+
+      if (!parse_color_function (parser, COLOR_SYNTAX_MODERN, TRUE, FALSE, parse_hwb_color_channel, &hwb))
+        return NULL;
+
+      hwb.white /= 100.0;
+      hwb.black /= 100.0;
+
+      gtk_hwb_to_rgb (hwb.hue, hwb.white, hwb.black, &red, &green, &blue);
+
+      rgba.red = red;
+      rgba.green = green;
+      rgba.blue = blue;
+      rgba.alpha = hwb.alpha;
+
+      return gtk_css_color_value_new_literal (&rgba);
+    }
+  else if (gtk_css_parser_has_function (parser, "oklab"))
+    {
+      LabData oklab = { 0, };
+
+      oklab.alpha = 1.0;
+
+      if (!parse_color_function (parser, COLOR_SYNTAX_MODERN, TRUE, FALSE, parse_oklab_color_channel, &oklab))
+        return NULL;
+
+      gtk_oklab_to_rgb (oklab.L, oklab.a, oklab.b, &rgba.red, &rgba.green, &rgba.blue);
+      rgba.alpha = oklab.alpha;
+
+      return gtk_css_color_value_new_literal (&rgba);
+    }
+  else if (gtk_css_parser_has_function (parser, "oklch"))
+    {
+      LchData oklch = { 0, };
+      float L, a, b;
+      float red, green, blue;
+
+      oklch.alpha = 1.0;
+
+      if (!parse_color_function (parser, COLOR_SYNTAX_MODERN, TRUE, FALSE, parse_oklch_color_channel, &oklch))
+        return NULL;
+
+      gtk_oklch_to_oklab (oklch.L, oklch.C, oklch.H, &L, &a, &b);
+      gtk_oklab_to_rgb (L, a, b, &red, &green, &blue);
+
+      rgba.alpha = oklch.alpha;
+
+      return gtk_css_color_value_new_literal (&rgba);
+    }
   else if (gtk_css_parser_has_function (parser, "lighter"))
     {
+      ColorFunctionData data = { NULL, };
+
       if (gtk_css_parser_consume_function (parser, 1, 1, parse_color_number, &data))
         value = gtk_css_color_value_new_shade (data.color, 1.3);
       else
@@ -728,6 +1314,8 @@ gtk_css_color_value_parse (GtkCssParser *parser)
     }
   else if (gtk_css_parser_has_function (parser, "darker"))
     {
+      ColorFunctionData data = { NULL, };
+
       if (gtk_css_parser_consume_function (parser, 1, 1, parse_color_number, &data))
         value = gtk_css_color_value_new_shade (data.color, 0.7);
       else
@@ -738,6 +1326,8 @@ gtk_css_color_value_parse (GtkCssParser *parser)
     }
   else if (gtk_css_parser_has_function (parser, "shade"))
     {
+      ColorFunctionData data = { NULL, };
+
       if (gtk_css_parser_consume_function (parser, 2, 2, parse_color_number, &data))
         value = gtk_css_color_value_new_shade (data.color, data.value);
       else
@@ -748,6 +1338,8 @@ gtk_css_color_value_parse (GtkCssParser *parser)
     }
   else if (gtk_css_parser_has_function (parser, "alpha"))
     {
+      ColorFunctionData data = { NULL, };
+
       if (gtk_css_parser_consume_function (parser, 2, 2, parse_color_number, &data))
         value = gtk_css_color_value_new_alpha (data.color, data.value);
       else
@@ -758,6 +1350,8 @@ gtk_css_color_value_parse (GtkCssParser *parser)
     }
   else if (gtk_css_parser_has_function (parser, "mix"))
     {
+      ColorFunctionData data = { NULL, };
+
       if (gtk_css_parser_consume_function (parser, 3, 3, parse_color_mix, &data))
         value = gtk_css_color_value_new_mix (data.color, data.color2, data.value);
       else
