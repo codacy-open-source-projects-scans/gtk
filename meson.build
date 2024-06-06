@@ -18,7 +18,7 @@ harfbuzz_req       = '>= 2.6.0'
 fribidi_req        = '>= 1.0.6'
 cairo_req          = '>= 1.18.0'
 gdk_pixbuf_req     = '>= 2.30.0'
-wayland_proto_req  = '>= 1.31'
+wayland_proto_req  = '>= 1.36'
 wayland_req        = '>= 1.21.0'
 graphene_req       = '>= 1.10.0'
 epoxy_req          = '>= 1.4'
@@ -58,6 +58,11 @@ gtk_interface_age = gtk_minor_version.is_odd() ? 0 : gtk_micro_version
 add_project_arguments('-DGTK_VERSION="@0@"'.format(meson.project_version()), language: 'c')
 
 add_project_arguments('-D_GNU_SOURCE', language: 'c')
+
+if host_machine.system() == 'windows'
+  add_project_arguments(['-DUNICODE',
+                         '-D_UNICODE'], language: 'c')
+endif
 
 # Use debug/optimization flags to determine whether to enable debug or disable
 # cast checks
@@ -394,6 +399,7 @@ fribidi_dep    = dependency('fribidi', version: fribidi_req,
                             default_options: ['docs=false'])
 harfbuzz_dep   = dependency('harfbuzz', version: harfbuzz_req,
                             default_options: ['coretext=enabled'])
+hb_subset_dep  = dependency('harfbuzz-subset', version: harfbuzz_req)
 
 # Require PangoFT2 if on X11 or wayland
 pangoft_dep    = dependency('pangoft2', version: pango_req,

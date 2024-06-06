@@ -1699,7 +1699,7 @@ gtk_icon_theme_set_theme_name (GtkIconTheme *self,
  *
  * Gets the current icon theme name.
  *
- * Returns (transfer full): the current icon theme name,
+ * Returns: (transfer full): the current icon theme name,
  */
 char *
 gtk_icon_theme_get_theme_name (GtkIconTheme *self)
@@ -2433,7 +2433,7 @@ load_icon_thread (GTask        *task,
  * gtk_icon_theme_lookup_icon:
  * @self: a `GtkIconTheme`
  * @icon_name: the name of the icon to lookup
- * @fallbacks: (nullable) (array zero-terminated=1):
+ * @fallbacks: (nullable) (array zero-terminated=1): fallback names
  * @size: desired icon size, in application pixels
  * @scale: the window scale this will be displayed on
  * @direction: text direction the icon will be displayed in
@@ -2526,7 +2526,13 @@ gtk_icon_theme_lookup_icon (GtkIconTheme       *self,
   return icon;
 }
 
-/* Error quark */
+/**
+ * gtk_icon_theme_error_quark:
+ *
+ * Registers an error quark for [class@Gtk.IconTheme] errors.
+ *
+ * Returns: the error quark
+ **/
 GQuark
 gtk_icon_theme_error_quark (void)
 {

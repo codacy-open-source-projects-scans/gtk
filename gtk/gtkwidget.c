@@ -11857,7 +11857,7 @@ gtk_widget_create_render_node (GtkWidget   *widget,
 
   style = gtk_css_node_get_style (priv->cssnode);
 
-  css_opacity = gtk_css_number_value_get (style->other->opacity, 100);
+  css_opacity = gtk_css_number_value_get (style->other->opacity, 1);
   opacity = CLAMP (css_opacity, 0.0, 1.0) * priv->user_alpha / 255.0;
 
   if (opacity <= 0.0)
@@ -11903,7 +11903,7 @@ gtk_widget_create_render_node (GtkWidget   *widget,
 }
 
 static void
-gtk_widget_do_snapshot (GtkWidget *widget,
+gtk_widget_do_snapshot (GtkWidget   *widget,
                         GtkSnapshot *snapshot)
 {
   GtkWidgetPrivate *priv = gtk_widget_get_instance_private (widget);

@@ -220,15 +220,25 @@ parser_error (GtkCssParser         *parser,
     {
       for (int i = 0; i < n_vars; i++)
         {
+          GtkCssSection *section;
+
           if (names[i + 1])
             g_set_error (&new_error,
-                         GTK_CSS_PARSER_ERROR, GTK_CSS_PARSER_ERROR_UNKNOWN_VALUE,
+                         error->domain, error->code,
                          "While expanding %s: %s", names[i + 1], error->message);
           else
             g_set_error_literal (&new_error,
-                                 GTK_CSS_PARSER_ERROR, GTK_CSS_PARSER_ERROR_UNKNOWN_VALUE,
+                                 error->domain, error->code,
                                  error->message);
-          gtk_style_provider_emit_error (provider, vars[i]->section, new_error);
+
+          if (vars[i]->section == NULL)
+            section = gtk_css_section_new (gtk_css_parser_get_file (parser), start, end);
+          else
+            section = gtk_css_section_ref (vars[i]->section);
+
+          gtk_style_provider_emit_error (provider, section, new_error);
+
+          gtk_css_section_unref (section);
           g_clear_error (&new_error);
         }
 

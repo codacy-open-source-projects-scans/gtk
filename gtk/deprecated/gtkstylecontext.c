@@ -122,6 +122,11 @@ gtk_style_context_class_init (GtkStyleContextClass *klass)
   object_class->set_property = gtk_style_context_impl_set_property;
   object_class->get_property = gtk_style_context_impl_get_property;
 
+  /**
+   * GtkStyleContext:display:
+   *
+   * The display of the style context.
+   */
   properties[PROP_DISPLAY] =
       g_param_spec_object ("display", NULL, NULL,
                            GDK_TYPE_DISPLAY,
@@ -773,13 +778,20 @@ gtk_style_context_resolve_color (GtkStyleContext    *context,
 {
   GtkStyleContextPrivate *priv = gtk_style_context_get_instance_private (context);
   GtkCssValue *val;
+  GtkCssComputeContext ctx = { NULL, };
 
   g_return_val_if_fail (GTK_IS_STYLE_CONTEXT (context), FALSE);
   g_return_val_if_fail (color != NULL, FALSE);
   g_return_val_if_fail (result != NULL, FALSE);
 
+  ctx.provider = GTK_STYLE_PROVIDER (priv->cascade);
+  ctx.style = gtk_css_node_get_style (priv->cssnode);
+  if (gtk_css_node_get_parent (priv->cssnode))
+    ctx.parent_style = gtk_css_node_get_style (gtk_css_node_get_parent (priv->cssnode));
+
   val = gtk_css_color_value_resolve (color,
-                                     GTK_STYLE_PROVIDER (priv->cascade),
+                                     GTK_CSS_PROPERTY_COLOR,
+                                     &ctx,
                                      _gtk_style_context_peek_property (context, GTK_CSS_PROPERTY_COLOR));
 
   if (val == NULL)

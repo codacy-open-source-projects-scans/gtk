@@ -77,11 +77,13 @@ content_files = [
   "section-tree-widget.md",
   "migrating-2to4.md",
   "migrating-3to4.md",
+  "migrating-4to5.md",
   "broadway.md",
   "osx.md",
   "wayland.md",
   "windows.md",
   "x11.md",
+  "tools.md",
   "visual_index.md",
 ]
 content_images = [

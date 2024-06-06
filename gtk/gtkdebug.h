@@ -76,6 +76,13 @@ G_BEGIN_DECLS
  * Since: 4.8
  */
 
+/**
+ * GTK_DEBUG_CSS:
+ *
+ * Information about deprecated CSS features.
+ *
+ * Since: 4.16
+ */
 typedef enum {
   GTK_DEBUG_TEXT            = 1 <<  0,
   GTK_DEBUG_TREE            = 1 <<  1,
@@ -99,6 +106,12 @@ typedef enum {
   GTK_DEBUG_CSS             = 1 << 20,
 } GtkDebugFlags;
 
+/**
+ * GTK_DEBUG_CHECK:
+ * @type: type to check
+ *
+ * Whether the `type` debug flag is set.
+ **/
 #define GTK_DEBUG_CHECK(type) G_UNLIKELY (gtk_get_debug_flags () & GTK_DEBUG_##type)
 
 GDK_AVAILABLE_IN_ALL
