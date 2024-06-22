@@ -1005,7 +1005,7 @@ ensure_fontmap (Context *context)
 
   context->fontmap = pango_cairo_font_map_new ();
 
-  config = FcInitLoadConfig ();
+  config = FcConfigCreate ();
   pango_fc_font_map_set_config (PANGO_FC_FONT_MAP (context->fontmap), config);
   FcConfigDestroy (config);
 
@@ -2990,8 +2990,13 @@ printer_init_collect_font_info (Printer       *printer,
       info->face = hb_face_reference (hb_font_get_face (pango_font_get_hb_font (font)));
       if (!g_object_get_data (G_OBJECT (pango_font_get_font_map (font)), "font-files"))
         {
-          info->input = hb_subset_input_create_or_fail ();
-          hb_subset_input_set_flags (info->input, HB_SUBSET_FLAGS_RETAIN_GIDS);
+          if (g_strcmp0 (g_getenv ("GSK_SUBSET_FONTS"), "1") == 0)
+            {
+              info->input = hb_subset_input_create_or_fail ();
+              hb_subset_input_set_flags (info->input, HB_SUBSET_FLAGS_RETAIN_GIDS);
+            }
+          else
+            info->serialized = TRUE; /* Don't subset (or serialize) system fonts */
         }
 
       g_hash_table_insert (printer->fonts, info->face, info);
@@ -3022,11 +3027,11 @@ printer_init_duplicates_for_node (Printer       *printer,
 
   switch (gsk_render_node_get_node_type (node))
     {
-    case GSK_CAIRO_NODE:
     case GSK_TEXT_NODE:
       printer_init_collect_font_info (printer, node);
       break;
 
+    case GSK_CAIRO_NODE:
     case GSK_COLOR_NODE:
     case GSK_LINEAR_GRADIENT_NODE:
     case GSK_REPEATING_LINEAR_GRADIENT_NODE:
@@ -3623,33 +3628,6 @@ append_texture_param (Printer    *p,
 }
 
 static void
-print_font (PangoFont *font)
-{
-  PangoFontDescription *desc;
-  char *s;
-  hb_face_t *face;
-  hb_blob_t *blob;
-  const char *data;
-  unsigned int length;
-  char *csum;
-
-  desc = pango_font_describe_with_absolute_size (font);
-  s = pango_font_description_to_string (desc);
-
-  face = hb_font_get_face (pango_font_get_hb_font (font));
-  blob = hb_face_reference_blob (face);
-
-  data = hb_blob_get_data (blob, &length);
-  csum = g_compute_checksum_for_data (G_CHECKSUM_SHA256, (const guchar *)data, length);
-
-  g_print ("%s, face %p, sha %s\n", s, face, csum);
-
-  g_free (csum);
-  hb_blob_destroy (blob);
-  g_free (s);
-}
-
-static void
 gsk_text_node_serialize_font (GskRenderNode *node,
                               Printer       *p)
 {
@@ -3669,8 +3647,6 @@ gsk_text_node_serialize_font (GskRenderNode *node,
   g_free (s);
   pango_font_description_free (desc);
 
-  g_print ("serializing ");
-  print_font (font);
   info = g_hash_table_lookup (p->fonts, hb_font_get_face (pango_font_get_hb_font (font)));
   if (info->serialized)
     return;

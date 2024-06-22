@@ -849,11 +849,14 @@ gtk_label_update_layout_attributes (GtkLabel      *self,
           attr->end_index = link->end;
           pango_attr_list_insert (attrs, attr);
 
-          attr = pango_attr_foreground_alpha_new (CLAMP (link_color->alpha * 65535. + 0.5, 0, 65535));
+          if (link_color->alpha < 0.999)
+            {
+              attr = pango_attr_foreground_alpha_new (CLAMP (link_color->alpha * 65535. + 0.5, 0, 65535));
 
-          attr->start_index = link->start;
-          attr->end_index = link->end;
-          pango_attr_list_insert (attrs, attr);
+              attr->start_index = link->start;
+              attr->end_index = link->end;
+              pango_attr_list_insert (attrs, attr);
+            }
 
           pango_attr_list_unref (link_attrs);
         }
@@ -3440,9 +3443,18 @@ link_style_changed_cb (GtkCssNode        *node,
                                     GTK_CSS_AFFECTS_CONTENT |
                                     GTK_CSS_AFFECTS_TEXT_ATTRS))
     {
-      gtk_label_clear_layout (self);
+      gtk_label_ensure_layout (self);
       gtk_widget_queue_draw (GTK_WIDGET (self));
     }
+}
+
+static void
+selection_style_changed_cb (GtkCssNode        *node,
+                            GtkCssStyleChange *change,
+                            GtkLabel          *self)
+{
+  if (gtk_css_style_change_affects (change, GTK_CSS_AFFECTS_REDRAW))
+    gtk_widget_queue_draw (GTK_WIDGET (self));
 }
 
 static void
@@ -5152,6 +5164,8 @@ gtk_label_select_region_index (GtkLabel *self,
               gtk_css_node_set_name (self->select_info->selection_node, g_quark_from_static_string ("selection"));
               gtk_css_node_set_parent (self->select_info->selection_node, widget_node);
               gtk_css_node_set_state (self->select_info->selection_node, gtk_css_node_get_state (widget_node));
+              g_signal_connect (self->select_info->selection_node, "style-changed",
+                                G_CALLBACK (selection_style_changed_cb), self);
               g_object_unref (self->select_info->selection_node);
             }
         }
@@ -6300,3 +6314,4 @@ gtk_label_accessible_text_init (GtkAccessibleTextInterface *iface)
 /* }}} */
 
 /* vim:set foldmethod=marker expandtab: */
+
