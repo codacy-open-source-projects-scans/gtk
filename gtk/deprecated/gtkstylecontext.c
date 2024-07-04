@@ -789,10 +789,7 @@ gtk_style_context_resolve_color (GtkStyleContext    *context,
   if (gtk_css_node_get_parent (priv->cssnode))
     ctx.parent_style = gtk_css_node_get_style (gtk_css_node_get_parent (priv->cssnode));
 
-  val = gtk_css_color_value_resolve (color,
-                                     GTK_CSS_PROPERTY_COLOR,
-                                     &ctx,
-                                     _gtk_style_context_peek_property (context, GTK_CSS_PROPERTY_COLOR));
+  val = gtk_css_value_resolve (color, &ctx, _gtk_style_context_peek_property (context, GTK_CSS_PROPERTY_COLOR));
 
   if (val == NULL)
     return FALSE;
@@ -940,10 +937,10 @@ _gtk_style_context_get_cursor_color (GtkStyleContext *context,
   style = gtk_style_context_lookup_style (context);
 
   if (primary_color)
-    *primary_color = *gtk_css_color_value_get_rgba (style->font->caret_color ? style->font->caret_color : style->core->color);
+    *primary_color = *gtk_css_color_value_get_rgba (style->used->caret_color);
 
   if (secondary_color)
-    *secondary_color = *gtk_css_color_value_get_rgba (style->font->secondary_caret_color ? style->font->secondary_caret_color : style->core->color);
+    *secondary_color = *gtk_css_color_value_get_rgba (style->used->secondary_caret_color);
 }
 
 /**

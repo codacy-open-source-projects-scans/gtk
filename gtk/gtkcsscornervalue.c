@@ -100,6 +100,7 @@ static const GtkCssValueClass GTK_CSS_VALUE_CORNER = {
   "GtkCssCornerValue",
   gtk_css_value_corner_free,
   gtk_css_value_corner_compute,
+  NULL,
   gtk_css_value_corner_equal,
   gtk_css_value_corner_transition,
   NULL,
@@ -108,14 +109,14 @@ static const GtkCssValueClass GTK_CSS_VALUE_CORNER = {
 };
 
 static GtkCssValue corner_singletons[] = {
-  { &GTK_CSS_VALUE_CORNER, 1, TRUE, FALSE, NULL, NULL },
-  { &GTK_CSS_VALUE_CORNER, 1, TRUE, FALSE, NULL, NULL },
-  { &GTK_CSS_VALUE_CORNER, 1, TRUE, FALSE, NULL, NULL },
-  { &GTK_CSS_VALUE_CORNER, 1, TRUE, FALSE, NULL, NULL },
-  { &GTK_CSS_VALUE_CORNER, 1, TRUE, FALSE, NULL, NULL },
-  { &GTK_CSS_VALUE_CORNER, 1, TRUE, FALSE, NULL, NULL },
-  { &GTK_CSS_VALUE_CORNER, 1, TRUE, FALSE, NULL, NULL },
-  { &GTK_CSS_VALUE_CORNER, 1, TRUE, FALSE, NULL, NULL },
+  { &GTK_CSS_VALUE_CORNER, 1, 1, 0, 0, NULL, NULL },
+  { &GTK_CSS_VALUE_CORNER, 1, 1, 0, 0, NULL, NULL },
+  { &GTK_CSS_VALUE_CORNER, 1, 1, 0, 0, NULL, NULL },
+  { &GTK_CSS_VALUE_CORNER, 1, 1, 0, 0, NULL, NULL },
+  { &GTK_CSS_VALUE_CORNER, 1, 1, 0, 0, NULL, NULL },
+  { &GTK_CSS_VALUE_CORNER, 1, 1, 0, 0, NULL, NULL },
+  { &GTK_CSS_VALUE_CORNER, 1, 1, 0, 0, NULL, NULL },
+  { &GTK_CSS_VALUE_CORNER, 1, 1, 0, 0, NULL, NULL },
 };
 
 static inline void

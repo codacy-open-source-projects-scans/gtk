@@ -77,6 +77,7 @@ static const GtkCssValueClass GTK_CSS_VALUE_BORDER_STYLE = {
   "GtkCssBorderStyleValue",
   gtk_css_value_enum_free,
   gtk_css_value_enum_compute,
+  NULL,
   gtk_css_value_enum_equal,
   gtk_css_value_enum_transition,
   NULL,
@@ -85,16 +86,16 @@ static const GtkCssValueClass GTK_CSS_VALUE_BORDER_STYLE = {
 };
 
 static GtkCssValue border_style_values[] = {
-  { &GTK_CSS_VALUE_BORDER_STYLE, 1, TRUE, FALSE, GTK_BORDER_STYLE_NONE, "none" },
-  { &GTK_CSS_VALUE_BORDER_STYLE, 1, TRUE, FALSE, GTK_BORDER_STYLE_SOLID, "solid" },
-  { &GTK_CSS_VALUE_BORDER_STYLE, 1, TRUE, FALSE, GTK_BORDER_STYLE_INSET, "inset" },
-  { &GTK_CSS_VALUE_BORDER_STYLE, 1, TRUE, FALSE, GTK_BORDER_STYLE_OUTSET, "outset" },
-  { &GTK_CSS_VALUE_BORDER_STYLE, 1, TRUE, FALSE, GTK_BORDER_STYLE_HIDDEN, "hidden" },
-  { &GTK_CSS_VALUE_BORDER_STYLE, 1, TRUE, FALSE, GTK_BORDER_STYLE_DOTTED, "dotted" },
-  { &GTK_CSS_VALUE_BORDER_STYLE, 1, TRUE, FALSE, GTK_BORDER_STYLE_DASHED, "dashed" },
-  { &GTK_CSS_VALUE_BORDER_STYLE, 1, TRUE, FALSE, GTK_BORDER_STYLE_DOUBLE, "double" },
-  { &GTK_CSS_VALUE_BORDER_STYLE, 1, TRUE, FALSE, GTK_BORDER_STYLE_GROOVE, "groove" },
-  { &GTK_CSS_VALUE_BORDER_STYLE, 1, TRUE, FALSE, GTK_BORDER_STYLE_RIDGE, "ridge" }
+  { &GTK_CSS_VALUE_BORDER_STYLE, 1, 1, 0, 0, GTK_BORDER_STYLE_NONE, "none" },
+  { &GTK_CSS_VALUE_BORDER_STYLE, 1, 1, 0, 0, GTK_BORDER_STYLE_SOLID, "solid" },
+  { &GTK_CSS_VALUE_BORDER_STYLE, 1, 1, 0, 0, GTK_BORDER_STYLE_INSET, "inset" },
+  { &GTK_CSS_VALUE_BORDER_STYLE, 1, 1, 0, 0, GTK_BORDER_STYLE_OUTSET, "outset" },
+  { &GTK_CSS_VALUE_BORDER_STYLE, 1, 1, 0, 0, GTK_BORDER_STYLE_HIDDEN, "hidden" },
+  { &GTK_CSS_VALUE_BORDER_STYLE, 1, 1, 0, 0, GTK_BORDER_STYLE_DOTTED, "dotted" },
+  { &GTK_CSS_VALUE_BORDER_STYLE, 1, 1, 0, 0, GTK_BORDER_STYLE_DASHED, "dashed" },
+  { &GTK_CSS_VALUE_BORDER_STYLE, 1, 1, 0, 0, GTK_BORDER_STYLE_DOUBLE, "double" },
+  { &GTK_CSS_VALUE_BORDER_STYLE, 1, 1, 0, 0, GTK_BORDER_STYLE_GROOVE, "groove" },
+  { &GTK_CSS_VALUE_BORDER_STYLE, 1, 1, 0, 0, GTK_BORDER_STYLE_RIDGE, "ridge" }
 };
 
 GtkCssValue *
@@ -135,6 +136,7 @@ static const GtkCssValueClass GTK_CSS_VALUE_BLEND_MODE = {
   "GtkCssBlendModeValue",
   gtk_css_value_enum_free,
   gtk_css_value_enum_compute,
+  NULL,
   gtk_css_value_enum_equal,
   gtk_css_value_enum_transition,
   NULL,
@@ -143,22 +145,22 @@ static const GtkCssValueClass GTK_CSS_VALUE_BLEND_MODE = {
 };
 
 static GtkCssValue blend_mode_values[] = {
-  { &GTK_CSS_VALUE_BLEND_MODE, 1, TRUE, FALSE, GSK_BLEND_MODE_DEFAULT, "normal" },
-  { &GTK_CSS_VALUE_BLEND_MODE, 1, TRUE, FALSE, GSK_BLEND_MODE_MULTIPLY, "multiply" },
-  { &GTK_CSS_VALUE_BLEND_MODE, 1, TRUE, FALSE, GSK_BLEND_MODE_SCREEN, "screen" },
-  { &GTK_CSS_VALUE_BLEND_MODE, 1, TRUE, FALSE, GSK_BLEND_MODE_OVERLAY, "overlay" },
-  { &GTK_CSS_VALUE_BLEND_MODE, 1, TRUE, FALSE, GSK_BLEND_MODE_DARKEN, "darken" },
-  { &GTK_CSS_VALUE_BLEND_MODE, 1, TRUE, FALSE, GSK_BLEND_MODE_LIGHTEN, "lighten" },
-  { &GTK_CSS_VALUE_BLEND_MODE, 1, TRUE, FALSE, GSK_BLEND_MODE_COLOR_DODGE, "color-dodge" },
-  { &GTK_CSS_VALUE_BLEND_MODE, 1, TRUE, FALSE, GSK_BLEND_MODE_COLOR_BURN, "color-burn" },
-  { &GTK_CSS_VALUE_BLEND_MODE, 1, TRUE, FALSE, GSK_BLEND_MODE_HARD_LIGHT, "hard-light" },
-  { &GTK_CSS_VALUE_BLEND_MODE, 1, TRUE, FALSE, GSK_BLEND_MODE_SOFT_LIGHT, "soft-light" },
-  { &GTK_CSS_VALUE_BLEND_MODE, 1, TRUE, FALSE, GSK_BLEND_MODE_DIFFERENCE, "difference" },
-  { &GTK_CSS_VALUE_BLEND_MODE, 1, TRUE, FALSE, GSK_BLEND_MODE_EXCLUSION, "exclusion" },
-  { &GTK_CSS_VALUE_BLEND_MODE, 1, TRUE, FALSE, GSK_BLEND_MODE_COLOR, "color" },
-  { &GTK_CSS_VALUE_BLEND_MODE, 1, TRUE, FALSE, GSK_BLEND_MODE_HUE, "hue" },
-  { &GTK_CSS_VALUE_BLEND_MODE, 1, TRUE, FALSE, GSK_BLEND_MODE_SATURATION, "saturation" },
-  { &GTK_CSS_VALUE_BLEND_MODE, 1, TRUE, FALSE, GSK_BLEND_MODE_LUMINOSITY, "luminosity" }
+  { &GTK_CSS_VALUE_BLEND_MODE, 1, 1, 0, 0, GSK_BLEND_MODE_DEFAULT, "normal" },
+  { &GTK_CSS_VALUE_BLEND_MODE, 1, 1, 0, 0, GSK_BLEND_MODE_MULTIPLY, "multiply" },
+  { &GTK_CSS_VALUE_BLEND_MODE, 1, 1, 0, 0, GSK_BLEND_MODE_SCREEN, "screen" },
+  { &GTK_CSS_VALUE_BLEND_MODE, 1, 1, 0, 0, GSK_BLEND_MODE_OVERLAY, "overlay" },
+  { &GTK_CSS_VALUE_BLEND_MODE, 1, 1, 0, 0, GSK_BLEND_MODE_DARKEN, "darken" },
+  { &GTK_CSS_VALUE_BLEND_MODE, 1, 1, 0, 0, GSK_BLEND_MODE_LIGHTEN, "lighten" },
+  { &GTK_CSS_VALUE_BLEND_MODE, 1, 1, 0, 0, GSK_BLEND_MODE_COLOR_DODGE, "color-dodge" },
+  { &GTK_CSS_VALUE_BLEND_MODE, 1, 1, 0, 0, GSK_BLEND_MODE_COLOR_BURN, "color-burn" },
+  { &GTK_CSS_VALUE_BLEND_MODE, 1, 1, 0, 0, GSK_BLEND_MODE_HARD_LIGHT, "hard-light" },
+  { &GTK_CSS_VALUE_BLEND_MODE, 1, 1, 0, 0, GSK_BLEND_MODE_SOFT_LIGHT, "soft-light" },
+  { &GTK_CSS_VALUE_BLEND_MODE, 1, 1, 0, 0, GSK_BLEND_MODE_DIFFERENCE, "difference" },
+  { &GTK_CSS_VALUE_BLEND_MODE, 1, 1, 0, 0, GSK_BLEND_MODE_EXCLUSION, "exclusion" },
+  { &GTK_CSS_VALUE_BLEND_MODE, 1, 1, 0, 0, GSK_BLEND_MODE_COLOR, "color" },
+  { &GTK_CSS_VALUE_BLEND_MODE, 1, 1, 0, 0, GSK_BLEND_MODE_HUE, "hue" },
+  { &GTK_CSS_VALUE_BLEND_MODE, 1, 1, 0, 0, GSK_BLEND_MODE_SATURATION, "saturation" },
+  { &GTK_CSS_VALUE_BLEND_MODE, 1, 1, 0, 0, GSK_BLEND_MODE_LUMINOSITY, "luminosity" }
 };
 
 GtkCssValue *
@@ -288,6 +290,7 @@ static const GtkCssValueClass GTK_CSS_VALUE_FONT_SIZE = {
   "GtkCssFontSizeValue",
   gtk_css_value_enum_free,
   gtk_css_value_font_size_compute,
+  NULL,
   gtk_css_value_enum_equal,
   gtk_css_value_enum_transition,
   NULL,
@@ -296,15 +299,15 @@ static const GtkCssValueClass GTK_CSS_VALUE_FONT_SIZE = {
 };
 
 static GtkCssValue font_size_values[] = {
-  { &GTK_CSS_VALUE_FONT_SIZE, 1, FALSE, FALSE, GTK_CSS_FONT_SIZE_SMALLER, "smaller" },
-  { &GTK_CSS_VALUE_FONT_SIZE, 1, FALSE, FALSE, GTK_CSS_FONT_SIZE_LARGER, "larger" },
-  { &GTK_CSS_VALUE_FONT_SIZE, 1, FALSE, FALSE, GTK_CSS_FONT_SIZE_XX_SMALL, "xx-small" },
-  { &GTK_CSS_VALUE_FONT_SIZE, 1, FALSE, FALSE, GTK_CSS_FONT_SIZE_X_SMALL, "x-small" },
-  { &GTK_CSS_VALUE_FONT_SIZE, 1, FALSE, FALSE, GTK_CSS_FONT_SIZE_SMALL, "small" },
-  { &GTK_CSS_VALUE_FONT_SIZE, 1, FALSE, FALSE, GTK_CSS_FONT_SIZE_MEDIUM, "medium" },
-  { &GTK_CSS_VALUE_FONT_SIZE, 1, FALSE, FALSE, GTK_CSS_FONT_SIZE_LARGE, "large" },
-  { &GTK_CSS_VALUE_FONT_SIZE, 1, FALSE, FALSE, GTK_CSS_FONT_SIZE_X_LARGE, "x-large" },
-  { &GTK_CSS_VALUE_FONT_SIZE, 1, FALSE, FALSE, GTK_CSS_FONT_SIZE_XX_LARGE, "xx-large" }
+  { &GTK_CSS_VALUE_FONT_SIZE, 1, 0, 0, 0, GTK_CSS_FONT_SIZE_SMALLER, "smaller" },
+  { &GTK_CSS_VALUE_FONT_SIZE, 1, 0, 0, 0, GTK_CSS_FONT_SIZE_LARGER, "larger" },
+  { &GTK_CSS_VALUE_FONT_SIZE, 1, 0, 0, 0, GTK_CSS_FONT_SIZE_XX_SMALL, "xx-small" },
+  { &GTK_CSS_VALUE_FONT_SIZE, 1, 0, 0, 0, GTK_CSS_FONT_SIZE_X_SMALL, "x-small" },
+  { &GTK_CSS_VALUE_FONT_SIZE, 1, 0, 0, 0, GTK_CSS_FONT_SIZE_SMALL, "small" },
+  { &GTK_CSS_VALUE_FONT_SIZE, 1, 0, 0, 0, GTK_CSS_FONT_SIZE_MEDIUM, "medium" },
+  { &GTK_CSS_VALUE_FONT_SIZE, 1, 0, 0, 0, GTK_CSS_FONT_SIZE_LARGE, "large" },
+  { &GTK_CSS_VALUE_FONT_SIZE, 1, 0, 0, 0, GTK_CSS_FONT_SIZE_X_LARGE, "x-large" },
+  { &GTK_CSS_VALUE_FONT_SIZE, 1, 0, 0, 0, GTK_CSS_FONT_SIZE_XX_LARGE, "xx-large" }
 };
 
 GtkCssValue *
@@ -345,6 +348,7 @@ static const GtkCssValueClass GTK_CSS_VALUE_FONT_STYLE = {
   "GtkCssFontStyleValue",
   gtk_css_value_enum_free,
   gtk_css_value_enum_compute,
+  NULL,
   gtk_css_value_enum_equal,
   gtk_css_value_enum_transition,
   NULL,
@@ -353,9 +357,9 @@ static const GtkCssValueClass GTK_CSS_VALUE_FONT_STYLE = {
 };
 
 static GtkCssValue font_style_values[] = {
-  { &GTK_CSS_VALUE_FONT_STYLE, 1, TRUE, FALSE, PANGO_STYLE_NORMAL, "normal" },
-  { &GTK_CSS_VALUE_FONT_STYLE, 1, TRUE, FALSE, PANGO_STYLE_OBLIQUE, "oblique" },
-  { &GTK_CSS_VALUE_FONT_STYLE, 1, TRUE, FALSE, PANGO_STYLE_ITALIC, "italic" }
+  { &GTK_CSS_VALUE_FONT_STYLE, 1, 1, 0, 0, PANGO_STYLE_NORMAL, "normal" },
+  { &GTK_CSS_VALUE_FONT_STYLE, 1, 1, 0, 0, PANGO_STYLE_OBLIQUE, "oblique" },
+  { &GTK_CSS_VALUE_FONT_STYLE, 1, 1, 0, 0, PANGO_STYLE_ITALIC, "italic" }
 };
 
 GtkCssValue *
@@ -442,6 +446,7 @@ static const GtkCssValueClass GTK_CSS_VALUE_FONT_WEIGHT = {
   "GtkCssFontWeightValue",
   gtk_css_value_enum_free,
   gtk_css_value_font_weight_compute,
+  NULL,
   gtk_css_value_enum_equal,
   NULL,
   NULL,
@@ -450,8 +455,8 @@ static const GtkCssValueClass GTK_CSS_VALUE_FONT_WEIGHT = {
 };
 
 static GtkCssValue font_weight_values[] = {
-  { &GTK_CSS_VALUE_FONT_WEIGHT, 1, FALSE, FALSE, BOLDER, "bolder" },
-  { &GTK_CSS_VALUE_FONT_WEIGHT, 1, FALSE, FALSE, LIGHTER, "lighter" },
+  { &GTK_CSS_VALUE_FONT_WEIGHT, 1, 0, 0, 0, BOLDER, "bolder" },
+  { &GTK_CSS_VALUE_FONT_WEIGHT, 1, 0, 0, 0, LIGHTER, "lighter" },
 };
 
 GtkCssValue *
@@ -492,6 +497,7 @@ static const GtkCssValueClass GTK_CSS_VALUE_FONT_STRETCH = {
   "GtkCssFontStretchValue",
   gtk_css_value_enum_free,
   gtk_css_value_enum_compute,
+  NULL,
   gtk_css_value_enum_equal,
   gtk_css_value_enum_transition,
   NULL,
@@ -500,15 +506,15 @@ static const GtkCssValueClass GTK_CSS_VALUE_FONT_STRETCH = {
 };
 
 static GtkCssValue font_stretch_values[] = {
-  { &GTK_CSS_VALUE_FONT_STRETCH, 1, TRUE, FALSE, PANGO_STRETCH_ULTRA_CONDENSED, "ultra-condensed" },
-  { &GTK_CSS_VALUE_FONT_STRETCH, 1, TRUE, FALSE, PANGO_STRETCH_EXTRA_CONDENSED, "extra-condensed" },
-  { &GTK_CSS_VALUE_FONT_STRETCH, 1, TRUE, FALSE, PANGO_STRETCH_CONDENSED, "condensed" },
-  { &GTK_CSS_VALUE_FONT_STRETCH, 1, TRUE, FALSE, PANGO_STRETCH_SEMI_CONDENSED, "semi-condensed" },
-  { &GTK_CSS_VALUE_FONT_STRETCH, 1, TRUE, FALSE, PANGO_STRETCH_NORMAL, "normal" },
-  { &GTK_CSS_VALUE_FONT_STRETCH, 1, TRUE, FALSE, PANGO_STRETCH_SEMI_EXPANDED, "semi-expanded" },
-  { &GTK_CSS_VALUE_FONT_STRETCH, 1, TRUE, FALSE, PANGO_STRETCH_EXPANDED, "expanded" },
-  { &GTK_CSS_VALUE_FONT_STRETCH, 1, TRUE, FALSE, PANGO_STRETCH_EXTRA_EXPANDED, "extra-expanded" },
-  { &GTK_CSS_VALUE_FONT_STRETCH, 1, TRUE, FALSE, PANGO_STRETCH_ULTRA_EXPANDED, "ultra-expanded" },
+  { &GTK_CSS_VALUE_FONT_STRETCH, 1, 1, 0, 0, PANGO_STRETCH_ULTRA_CONDENSED, "ultra-condensed" },
+  { &GTK_CSS_VALUE_FONT_STRETCH, 1, 1, 0, 0, PANGO_STRETCH_EXTRA_CONDENSED, "extra-condensed" },
+  { &GTK_CSS_VALUE_FONT_STRETCH, 1, 1, 0, 0, PANGO_STRETCH_CONDENSED, "condensed" },
+  { &GTK_CSS_VALUE_FONT_STRETCH, 1, 1, 0, 0, PANGO_STRETCH_SEMI_CONDENSED, "semi-condensed" },
+  { &GTK_CSS_VALUE_FONT_STRETCH, 1, 1, 0, 0, PANGO_STRETCH_NORMAL, "normal" },
+  { &GTK_CSS_VALUE_FONT_STRETCH, 1, 1, 0, 0, PANGO_STRETCH_SEMI_EXPANDED, "semi-expanded" },
+  { &GTK_CSS_VALUE_FONT_STRETCH, 1, 1, 0, 0, PANGO_STRETCH_EXPANDED, "expanded" },
+  { &GTK_CSS_VALUE_FONT_STRETCH, 1, 1, 0, 0, PANGO_STRETCH_EXTRA_EXPANDED, "extra-expanded" },
+  { &GTK_CSS_VALUE_FONT_STRETCH, 1, 1, 0, 0, PANGO_STRETCH_ULTRA_EXPANDED, "ultra-expanded" },
 };
 
 GtkCssValue *
@@ -549,6 +555,7 @@ static const GtkCssValueClass GTK_CSS_VALUE_TEXT_DECORATION_STYLE = {
   "GtkCssTextDecorationStyleValue",
   gtk_css_value_enum_free,
   gtk_css_value_enum_compute,
+  NULL,
   gtk_css_value_enum_equal,
   gtk_css_value_enum_transition,
   NULL,
@@ -557,9 +564,9 @@ static const GtkCssValueClass GTK_CSS_VALUE_TEXT_DECORATION_STYLE = {
 };
 
 static GtkCssValue text_decoration_style_values[] = {
-  { &GTK_CSS_VALUE_TEXT_DECORATION_STYLE, 1, TRUE, FALSE, GTK_CSS_TEXT_DECORATION_STYLE_SOLID, "solid" },
-  { &GTK_CSS_VALUE_TEXT_DECORATION_STYLE, 1, TRUE, FALSE, GTK_CSS_TEXT_DECORATION_STYLE_DOUBLE, "double" },
-  { &GTK_CSS_VALUE_TEXT_DECORATION_STYLE, 1, TRUE, FALSE, GTK_CSS_TEXT_DECORATION_STYLE_WAVY, "wavy" },
+  { &GTK_CSS_VALUE_TEXT_DECORATION_STYLE, 1, 1, 0, 0, GTK_CSS_TEXT_DECORATION_STYLE_SOLID, "solid" },
+  { &GTK_CSS_VALUE_TEXT_DECORATION_STYLE, 1, 1, 0, 0, GTK_CSS_TEXT_DECORATION_STYLE_DOUBLE, "double" },
+  { &GTK_CSS_VALUE_TEXT_DECORATION_STYLE, 1, 1, 0, 0, GTK_CSS_TEXT_DECORATION_STYLE_WAVY, "wavy" },
 };
 
 GtkCssValue *
@@ -600,6 +607,7 @@ static const GtkCssValueClass GTK_CSS_VALUE_AREA = {
   "GtkCssAreaValue",
   gtk_css_value_enum_free,
   gtk_css_value_enum_compute,
+  NULL,
   gtk_css_value_enum_equal,
   gtk_css_value_enum_transition,
   NULL,
@@ -608,9 +616,9 @@ static const GtkCssValueClass GTK_CSS_VALUE_AREA = {
 };
 
 static GtkCssValue area_values[] = {
-  { &GTK_CSS_VALUE_AREA, 1, TRUE, FALSE, GTK_CSS_AREA_BORDER_BOX, "border-box" },
-  { &GTK_CSS_VALUE_AREA, 1, TRUE, FALSE, GTK_CSS_AREA_PADDING_BOX, "padding-box" },
-  { &GTK_CSS_VALUE_AREA, 1, TRUE, FALSE, GTK_CSS_AREA_CONTENT_BOX, "content-box" }
+  { &GTK_CSS_VALUE_AREA, 1, 1, 0, 0, GTK_CSS_AREA_BORDER_BOX, "border-box" },
+  { &GTK_CSS_VALUE_AREA, 1, 1, 0, 0, GTK_CSS_AREA_PADDING_BOX, "padding-box" },
+  { &GTK_CSS_VALUE_AREA, 1, 1, 0, 0, GTK_CSS_AREA_CONTENT_BOX, "content-box" }
 };
 
 GtkCssValue *
@@ -657,6 +665,7 @@ static const GtkCssValueClass GTK_CSS_VALUE_DIRECTION = {
   "GtkCssDirectionValue",
   gtk_css_value_enum_free,
   gtk_css_value_enum_compute,
+  NULL,
   gtk_css_value_enum_equal,
   gtk_css_value_enum_transition,
   NULL,
@@ -665,10 +674,10 @@ static const GtkCssValueClass GTK_CSS_VALUE_DIRECTION = {
 };
 
 static GtkCssValue direction_values[] = {
-  { &GTK_CSS_VALUE_DIRECTION, 1, TRUE, FALSE, GTK_CSS_DIRECTION_NORMAL, "normal" },
-  { &GTK_CSS_VALUE_DIRECTION, 1, TRUE, FALSE, GTK_CSS_DIRECTION_REVERSE, "reverse" },
-  { &GTK_CSS_VALUE_DIRECTION, 1, TRUE, FALSE, GTK_CSS_DIRECTION_ALTERNATE, "alternate" },
-  { &GTK_CSS_VALUE_DIRECTION, 1, TRUE, FALSE, GTK_CSS_DIRECTION_ALTERNATE_REVERSE, "alternate-reverse" }
+  { &GTK_CSS_VALUE_DIRECTION, 1, 1, 0, 0, GTK_CSS_DIRECTION_NORMAL, "normal" },
+  { &GTK_CSS_VALUE_DIRECTION, 1, 1, 0, 0, GTK_CSS_DIRECTION_REVERSE, "reverse" },
+  { &GTK_CSS_VALUE_DIRECTION, 1, 1, 0, 0, GTK_CSS_DIRECTION_ALTERNATE, "alternate" },
+  { &GTK_CSS_VALUE_DIRECTION, 1, 1, 0, 0, GTK_CSS_DIRECTION_ALTERNATE_REVERSE, "alternate-reverse" }
 };
 
 GtkCssValue *
@@ -718,6 +727,7 @@ static const GtkCssValueClass GTK_CSS_VALUE_PLAY_STATE = {
   "GtkCssPlayStateValue",
   gtk_css_value_enum_free,
   gtk_css_value_enum_compute,
+  NULL,
   gtk_css_value_enum_equal,
   gtk_css_value_enum_transition,
   NULL,
@@ -726,8 +736,8 @@ static const GtkCssValueClass GTK_CSS_VALUE_PLAY_STATE = {
 };
 
 static GtkCssValue play_state_values[] = {
-  { &GTK_CSS_VALUE_PLAY_STATE, 1, TRUE, FALSE, GTK_CSS_PLAY_STATE_RUNNING, "running" },
-  { &GTK_CSS_VALUE_PLAY_STATE, 1, TRUE, FALSE, GTK_CSS_PLAY_STATE_PAUSED, "paused" }
+  { &GTK_CSS_VALUE_PLAY_STATE, 1, 1, 0, 0, GTK_CSS_PLAY_STATE_RUNNING, "running" },
+  { &GTK_CSS_VALUE_PLAY_STATE, 1, 1, 0, 0, GTK_CSS_PLAY_STATE_PAUSED, "paused" }
 };
 
 GtkCssValue *
@@ -774,6 +784,7 @@ static const GtkCssValueClass GTK_CSS_VALUE_FILL_MODE = {
   "GtkCssFillModeValue",
   gtk_css_value_enum_free,
   gtk_css_value_enum_compute,
+  NULL,
   gtk_css_value_enum_equal,
   gtk_css_value_enum_transition,
   NULL,
@@ -782,10 +793,10 @@ static const GtkCssValueClass GTK_CSS_VALUE_FILL_MODE = {
 };
 
 static GtkCssValue fill_mode_values[] = {
-  { &GTK_CSS_VALUE_FILL_MODE, 1, TRUE, FALSE, GTK_CSS_FILL_NONE, "none" },
-  { &GTK_CSS_VALUE_FILL_MODE, 1, TRUE, FALSE, GTK_CSS_FILL_FORWARDS, "forwards" },
-  { &GTK_CSS_VALUE_FILL_MODE, 1, TRUE, FALSE, GTK_CSS_FILL_BACKWARDS, "backwards" },
-  { &GTK_CSS_VALUE_FILL_MODE, 1, TRUE, FALSE, GTK_CSS_FILL_BOTH, "both" }
+  { &GTK_CSS_VALUE_FILL_MODE, 1, 1, 0, 0, GTK_CSS_FILL_NONE, "none" },
+  { &GTK_CSS_VALUE_FILL_MODE, 1, 1, 0, 0, GTK_CSS_FILL_FORWARDS, "forwards" },
+  { &GTK_CSS_VALUE_FILL_MODE, 1, 1, 0, 0, GTK_CSS_FILL_BACKWARDS, "backwards" },
+  { &GTK_CSS_VALUE_FILL_MODE, 1, 1, 0, 0, GTK_CSS_FILL_BOTH, "both" }
 };
 
 GtkCssValue *
@@ -832,6 +843,7 @@ static const GtkCssValueClass GTK_CSS_VALUE_ICON_STYLE = {
   "GtkCssIconStyleValue",
   gtk_css_value_enum_free,
   gtk_css_value_enum_compute,
+  NULL,
   gtk_css_value_enum_equal,
   gtk_css_value_enum_transition,
   NULL,
@@ -840,9 +852,9 @@ static const GtkCssValueClass GTK_CSS_VALUE_ICON_STYLE = {
 };
 
 static GtkCssValue icon_style_values[] = {
-  { &GTK_CSS_VALUE_ICON_STYLE, 1, TRUE, FALSE, GTK_CSS_ICON_STYLE_REQUESTED, "requested" },
-  { &GTK_CSS_VALUE_ICON_STYLE, 1, TRUE, FALSE, GTK_CSS_ICON_STYLE_REGULAR, "regular" },
-  { &GTK_CSS_VALUE_ICON_STYLE, 1, TRUE, FALSE, GTK_CSS_ICON_STYLE_SYMBOLIC, "symbolic" }
+  { &GTK_CSS_VALUE_ICON_STYLE, 1, 1, 0, 0, GTK_CSS_ICON_STYLE_REQUESTED, "requested" },
+  { &GTK_CSS_VALUE_ICON_STYLE, 1, 1, 0, 0, GTK_CSS_ICON_STYLE_REGULAR, "regular" },
+  { &GTK_CSS_VALUE_ICON_STYLE, 1, 1, 0, 0, GTK_CSS_ICON_STYLE_SYMBOLIC, "symbolic" }
 };
 
 GtkCssValue *
@@ -889,6 +901,7 @@ static const GtkCssValueClass GTK_CSS_VALUE_FONT_KERNING = {
   "GtkCssFontKerningValue",
   gtk_css_value_enum_free,
   gtk_css_value_enum_compute,
+  NULL,
   gtk_css_value_enum_equal,
   gtk_css_value_enum_transition,
   NULL,
@@ -897,9 +910,9 @@ static const GtkCssValueClass GTK_CSS_VALUE_FONT_KERNING = {
 };
 
 static GtkCssValue font_kerning_values[] = {
-  { &GTK_CSS_VALUE_FONT_KERNING, 1, TRUE, FALSE, GTK_CSS_FONT_KERNING_AUTO, "auto" },
-  { &GTK_CSS_VALUE_FONT_KERNING, 1, TRUE, FALSE, GTK_CSS_FONT_KERNING_NORMAL, "normal" },
-  { &GTK_CSS_VALUE_FONT_KERNING, 1, TRUE, FALSE, GTK_CSS_FONT_KERNING_NONE, "none" }
+  { &GTK_CSS_VALUE_FONT_KERNING, 1, 1, 0, 0, GTK_CSS_FONT_KERNING_AUTO, "auto" },
+  { &GTK_CSS_VALUE_FONT_KERNING, 1, 1, 0, 0, GTK_CSS_FONT_KERNING_NORMAL, "normal" },
+  { &GTK_CSS_VALUE_FONT_KERNING, 1, 1, 0, 0, GTK_CSS_FONT_KERNING_NONE, "none" }
 };
 
 GtkCssValue *
@@ -946,6 +959,7 @@ static const GtkCssValueClass GTK_CSS_VALUE_FONT_VARIANT_POSITION = {
   "GtkCssFontVariationPositionValue",
   gtk_css_value_enum_free,
   gtk_css_value_enum_compute,
+  NULL,
   gtk_css_value_enum_equal,
   gtk_css_value_enum_transition,
   NULL,
@@ -954,9 +968,9 @@ static const GtkCssValueClass GTK_CSS_VALUE_FONT_VARIANT_POSITION = {
 };
 
 static GtkCssValue font_variant_position_values[] = {
-  { &GTK_CSS_VALUE_FONT_VARIANT_POSITION, 1, TRUE, FALSE, GTK_CSS_FONT_VARIANT_POSITION_NORMAL, "normal" },
-  { &GTK_CSS_VALUE_FONT_VARIANT_POSITION, 1, TRUE, FALSE, GTK_CSS_FONT_VARIANT_POSITION_SUB, "sub" },
-  { &GTK_CSS_VALUE_FONT_VARIANT_POSITION, 1, TRUE, FALSE, GTK_CSS_FONT_VARIANT_POSITION_SUPER, "super" }
+  { &GTK_CSS_VALUE_FONT_VARIANT_POSITION, 1, 1, 0, 0, GTK_CSS_FONT_VARIANT_POSITION_NORMAL, "normal" },
+  { &GTK_CSS_VALUE_FONT_VARIANT_POSITION, 1, 1, 0, 0, GTK_CSS_FONT_VARIANT_POSITION_SUB, "sub" },
+  { &GTK_CSS_VALUE_FONT_VARIANT_POSITION, 1, 1, 0, 0, GTK_CSS_FONT_VARIANT_POSITION_SUPER, "super" }
 };
 
 GtkCssValue *
@@ -1003,6 +1017,7 @@ static const GtkCssValueClass GTK_CSS_VALUE_FONT_VARIANT_CAPS = {
   "GtkCssFontVariantCapsValue",
   gtk_css_value_enum_free,
   gtk_css_value_enum_compute,
+  NULL,
   gtk_css_value_enum_equal,
   gtk_css_value_enum_transition,
   NULL,
@@ -1011,13 +1026,13 @@ static const GtkCssValueClass GTK_CSS_VALUE_FONT_VARIANT_CAPS = {
 };
 
 static GtkCssValue font_variant_caps_values[] = {
-  { &GTK_CSS_VALUE_FONT_VARIANT_CAPS, 1, TRUE, FALSE, GTK_CSS_FONT_VARIANT_CAPS_NORMAL, "normal" },
-  { &GTK_CSS_VALUE_FONT_VARIANT_CAPS, 1, TRUE, FALSE, GTK_CSS_FONT_VARIANT_CAPS_SMALL_CAPS, "small-caps" },
-  { &GTK_CSS_VALUE_FONT_VARIANT_CAPS, 1, TRUE, FALSE, GTK_CSS_FONT_VARIANT_CAPS_ALL_SMALL_CAPS, "all-small-caps" },
-  { &GTK_CSS_VALUE_FONT_VARIANT_CAPS, 1, TRUE, FALSE, GTK_CSS_FONT_VARIANT_CAPS_PETITE_CAPS, "petite-caps" },
-  { &GTK_CSS_VALUE_FONT_VARIANT_CAPS, 1, TRUE, FALSE, GTK_CSS_FONT_VARIANT_CAPS_ALL_PETITE_CAPS, "all-petite-caps" },
-  { &GTK_CSS_VALUE_FONT_VARIANT_CAPS, 1, TRUE, FALSE, GTK_CSS_FONT_VARIANT_CAPS_UNICASE, "unicase" },
-  { &GTK_CSS_VALUE_FONT_VARIANT_CAPS, 1, TRUE, FALSE, GTK_CSS_FONT_VARIANT_CAPS_TITLING_CAPS, "titling-caps" }
+  { &GTK_CSS_VALUE_FONT_VARIANT_CAPS, 1, 1, 0, 0, GTK_CSS_FONT_VARIANT_CAPS_NORMAL, "normal" },
+  { &GTK_CSS_VALUE_FONT_VARIANT_CAPS, 1, 1, 0, 0, GTK_CSS_FONT_VARIANT_CAPS_SMALL_CAPS, "small-caps" },
+  { &GTK_CSS_VALUE_FONT_VARIANT_CAPS, 1, 1, 0, 0, GTK_CSS_FONT_VARIANT_CAPS_ALL_SMALL_CAPS, "all-small-caps" },
+  { &GTK_CSS_VALUE_FONT_VARIANT_CAPS, 1, 1, 0, 0, GTK_CSS_FONT_VARIANT_CAPS_PETITE_CAPS, "petite-caps" },
+  { &GTK_CSS_VALUE_FONT_VARIANT_CAPS, 1, 1, 0, 0, GTK_CSS_FONT_VARIANT_CAPS_ALL_PETITE_CAPS, "all-petite-caps" },
+  { &GTK_CSS_VALUE_FONT_VARIANT_CAPS, 1, 1, 0, 0, GTK_CSS_FONT_VARIANT_CAPS_UNICASE, "unicase" },
+  { &GTK_CSS_VALUE_FONT_VARIANT_CAPS, 1, 1, 0, 0, GTK_CSS_FONT_VARIANT_CAPS_TITLING_CAPS, "titling-caps" }
 };
 
 GtkCssValue *
@@ -1064,6 +1079,7 @@ static const GtkCssValueClass GTK_CSS_VALUE_FONT_VARIANT_ALTERNATE = {
   "GtkCssFontVariantAlternateValue",
   gtk_css_value_enum_free,
   gtk_css_value_enum_compute,
+  NULL,
   gtk_css_value_enum_equal,
   gtk_css_value_enum_transition,
   NULL,
@@ -1072,8 +1088,8 @@ static const GtkCssValueClass GTK_CSS_VALUE_FONT_VARIANT_ALTERNATE = {
 };
 
 static GtkCssValue font_variant_alternate_values[] = {
-  { &GTK_CSS_VALUE_FONT_VARIANT_ALTERNATE, 1, TRUE, FALSE, GTK_CSS_FONT_VARIANT_ALTERNATE_NORMAL, "normal" },
-  { &GTK_CSS_VALUE_FONT_VARIANT_ALTERNATE, 1, TRUE, FALSE, GTK_CSS_FONT_VARIANT_ALTERNATE_HISTORICAL_FORMS, "historical-forms" }
+  { &GTK_CSS_VALUE_FONT_VARIANT_ALTERNATE, 1, 1, 0, 0, GTK_CSS_FONT_VARIANT_ALTERNATE_NORMAL, "normal" },
+  { &GTK_CSS_VALUE_FONT_VARIANT_ALTERNATE, 1, 1, 0, 0, GTK_CSS_FONT_VARIANT_ALTERNATE_HISTORICAL_FORMS, "historical-forms" }
 };
 
 GtkCssValue *
@@ -1172,6 +1188,7 @@ static const GtkCssValueClass GTK_CSS_VALUE_TEXT_DECORATION_LINE = {
   "GtkCssTextDecorationLine",
   gtk_css_value_enum_free,
   gtk_css_value_enum_compute,
+  NULL,
   gtk_css_value_flags_equal,
   gtk_css_value_enum_transition,
   NULL,
@@ -1271,6 +1288,7 @@ static const GtkCssValueClass GTK_CSS_VALUE_FONT_VARIANT_LIGATURE = {
   "GtkCssFontVariantLigatureValue",
   gtk_css_value_enum_free,
   gtk_css_value_enum_compute,
+  NULL,
   gtk_css_value_flags_equal,
   gtk_css_value_enum_transition,
   NULL,
@@ -1379,6 +1397,7 @@ static const GtkCssValueClass GTK_CSS_VALUE_FONT_VARIANT_NUMERIC = {
   "GtkCssFontVariantNumbericValue",
   gtk_css_value_enum_free,
   gtk_css_value_enum_compute,
+  NULL,
   gtk_css_value_flags_equal,
   gtk_css_value_enum_transition,
   NULL,
@@ -1484,6 +1503,7 @@ static const GtkCssValueClass GTK_CSS_VALUE_FONT_VARIANT_EAST_ASIAN = {
   "GtkCssFontVariantEastAsianValue",
   gtk_css_value_enum_free,
   gtk_css_value_enum_compute,
+  NULL,
   gtk_css_value_flags_equal,
   gtk_css_value_enum_transition,
   NULL,
@@ -1573,6 +1593,7 @@ static const GtkCssValueClass GTK_CSS_VALUE_TEXT_TRANSFORM = {
   "GtkCssTextTransformValue",
   gtk_css_value_enum_free,
   gtk_css_value_enum_compute,
+  NULL,
   gtk_css_value_enum_equal,
   gtk_css_value_enum_transition,
   NULL,
@@ -1581,10 +1602,10 @@ static const GtkCssValueClass GTK_CSS_VALUE_TEXT_TRANSFORM = {
 };
 
 static GtkCssValue text_transform_values[] = {
-  { &GTK_CSS_VALUE_TEXT_TRANSFORM, 1, TRUE, FALSE, GTK_CSS_TEXT_TRANSFORM_NONE, "none" },
-  { &GTK_CSS_VALUE_TEXT_TRANSFORM, 1, TRUE, FALSE, GTK_CSS_TEXT_TRANSFORM_LOWERCASE, "lowercase" },
-  { &GTK_CSS_VALUE_TEXT_TRANSFORM, 1, TRUE, FALSE, GTK_CSS_TEXT_TRANSFORM_UPPERCASE, "uppercase" },
-  { &GTK_CSS_VALUE_TEXT_TRANSFORM, 1, TRUE, FALSE, GTK_CSS_TEXT_TRANSFORM_CAPITALIZE, "capitalize" },
+  { &GTK_CSS_VALUE_TEXT_TRANSFORM, 1, 1, 0, 0, GTK_CSS_TEXT_TRANSFORM_NONE, "none" },
+  { &GTK_CSS_VALUE_TEXT_TRANSFORM, 1, 1, 0, 0, GTK_CSS_TEXT_TRANSFORM_LOWERCASE, "lowercase" },
+  { &GTK_CSS_VALUE_TEXT_TRANSFORM, 1, 1, 0, 0, GTK_CSS_TEXT_TRANSFORM_UPPERCASE, "uppercase" },
+  { &GTK_CSS_VALUE_TEXT_TRANSFORM, 1, 1, 0, 0, GTK_CSS_TEXT_TRANSFORM_CAPITALIZE, "capitalize" },
 };
 
 GtkCssValue *

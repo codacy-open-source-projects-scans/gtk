@@ -42,76 +42,32 @@
 
 G_DEFINE_TYPE (GtkCssAnimatedStyle, gtk_css_animated_style, GTK_TYPE_CSS_STYLE)
 
-static inline gboolean
-property_has_color (guint id)
-{
-  switch (id)
-    {
-    case GTK_CSS_PROPERTY_COLOR:
-    case GTK_CSS_PROPERTY_ICON_PALETTE:
-    case GTK_CSS_PROPERTY_TEXT_DECORATION_COLOR:
-    case GTK_CSS_PROPERTY_TEXT_SHADOW:
-    case GTK_CSS_PROPERTY_BOX_SHADOW:
-    case GTK_CSS_PROPERTY_BORDER_TOP_COLOR:
-    case GTK_CSS_PROPERTY_BORDER_RIGHT_COLOR:
-    case GTK_CSS_PROPERTY_BORDER_BOTTOM_COLOR:
-    case GTK_CSS_PROPERTY_BORDER_LEFT_COLOR:
-    case GTK_CSS_PROPERTY_OUTLINE_COLOR:
-    case GTK_CSS_PROPERTY_BACKGROUND_IMAGE:
-    case GTK_CSS_PROPERTY_ICON_SOURCE:
-    case GTK_CSS_PROPERTY_ICON_SHADOW:
-    case GTK_CSS_PROPERTY_CARET_COLOR:
-    case GTK_CSS_PROPERTY_SECONDARY_CARET_COLOR:
-      return TRUE;
-    default:
-       return FALSE;
-    }
-}
 
 #define DEFINE_VALUES(ENUM, TYPE, NAME) \
 static inline void \
 gtk_css_ ## NAME ## _values_recompute (GtkCssAnimatedStyle   *animated, \
-                                       GtkCssComputeContext  *context, \
-                                       GtkCssAnimationChange  change) \
+                                       GtkCssComputeContext  *context) \
 { \
   GtkCssStyle *style = (GtkCssStyle *)animated; \
-  GtkCssValue **values = (GtkCssValue **)((guint8*)(animated->style->NAME) + sizeof (GtkCssValues)); \
   int i; \
 \
   for (i = 0; i < G_N_ELEMENTS (NAME ## _props); i++) \
     { \
       guint id = NAME ## _props[i]; \
       GtkCssValue *original, *computed; \
-      gboolean needs_recompute = FALSE; \
-\
-      if (values[i] == NULL) \
-        continue; \
 \
       original = gtk_css_style_get_original_value (style, id); \
       if (original == NULL) \
         continue; \
 \
-      if ((change & GTK_CSS_ANIMATION_CHANGE_VARIABLES) && \
-           gtk_css_value_contains_variables (original)) \
-        needs_recompute = TRUE; \
-\
-      if ((change & GTK_CSS_ANIMATION_CHANGE_COLOR) && \
-          property_has_color (id)) \
-        needs_recompute = TRUE; \
-\
-      if (!needs_recompute) \
+      if (!gtk_css_value_contains_variables (original)) \
         continue; \
 \
-      computed = gtk_css_value_compute (original, \
-                                        id, \
-                                        context); \
+      computed = gtk_css_value_compute (original, id, context); \
       if (computed == NULL) \
         continue; \
 \
       gtk_css_animated_style_set_animated_value (animated, id, computed); \
-\
-      if (id == GTK_CSS_PROPERTY_COLOR) \
-        change |= GTK_CSS_ANIMATION_CHANGE_COLOR; \
     } \
 }
 
@@ -679,28 +635,28 @@ gtk_css_animated_style_set_animated_custom_value (GtkCssAnimatedStyle *animated,
 }
 
 void
-gtk_css_animated_style_recompute (GtkCssAnimatedStyle   *style,
-                                  GtkCssAnimationChange  change)
+gtk_css_animated_style_recompute (GtkCssAnimatedStyle *style)
 {
   GtkCssComputeContext context = { NULL, };
   GtkCssValue *shorthands[GTK_CSS_SHORTHAND_PROPERTY_N_PROPERTIES] = { NULL, };
 
   context.provider = style->provider;
-  context.style = style->style;
+  context.style = (GtkCssStyle *) style;
   context.parent_style = style->parent_style;
+  context.variables = ((GtkCssStyle *) style)->variables;
   context.shorthands = shorthands;
 
-  gtk_css_core_values_recompute (style, &context, change);
-  gtk_css_background_values_recompute (style, &context, change);
-  gtk_css_border_values_recompute (style, &context, change);
-  gtk_css_icon_values_recompute (style, &context, change);
-  gtk_css_outline_values_recompute (style, &context, change);
-  gtk_css_font_values_recompute (style, &context, change);
-  gtk_css_font_variant_values_recompute (style, &context, change);
-  gtk_css_animation_values_recompute (style, &context, change);
-  gtk_css_transition_values_recompute (style, &context, change);
-  gtk_css_size_values_recompute (style, &context, change);
-  gtk_css_other_values_recompute (style, &context, change);
+  gtk_css_core_values_recompute (style, &context);
+  gtk_css_background_values_recompute (style, &context);
+  gtk_css_border_values_recompute (style, &context);
+  gtk_css_icon_values_recompute (style, &context);
+  gtk_css_outline_values_recompute (style, &context);
+  gtk_css_font_values_recompute (style, &context);
+  gtk_css_font_variant_values_recompute (style, &context);
+  gtk_css_animation_values_recompute (style, &context);
+  gtk_css_transition_values_recompute (style, &context);
+  gtk_css_size_values_recompute (style, &context);
+  gtk_css_other_values_recompute (style, &context);
 
   for (unsigned int i = 0; i < GTK_CSS_SHORTHAND_PROPERTY_N_PROPERTIES; i++)
     {
@@ -1027,14 +983,22 @@ gtk_css_animated_style_create_css_animations (GPtrArray        *animations,
 static void
 gtk_css_animated_style_apply_animations (GtkCssAnimatedStyle *style)
 {
-  guint i;
+  GtkCssComputeContext context;
 
-  for (i = 0; i < style->n_animations; i ++)
+  for (guint i = 0; i < style->n_animations; i ++)
     {
       GtkStyleAnimation *animation = style->animations[i];
 
       _gtk_style_animation_apply_values (animation, style);
     }
+
+  context.provider = style->provider;
+  context.style = (GtkCssStyle *) style;
+  context.parent_style = style->parent_style;
+  context.variables = NULL;
+  context.shorthands = NULL;
+
+  gtk_css_style_resolve_used_values ((GtkCssStyle *) style, &context);
 }
 
 GtkCssStyle *
@@ -1087,6 +1051,7 @@ gtk_css_animated_style_new (GtkCssStyle      *base_style,
   style->transition = (GtkCssTransitionValues *)gtk_css_values_ref ((GtkCssValues *)base_style->transition);
   style->size = (GtkCssSizeValues *)gtk_css_values_ref ((GtkCssValues *)base_style->size);
   style->other = (GtkCssOtherValues *)gtk_css_values_ref ((GtkCssValues *)base_style->other);
+  style->used = (GtkCssUsedValues *)gtk_css_values_ref ((GtkCssValues *)base_style->used);
   if (base_style->variables)
     style->variables = gtk_css_variable_set_ref (base_style->variables);
 
@@ -1160,6 +1125,7 @@ gtk_css_animated_style_new_advance (GtkCssAnimatedStyle *source,
   style->transition = (GtkCssTransitionValues *)gtk_css_values_ref ((GtkCssValues *)base_style->transition);
   style->size = (GtkCssSizeValues *)gtk_css_values_ref ((GtkCssValues *)base_style->size);
   style->other = (GtkCssOtherValues *)gtk_css_values_ref ((GtkCssValues *)base_style->other);
+  style->used = (GtkCssUsedValues *)gtk_css_values_ref ((GtkCssValues *)base_style->used);
   if (base_style->variables)
     style->variables = gtk_css_variable_set_ref (base_style->variables);
 

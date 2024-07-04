@@ -69,6 +69,15 @@
  * attribute of a `<child>` element. See [method@Gtk.ListBox.set_placeholder]
  * for info.
  *
+ * # Shortcuts and Gestures
+ *
+ * The following signals have default keybindings:
+ *
+ * - [signal@Gtk.ListBox::move-cursor]
+ * - [signal@Gtk.ListBox::select-all]
+ * - [signal@Gtk.ListBox::toggle-cursor-row]
+ * - [signal@Gtk.ListBox::unselect-all]
+ *
  * # CSS nodes
  *
  * |[<!-- language="plain" -->
@@ -652,6 +661,8 @@ gtk_list_box_class_init (GtkListBoxClass *klass)
    * @box: the list box
    *
    * Emitted when the cursor row is toggled.
+   *
+   * The default bindings for this signal is <kbd>Ctrl</kbd>+<kbd>␣</kbd>.
    */
   signals[TOGGLE_CURSOR_ROW] =
     g_signal_new (I_("toggle-cursor-row"),
@@ -730,6 +741,16 @@ gtk_list_box_class_init (GtkListBoxClass *klass)
                                        "toggle-cursor-row",
                                        NULL);
 
+#ifdef __APPLE__
+  gtk_widget_class_add_binding_signal (widget_class,
+                                       GDK_KEY_a, GDK_META_MASK,
+                                       "select-all",
+                                       NULL);
+  gtk_widget_class_add_binding_signal (widget_class,
+                                       GDK_KEY_a, GDK_META_MASK | GDK_SHIFT_MASK,
+                                       "unselect-all",
+                                       NULL);
+#else
   gtk_widget_class_add_binding_signal (widget_class,
                                        GDK_KEY_a, GDK_CONTROL_MASK,
                                        "select-all",
@@ -738,6 +759,7 @@ gtk_list_box_class_init (GtkListBoxClass *klass)
                                        GDK_KEY_a, GDK_CONTROL_MASK | GDK_SHIFT_MASK,
                                        "unselect-all",
                                        NULL);
+#endif
 
   gtk_widget_class_set_css_name (widget_class, I_("list"));
   gtk_widget_class_set_accessible_role (widget_class, GTK_ACCESSIBLE_ROLE_LIST);
@@ -1216,8 +1238,9 @@ gtk_list_box_get_selection_mode (GtkListBox *box)
 /**
  * gtk_list_box_set_filter_func:
  * @box: a `GtkListBox`
- * @filter_func: (nullable): callback that lets you filter which rows to show
- * @user_data: (closure): user data passed to @filter_func
+ * @filter_func: (nullable) (scope notified) (closure user_data) (destroy destroy): callback
+ *   that lets you filter which rows to show
+ * @user_data: user data passed to @filter_func
  * @destroy: destroy notifier for @user_data
  *
  * By setting a filter function on the @box one can decide dynamically which
@@ -1257,8 +1280,9 @@ gtk_list_box_set_filter_func (GtkListBox           *box,
 /**
  * gtk_list_box_set_header_func:
  * @box: a `GtkListBox`
- * @update_header: (nullable): callback that lets you add row headers
- * @user_data: (closure): user data passed to @update_header
+ * @update_header: (nullable) (scope notified) (closure user_data) (destroy destroy): callback
+ *   that lets you add row headers
+ * @user_data: user data passed to @update_header
  * @destroy: destroy notifier for @user_data
  *
  * Sets a header function.
@@ -1412,8 +1436,8 @@ gtk_list_box_invalidate_headers (GtkListBox *box)
 /**
  * gtk_list_box_set_sort_func:
  * @box: a `GtkListBox`
- * @sort_func: (nullable): the sort function
- * @user_data: (closure): user data passed to @sort_func
+ * @sort_func: (nullable) (scope notified) (closure user_data) (destroy destroy): the sort function
+ * @user_data: user data passed to @sort_func
  * @destroy: destroy notifier for @user_data
  *
  * Sets a sort function.
@@ -1939,6 +1963,9 @@ gtk_list_box_click_gesture_released (GtkGestureClick *gesture,
           state = gdk_event_get_modifier_state (event);
           extend = (state & GDK_SHIFT_MASK) != 0;
           modify = (state & GDK_CONTROL_MASK) != 0;
+#ifdef __APPLE__
+          modify = modify | ((state & GDK_META_MASK) != 0);
+#endif
           source = gdk_device_get_source (gdk_event_get_device (event));
 
           if (source == GDK_SOURCE_TOUCHSCREEN)
@@ -3734,9 +3761,9 @@ gtk_list_box_check_model_compat (GtkListBox *box)
  * gtk_list_box_bind_model:
  * @box: a `GtkListBox`
  * @model: (nullable): the `GListModel` to be bound to @box
- * @create_widget_func: (nullable): a function that creates widgets for items
- *   or %NULL in case you also passed %NULL as @model
- * @user_data: (closure): user data passed to @create_widget_func
+ * @create_widget_func: (nullable) (scope notified) (closure user_data) (destroy user_data_free_func): a function
+ *   that creates widgets for items or %NULL in case you also passed %NULL as @model
+ * @user_data: user data passed to @create_widget_func
  * @user_data_free_func: function for freeing @user_data
  *
  * Binds @model to @box.

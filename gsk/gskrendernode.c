@@ -145,12 +145,6 @@ gsk_render_node_finalize (GskRenderNode *self)
   g_type_free_instance ((GTypeInstance *) self);
 }
 
-static void
-gsk_render_node_real_draw (GskRenderNode *node,
-                           cairo_t       *cr)
-{
-}
-
 static gboolean
 gsk_render_node_real_can_diff (const GskRenderNode *node1,
                                const GskRenderNode *node2)
@@ -171,7 +165,6 @@ gsk_render_node_class_init (GskRenderNodeClass *klass)
 {
   klass->node_type = GSK_NOT_A_RENDER_NODE;
   klass->finalize = gsk_render_node_finalize;
-  klass->draw = gsk_render_node_real_draw;
   klass->can_diff = gsk_render_node_real_can_diff;
   klass->diff = gsk_render_node_real_diff;
 }
@@ -607,8 +600,8 @@ gsk_render_node_write_to_file (GskRenderNode *node,
 /**
  * gsk_render_node_deserialize:
  * @bytes: the bytes containing the data
- * @error_func: (nullable) (scope call): Callback on parsing errors
- * @user_data: (closure error_func): user_data for @error_func
+ * @error_func: (nullable) (scope call) (closure user_data): Callback on parsing errors
+ * @user_data: user_data for @error_func
  *
  * Loads data previously created via [method@Gsk.RenderNode.serialize].
  *

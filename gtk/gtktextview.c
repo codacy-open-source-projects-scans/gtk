@@ -74,6 +74,43 @@
  * which gives an overview of all the objects and data types related to the
  * text widget and how they work together.
  *
+ * ## Shortcuts and Gestures
+ *
+ * `GtkTextView` supports the following keyboard shortcuts:
+ *
+ * - <kbd>Shift</kbd>+<kbd>F10</kbd> or <kbd>Menu</kbd> opens the context menu.
+ * - <kbd>Ctrl</kbd>+<kbd>Z</kbd> undoes the last modification.
+ * - <kbd>Ctrl</kbd>+<kbd>Y</kbd> or <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd>
+ *   redoes the last undone modification.
+ *
+ * Additionally, the following signals have default keybindings:
+ *
+ * - [signal@Gtk.TextView::backspace]
+ * - [signal@Gtk.TextView::copy-clipboard]
+ * - [signal@Gtk.TextView::cut-clipboard]
+ * - [signal@Gtk.TextView::delete-from-cursor]
+ * - [signal@Gtk.TextView::insert-emoji]
+ * - [signal@Gtk.TextView::move-cursor]
+ * - [signal@Gtk.TextView::paste-clipboard]
+ * - [signal@Gtk.TextView::select-all]
+ * - [signal@Gtk.TextView::toggle-cursor-visible]
+ * - [signal@Gtk.TextView::toggle-overwrite]
+ *
+ * ## Actions
+ *
+ * `GtkTextView` defines a set of built-in actions:
+ *
+ * - `clipboard.copy` copies the contents to the clipboard.
+ * - `clipboard.cut` copies the contents to the clipboard and deletes it from
+ *   the widget.
+ * - `clipboard.paste` inserts the contents of the clipboard into the widget.
+ * - `menu.popup` opens the context menu.
+ * - `misc.insert-emoji` opens the Emoji chooser.
+ * - `selection.delete` deletes the current selection.
+ * - `selection.select-all` selects all of the widgets content.
+ * - `text.redo` redoes the last change to the contents.
+ * - `text.undo` undoes the last change to the contents.
+ *
  * ## CSS nodes
  *
  * ```
@@ -1741,7 +1778,51 @@ gtk_text_view_class_init (GtkTextViewClass *klass)
   add_move_binding (widget_class, GDK_KEY_KP_Page_Down, GDK_CONTROL_MASK,
                     GTK_MOVEMENT_HORIZONTAL_PAGES, 1);
 
+#ifdef __APPLE__
+  add_move_binding (widget_class, GDK_KEY_Right, GDK_ALT_MASK,
+                    GTK_MOVEMENT_WORDS, 1);
+
+  add_move_binding (widget_class, GDK_KEY_Left, GDK_ALT_MASK,
+                    GTK_MOVEMENT_WORDS, -1);
+
+  add_move_binding (widget_class, GDK_KEY_KP_Right, GDK_ALT_MASK,
+                    GTK_MOVEMENT_WORDS, 1);
+
+  add_move_binding (widget_class, GDK_KEY_KP_Left, GDK_ALT_MASK,
+                    GTK_MOVEMENT_WORDS, -1);
+
+  add_move_binding (widget_class, GDK_KEY_Right, GDK_ALT_MASK,
+                    GTK_MOVEMENT_DISPLAY_LINE_ENDS, 1);
+
+  add_move_binding (widget_class, GDK_KEY_Left, GDK_ALT_MASK,
+                    GTK_MOVEMENT_DISPLAY_LINE_ENDS, -1);
+
+  add_move_binding (widget_class, GDK_KEY_KP_Right, GDK_ALT_MASK,
+                    GTK_MOVEMENT_DISPLAY_LINE_ENDS, 1);
+
+  add_move_binding (widget_class, GDK_KEY_KP_Left, GDK_ALT_MASK,
+                    GTK_MOVEMENT_DISPLAY_LINE_ENDS, -1);
+
+  add_move_binding (widget_class, GDK_KEY_Up, GDK_META_MASK,
+                    GTK_MOVEMENT_BUFFER_ENDS, -1);
+
+  add_move_binding (widget_class, GDK_KEY_Down, GDK_META_MASK,
+                    GTK_MOVEMENT_BUFFER_ENDS, 1);
+
+  add_move_binding (widget_class, GDK_KEY_KP_Up, GDK_META_MASK,
+                    GTK_MOVEMENT_BUFFER_ENDS, -1);
+
+  add_move_binding (widget_class, GDK_KEY_KP_Down, GDK_META_MASK,
+                    GTK_MOVEMENT_BUFFER_ENDS, 1);
+#endif
+
   /* Select all */
+#ifdef __APPLE__
+  gtk_widget_class_add_binding_signal (widget_class,
+                                       GDK_KEY_a, GDK_META_MASK,
+                                       "select-all",
+                                       "(b)", TRUE);
+#else
   gtk_widget_class_add_binding_signal (widget_class,
                                        GDK_KEY_a, GDK_CONTROL_MASK,
                                        "select-all",
@@ -1751,8 +1832,15 @@ gtk_text_view_class_init (GtkTextViewClass *klass)
                                        GDK_KEY_slash, GDK_CONTROL_MASK,
                                        "select-all",
                                        "(b)", TRUE);
+#endif
 
   /* Unselect all */
+#ifdef __APPLE__
+  gtk_widget_class_add_binding_signal (widget_class,
+                                       GDK_KEY_a, GDK_SHIFT_MASK | GDK_META_MASK,
+                                       "select-all",
+                                       "(b)", FALSE);
+#else
   gtk_widget_class_add_binding_signal (widget_class,
                                        GDK_KEY_backslash, GDK_CONTROL_MASK,
                                        "select-all",
@@ -1762,6 +1850,7 @@ gtk_text_view_class_init (GtkTextViewClass *klass)
                                        GDK_KEY_a, GDK_SHIFT_MASK | GDK_CONTROL_MASK,
                                        "select-all",
                                        "(b)", FALSE);
+#endif
 
   /* Deleting text */
   gtk_widget_class_add_binding_signal (widget_class,
@@ -1800,6 +1889,17 @@ gtk_text_view_class_init (GtkTextViewClass *klass)
                                        "delete-from-cursor",
                                        "(ii)", GTK_DELETE_WORD_ENDS, -1);
 
+#ifdef __APPLE__
+  gtk_widget_class_add_binding_signal (widget_class,
+                                       GDK_KEY_Delete, GDK_ALT_MASK,
+                                       "delete-from-cursor",
+                                       "(ii)", GTK_DELETE_WORD_ENDS, 1);
+
+  gtk_widget_class_add_binding_signal (widget_class,
+                                       GDK_KEY_BackSpace, GDK_ALT_MASK,
+                                       "delete-from-cursor",
+                                       "(ii)", GTK_DELETE_WORD_ENDS, -1);
+#else
   gtk_widget_class_add_binding_signal (widget_class,
                                        GDK_KEY_Delete, GDK_SHIFT_MASK | GDK_CONTROL_MASK,
                                        "delete-from-cursor",
@@ -1814,9 +1914,23 @@ gtk_text_view_class_init (GtkTextViewClass *klass)
                                        GDK_KEY_BackSpace, GDK_SHIFT_MASK | GDK_CONTROL_MASK,
                                        "delete-from-cursor",
                                        "(ii)", GTK_DELETE_PARAGRAPH_ENDS, -1);
+#endif
 
   /* Cut/copy/paste */
-
+#ifdef __APPLE__
+  gtk_widget_class_add_binding_signal (widget_class,
+                                       GDK_KEY_x, GDK_META_MASK,
+                                       "cut-clipboard",
+                                       NULL);
+  gtk_widget_class_add_binding_signal (widget_class,
+                                       GDK_KEY_c, GDK_META_MASK,
+                                       "copy-clipboard",
+                                       NULL);
+  gtk_widget_class_add_binding_signal (widget_class,
+                                       GDK_KEY_v, GDK_META_MASK,
+                                       "paste-clipboard",
+                                       NULL);
+#else
   gtk_widget_class_add_binding_signal (widget_class,
                                        GDK_KEY_x, GDK_CONTROL_MASK,
                                        "cut-clipboard",
@@ -1855,8 +1969,17 @@ gtk_text_view_class_init (GtkTextViewClass *klass)
                                        GDK_KEY_Insert, GDK_SHIFT_MASK,
                                        "paste-clipboard",
                                        NULL);
+#endif
 
   /* Undo/Redo */
+#ifdef __APPLE__
+  gtk_widget_class_add_binding_action (widget_class,
+                                       GDK_KEY_z, GDK_META_MASK,
+                                       "text.undo", NULL);
+  gtk_widget_class_add_binding_action (widget_class,
+                                       GDK_KEY_z, GDK_META_MASK | GDK_SHIFT_MASK,
+                                       "text.redo", NULL);
+#else
   gtk_widget_class_add_binding_action (widget_class,
                                        GDK_KEY_z, GDK_CONTROL_MASK,
                                        "text.undo", NULL);
@@ -1866,6 +1989,7 @@ gtk_text_view_class_init (GtkTextViewClass *klass)
   gtk_widget_class_add_binding_action (widget_class,
                                        GDK_KEY_z, GDK_CONTROL_MASK | GDK_SHIFT_MASK,
                                        "text.redo", NULL);
+#endif
 
   /* Overwrite */
   gtk_widget_class_add_binding_signal (widget_class,
@@ -7856,7 +7980,6 @@ gtk_text_view_set_attributes_from_style (GtkTextView        *text_view,
 {
   GtkCssStyle *style;
   const GdkRGBA black = { 0, };
-  const GdkRGBA *color;
   const GdkRGBA *decoration_color;
   GtkTextDecorationLine decoration_line;
   GtkTextDecorationStyle decoration_style;
@@ -7866,12 +7989,10 @@ gtk_text_view_set_attributes_from_style (GtkTextView        *text_view,
   if (!values->appearance.fg_rgba)
     values->appearance.fg_rgba = gdk_rgba_copy (&black);
 
-  style = gtk_css_node_get_style (gtk_widget_get_css_node (GTK_WIDGET (text_view)));
+  style = gtk_css_node_get_style (gtk_widget_get_css_node (GTK_WIDGET (text_view)));;
 
-  color = gtk_css_color_value_get_rgba (style->background->background_color);
-  *values->appearance.bg_rgba = *color;
-  color = gtk_css_color_value_get_rgba (style->core->color);
-  *values->appearance.fg_rgba = *color;
+  *values->appearance.bg_rgba = *gtk_css_color_value_get_rgba (style->used->background_color);
+  *values->appearance.fg_rgba = *gtk_css_color_value_get_rgba (style->used->color);
 
   if (values->font)
     pango_font_description_free (values->font);
@@ -7882,9 +8003,7 @@ gtk_text_view_set_attributes_from_style (GtkTextView        *text_view,
 
   decoration_line = _gtk_css_text_decoration_line_value_get (style->font_variant->text_decoration_line);
   decoration_style = _gtk_css_text_decoration_style_value_get (style->font_variant->text_decoration_style);
-  decoration_color = gtk_css_color_value_get_rgba (style->font_variant->text_decoration_color
-                                                   ? style->font_variant->text_decoration_color
-                                                   : style->core->color);
+  decoration_color = gtk_css_color_value_get_rgba (style->used->text_decoration_color);
 
   if (decoration_line & GTK_CSS_TEXT_DECORATION_LINE_UNDERLINE)
     {
@@ -7945,7 +8064,6 @@ gtk_text_view_set_attributes_from_style (GtkTextView        *text_view,
   values->letter_spacing = gtk_css_number_value_get (style->font->letter_spacing, 100) * PANGO_SCALE;
 
   /* line-height */
-
   values->line_height = gtk_css_line_height_value_get (style->font->line_height);
   values->line_height_is_absolute = FALSE;
   if (values->line_height != 0.0)

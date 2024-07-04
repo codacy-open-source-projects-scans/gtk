@@ -72,6 +72,40 @@
  *
  * ![An example GtkLabel](label.png)
  *
+ * ## Shortcuts and Gestures
+ *
+ * `GtkLabel` supports the following keyboard shortcuts, when the cursor is
+ * visible:
+ *
+ * - <kbd>Shift</kbd>+<kbd>F10</kbd> or <kbd>Menu</kbd> opens the context menu.
+ * - <kbd>Ctrl</kbd>+<kbd>A</kbd> or <kbd>Ctrl</kbd>+<kbd>&sol;</kbd>
+ *   selects all.
+ * - <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>A</kbd> or
+ *   <kbd>Ctrl</kbd>+<kbd>&bsol;</kbd> unselects all.
+ *
+ * Additionally, the following signals have default keybindings:
+ *
+ * - [signal@Gtk.Label::activate-current-link]
+ * - [signal@Gtk.Label::copy-clipboard]
+ * - [signal@Gtk.Label::move-cursor]
+ *
+ * ## Actions
+ *
+ * `GtkLabel` defines a set of built-in actions:
+ *
+ * - `clipboard.copy` copies the text to the clipboard.
+ * - `clipboard.cut` doesn't do anything, since text in labels can't be deleted.
+ * - `clipboard.paste` doesn't do anything, since text in labels can't be
+ *   edited.
+ * - `link.open` opens the link, when activated on a link inside the label.
+ * - `link.copy` copies the link to the clipboard, when activated on a link
+ *   inside the label.
+ * - `menu.popup` opens the context menu.
+ * - `selection.delete` doesn't do anything, since text in labels can't be
+ *   deleted.
+ * - `selection.select-all` selects all of the text, if the label allows
+ *   selection.
+ *
  * ## CSS nodes
  *
  * ```
@@ -839,7 +873,7 @@ gtk_label_update_layout_attributes (GtkLabel      *self,
               g_slist_free (attributes);
             }
 
-          link_color = gtk_css_color_value_get_rgba (style->core->color);
+          link_color = gtk_css_color_value_get_rgba (style->used->color);
 
           attr = pango_attr_foreground_new (CLAMP (link_color->red * 65535. + 0.5, 0, 65535),
                                             CLAMP (link_color->green * 65535. + 0.5, 0, 65535),
@@ -2283,8 +2317,8 @@ gtk_label_class_init (GtkLabelClass *class)
    * programmatically.
    *
    * The default bindings for this signal come in two variants,
-   * the variant with the Shift modifier extends the selection,
-   * the variant without the Shift modifier does not.
+   * the variant with the <kbd>Shift</kbd> modifier extends the selection,
+   * the variant without the <kbd>Shift</kbd> modifier does not.
    * There are too many key combinations to list them all here.
    *
    * - <kbd>←</kbd>, <kbd>→</kbd>, <kbd>↑</kbd>, <kbd>↓</kbd>
@@ -2706,6 +2740,12 @@ gtk_label_class_init (GtkLabelClass *class)
                     GTK_MOVEMENT_WORDS, -1);
 
   /* select all */
+#ifdef __APPLE__
+  gtk_widget_class_add_binding (widget_class,
+                                GDK_KEY_a, GDK_META_MASK,
+                                (GtkShortcutFunc) gtk_label_select_all,
+                                NULL);
+#else
   gtk_widget_class_add_binding (widget_class,
                                 GDK_KEY_a, GDK_CONTROL_MASK,
                                 (GtkShortcutFunc) gtk_label_select_all,
@@ -2714,8 +2754,15 @@ gtk_label_class_init (GtkLabelClass *class)
                                 GDK_KEY_slash, GDK_CONTROL_MASK,
                                 (GtkShortcutFunc) gtk_label_select_all,
                                 NULL);
+#endif
 
   /* unselect all */
+#ifdef __APPLE__
+  gtk_widget_class_add_binding_signal (widget_class,
+                                       GDK_KEY_a, GDK_SHIFT_MASK | GDK_META_MASK,
+                                       "move-cursor",
+                                       "(iib)", GTK_MOVEMENT_PARAGRAPH_ENDS, 0, FALSE);
+#else
   gtk_widget_class_add_binding_signal (widget_class,
                                        GDK_KEY_a, GDK_SHIFT_MASK | GDK_CONTROL_MASK,
                                        "move-cursor",
@@ -2725,6 +2772,7 @@ gtk_label_class_init (GtkLabelClass *class)
                                        GDK_KEY_backslash, GDK_CONTROL_MASK,
                                        "move-cursor",
                                        "(iib)", GTK_MOVEMENT_PARAGRAPH_ENDS, 0, FALSE);
+#endif
 
   add_move_binding (widget_class, GDK_KEY_f, GDK_ALT_MASK,
                     GTK_MOVEMENT_WORDS, 1);
@@ -2756,11 +2804,56 @@ gtk_label_class_init (GtkLabelClass *class)
   add_move_binding (widget_class, GDK_KEY_KP_End, GDK_CONTROL_MASK,
                     GTK_MOVEMENT_BUFFER_ENDS, 1);
 
+#ifdef __APPLE__
+  add_move_binding (widget_class, GDK_KEY_Right, GDK_ALT_MASK,
+                    GTK_MOVEMENT_WORDS, 1);
+
+  add_move_binding (widget_class, GDK_KEY_Left, GDK_ALT_MASK,
+                    GTK_MOVEMENT_WORDS, -1);
+
+  add_move_binding (widget_class, GDK_KEY_KP_Right, GDK_ALT_MASK,
+                    GTK_MOVEMENT_WORDS, 1);
+
+  add_move_binding (widget_class, GDK_KEY_KP_Left, GDK_ALT_MASK,
+                    GTK_MOVEMENT_WORDS, -1);
+
+  add_move_binding (widget_class, GDK_KEY_Right, GDK_ALT_MASK,
+                    GTK_MOVEMENT_DISPLAY_LINE_ENDS, 1);
+
+  add_move_binding (widget_class, GDK_KEY_Left, GDK_ALT_MASK,
+                    GTK_MOVEMENT_DISPLAY_LINE_ENDS, -1);
+
+  add_move_binding (widget_class, GDK_KEY_KP_Right, GDK_ALT_MASK,
+                    GTK_MOVEMENT_DISPLAY_LINE_ENDS, 1);
+
+  add_move_binding (widget_class, GDK_KEY_KP_Left, GDK_ALT_MASK,
+                    GTK_MOVEMENT_DISPLAY_LINE_ENDS, -1);
+
+  add_move_binding (widget_class, GDK_KEY_Up, GDK_META_MASK,
+                    GTK_MOVEMENT_BUFFER_ENDS, -1);
+
+  add_move_binding (widget_class, GDK_KEY_Down, GDK_META_MASK,
+                    GTK_MOVEMENT_BUFFER_ENDS, 1);
+
+  add_move_binding (widget_class, GDK_KEY_KP_Up, GDK_META_MASK,
+                    GTK_MOVEMENT_BUFFER_ENDS, -1);
+
+  add_move_binding (widget_class, GDK_KEY_KP_Down, GDK_META_MASK,
+                    GTK_MOVEMENT_BUFFER_ENDS, 1);
+#endif
+
   /* copy */
+#ifdef __APPLE__
+  gtk_widget_class_add_binding_signal (widget_class,
+                                       GDK_KEY_c, GDK_META_MASK,
+                                       "copy-clipboard",
+                                       NULL);
+#else
   gtk_widget_class_add_binding_signal (widget_class,
                                        GDK_KEY_c, GDK_CONTROL_MASK,
                                        "copy-clipboard",
                                        NULL);
+#endif
 
   gtk_widget_class_add_binding_signal (widget_class,
                                        GDK_KEY_Return, 0,

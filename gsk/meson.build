@@ -42,6 +42,8 @@ gsk_public_sources = files([
   'gskstroke.c',
   'gsktransform.c',
   'gl/gskglrenderer.c',
+  'gpu/gsknglrenderer.c',
+  'gpu/gskvulkanrenderer.c',
 ])
 
 gsk_private_sources = files([
@@ -79,6 +81,7 @@ gsk_private_sources = files([
   'gpu/gskgpuborderop.c',
   'gpu/gskgpuboxshadowop.c',
   'gpu/gskgpubuffer.c',
+  'gpu/gskgpucache.c',
   'gpu/gskgpuclearop.c',
   'gpu/gskgpuclip.c',
   'gpu/gskgpucolorizeop.c',
@@ -108,8 +111,6 @@ gsk_private_sources = files([
   'gpu/gskgputextureop.c',
   'gpu/gskgpuuberop.c',
   'gpu/gskgpuuploadop.c',
-  'gpu/gsknglrenderer.c',
-  'gpu/gskvulkanrenderer.c',
 ])
 
 gsk_f16c_sources = files([
