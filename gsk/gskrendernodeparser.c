@@ -32,6 +32,7 @@
 #include "gskenumtypes.h"
 #include "gskprivate.h"
 
+#include "gdk/gdkcolorstateprivate.h"
 #include "gdk/gdkrgbaprivate.h"
 #include "gdk/gdktextureprivate.h"
 #include "gdk/gdkmemoryformatprivate.h"
@@ -1645,6 +1646,7 @@ parse_inset_shadow_node (GtkCssParser *parser,
   return gsk_inset_shadow_node_new (&outline, &color, dx, dy, spread, blur);
 }
 
+G_GNUC_BEGIN_IGNORE_DEPRECATIONS
 typedef union {
     gint32 i;
     double v[4];
@@ -1887,6 +1889,7 @@ parse_glshader_node (GtkCssParser *parser,
 
   return node;
 }
+G_GNUC_END_IGNORE_DEPRECATIONS
 
 static GskRenderNode *
 parse_mask_node (GtkCssParser *parser,
@@ -2010,7 +2013,7 @@ parse_cairo_node (GtkCssParser *parser,
   else if (pixels != NULL)
     {
       cairo_t *cr = gsk_cairo_node_get_draw_context (node);
-      surface = gdk_texture_download_surface (pixels);
+      surface = gdk_texture_download_surface (pixels, GDK_COLOR_STATE_SRGB);
       cairo_set_source_surface (cr, surface, 0, 0);
       cairo_paint (cr);
       cairo_destroy (cr);
@@ -3113,12 +3116,14 @@ printer_init_duplicates_for_node (Printer       *printer,
 
     case GSK_GL_SHADER_NODE:
       {
+G_GNUC_BEGIN_IGNORE_DEPRECATIONS
         guint i;
 
         for (i = 0; i < gsk_gl_shader_node_get_n_children (node); i++)
           {
             printer_init_duplicates_for_node (printer, gsk_gl_shader_node_get_child (node, i));
           }
+G_GNUC_END_IGNORE_DEPRECATIONS
       }
       break;
 
@@ -3600,9 +3605,10 @@ append_texture_param (Printer    *p,
       g_hash_table_insert (p->named_textures, texture, new_name);
     }
 
-  switch (gdk_memory_format_get_depth (gdk_texture_get_format (texture)))
+  switch (gdk_texture_get_depth (texture))
     {
     case GDK_MEMORY_U8:
+    case GDK_MEMORY_U8_SRGB:
     case GDK_MEMORY_U16:
       bytes = gdk_texture_save_to_png_bytes (texture);
       g_string_append (p->str, "url(\"data:image/png;base64,\\\n");
@@ -3614,6 +3620,7 @@ append_texture_param (Printer    *p,
       g_string_append (p->str, "url(\"data:image/tiff;base64,\\\n");
       break;
 
+    case GDK_MEMORY_NONE:
     case GDK_N_DEPTHS:
     default:
       g_assert_not_reached ();
@@ -4294,6 +4301,7 @@ render_node_print (Printer       *p,
 
     case GSK_GL_SHADER_NODE:
       {
+G_GNUC_BEGIN_IGNORE_DEPRECATIONS
         GskGLShader *shader = gsk_gl_shader_node_get_shader (node);
         GBytes *args = gsk_gl_shader_node_get_args (node);
 
@@ -4407,6 +4415,7 @@ render_node_print (Printer       *p,
           }
 
         end_node (p);
+G_GNUC_END_IGNORE_DEPRECATIONS
       }
       break;
 

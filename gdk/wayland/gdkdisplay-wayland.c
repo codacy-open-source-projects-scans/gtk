@@ -50,6 +50,7 @@
 #include "gdkvulkancontext-wayland.h"
 #include "gdkwaylandmonitor.h"
 #include "gdkprofilerprivate.h"
+#include "gdkdihedralprivate.h"
 #include "gdktoplevel-wayland-private.h"
 #include <wayland/pointer-gestures-unstable-v1-client-protocol.h>
 #include "tablet-unstable-v2-client-protocol.h"
@@ -1512,6 +1513,18 @@ get_order (const char *s)
   return 0;
 }
 
+static int
+get_font_rendering (const char *s)
+{
+  const char *names[] = { "automatic", "manual" };
+
+  for (int i = 0; i < G_N_ELEMENTS (names); i++)
+    if (strcmp (s, names[i]) == 0)
+      return i;
+
+  return 0;
+}
+
 static double
 get_dpi_from_gsettings (GdkWaylandDisplay *display_wayland)
 {
@@ -1838,8 +1851,11 @@ apply_portal_setting (TranslationEntry *entry,
       entry->fallback.s = g_intern_string (g_variant_get_string (value, NULL));
       break;
     case G_TYPE_INT:
-    case G_TYPE_ENUM:
       entry->fallback.i = g_variant_get_int32 (value);
+      break;
+    case G_TYPE_ENUM:
+      if (strcmp (entry->key, "font-rendering") == 0)
+        entry->fallback.i = get_font_rendering (g_variant_get_string (value, NULL));
       break;
     case G_TYPE_BOOLEAN:
       entry->fallback.b = g_variant_get_boolean (value);
@@ -2307,30 +2323,6 @@ subpixel_to_string (int layout)
   return NULL;
 }
 
-static const char *
-transform_to_string (int transform)
-{
-  int i;
-  struct { int transform; const char *name; } transforms[] = {
-    { WL_OUTPUT_TRANSFORM_NORMAL, "normal" },
-    { WL_OUTPUT_TRANSFORM_90, "90" },
-    { WL_OUTPUT_TRANSFORM_180, "180" },
-    { WL_OUTPUT_TRANSFORM_270, "270" },
-    { WL_OUTPUT_TRANSFORM_FLIPPED, "flipped" },
-    { WL_OUTPUT_TRANSFORM_FLIPPED_90, "flipped 90" },
-    { WL_OUTPUT_TRANSFORM_FLIPPED_180, "flipped 180" },
-    { WL_OUTPUT_TRANSFORM_FLIPPED_270, "flipped 270" },
-    { 0xffffffff, NULL }
-  };
-
-  for (i = 0; transforms[i].name; i++)
-    {
-      if (transforms[i].transform == transform)
-        return transforms[i].name;
-    }
-  return NULL;
-}
-
 static void
 update_scale (GdkDisplay *display)
 {
@@ -2561,7 +2553,7 @@ output_handle_geometry (void             *data,
                    physical_width, physical_height,
                    subpixel_to_string (subpixel),
                    make, model,
-                   transform_to_string (transform));
+                   gdk_dihedral_get_name ((GdkDihedral) transform));
 
   monitor->output_geometry.x = x;
   monitor->output_geometry.y = y;

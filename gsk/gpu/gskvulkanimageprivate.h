@@ -24,20 +24,26 @@ GskGpuImage *           gsk_vulkan_image_new_for_atlas                  (GskVulk
 GskGpuImage *           gsk_vulkan_image_new_for_offscreen              (GskVulkanDevice        *device,
                                                                          gboolean                with_mipmap,
                                                                          GdkMemoryFormat         preferred_format,
+                                                                         gboolean                try_srgb,
                                                                          gsize                   width,
                                                                          gsize                   height);
 GskGpuImage *           gsk_vulkan_image_new_for_upload                 (GskVulkanDevice        *device,
                                                                          gboolean                with_mipmap,
                                                                          GdkMemoryFormat         format,
+                                                                         gboolean                try_srgb,
                                                                          gsize                   width,
                                                                          gsize                   height);
 #ifdef HAVE_DMABUF
 GskGpuImage *           gsk_vulkan_image_new_dmabuf                     (GskVulkanDevice        *device,
                                                                          GdkMemoryFormat         format,
+                                                                         gboolean                try_srgb,
                                                                          gsize                   width,
                                                                          gsize                   height);
 GskGpuImage *           gsk_vulkan_image_new_for_dmabuf                 (GskVulkanDevice        *device,
-                                                                         GdkTexture             *texture);
+                                                                         gsize                   width,
+                                                                         gsize                   height,
+                                                                         const GdkDmabuf        *dmabuf,
+                                                                         gboolean                premultiplied);
 GdkTexture *            gsk_vulkan_image_to_dmabuf_texture              (GskVulkanImage         *self);
 #endif
 

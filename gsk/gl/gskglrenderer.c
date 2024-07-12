@@ -455,7 +455,10 @@ gsk_gl_renderer_render_texture (GskRenderer           *renderer,
       return texture;
     }
 
+  /* Don't use float textures for SRGB or node-editor turns on high 
+   * depth unconditionally. */
   if (gsk_render_node_get_preferred_depth (root) != GDK_MEMORY_U8 &&
+      gsk_render_node_get_preferred_depth (root) != GDK_MEMORY_U8_SRGB &&
       gdk_gl_context_check_version (self->context, "3.0", "3.0"))
     {
       gdk_format = GDK_MEMORY_R32G32B32A32_FLOAT_PREMULTIPLIED;
@@ -525,6 +528,8 @@ gsk_gl_renderer_init (GskGLRenderer *self)
 {
 }
 
+G_GNUC_BEGIN_IGNORE_DEPRECATIONS
+
 gboolean
 gsk_gl_renderer_try_compile_gl_shader (GskGLRenderer  *renderer,
                                        GskGLShader    *shader,
@@ -540,3 +545,4 @@ gsk_gl_renderer_try_compile_gl_shader (GskGLRenderer  *renderer,
   return program != NULL;
 }
 
+G_GNUC_END_IGNORE_DEPRECATIONS

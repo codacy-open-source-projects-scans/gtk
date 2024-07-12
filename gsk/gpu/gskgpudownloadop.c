@@ -13,6 +13,8 @@
 #include "gskvulkanimageprivate.h"
 #endif
 
+#include <glib/gstdio.h>
+
 #include "gdk/gdkdmabuftexturebuilderprivate.h"
 #include "gdk/gdkdmabuftextureprivate.h"
 #include "gdk/gdkglcontextprivate.h"
@@ -148,7 +150,7 @@ gsk_gpu_download_op_vk_command (GskGpuOp              *op,
       GskGpuCache *cache = gsk_gpu_device_get_cache (device);
       VkDevice vk_device = gsk_vulkan_device_get_vk_device (GSK_VULKAN_DEVICE (device));
 
-      gsk_gpu_cache_cache_texture_image (cache, self->texture, gsk_gpu_frame_get_timestamp (frame), self->image);
+      gsk_gpu_cache_cache_texture_image (cache, self->texture, gsk_gpu_frame_get_timestamp (frame), self->image, NULL);
 
       if (gsk_vulkan_device_has_feature (GSK_VULKAN_DEVICE (device), GDK_VULKAN_FEATURE_SEMAPHORE_EXPORT))
         {

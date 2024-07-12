@@ -53,6 +53,7 @@ compare_render_tests = [
   'cross-fade-in-opacity',
   'cross-fade-in-rotate',
   'css-background',
+  'dihedral',
   'empty-blend',
   'empty-blur',
   'empty-border',
@@ -63,6 +64,7 @@ compare_render_tests = [
   'empty-container',
   'empty-cross-fade',
   'empty-debug',
+  'empty-glshader',
   'empty-inset-shadow',
   'empty-linear-gradient',
   'empty-mask',
@@ -171,6 +173,7 @@ compare_render_tests = [
   'text-mixed-color-nocairo',
   'text-mixed-color-colrv1',
   'texture-coords',
+  'texture-offscreen-mipmap-nogl',
   'texture-scale-filters-nocairo',
   'texture-scale-magnify-10000x',
   'texture-scale-magnify-rotate',
@@ -395,6 +398,7 @@ node_parser_tests = [
   'node-names-everywhere.errors',
   'node-names-everywhere.node',
   'node-names-everywhere.ref.node',
+  'occlusion-wrong-rect-contains',
   'radial-gradient.node',
   'radial-gradient.ref.node',
   'repeating-linear-gradient.node',
@@ -484,6 +488,7 @@ if os_linux
     'complex-clip.node',
     'background.node',
     'background2.node',
+    'bad-transform.node',
   ]
 
   foreach test : offload_tests
@@ -509,6 +514,7 @@ tests = [
   [ 'normalize', [ 'normalize.c', '../reftests/reftest-compare.c' ] ],
   [ 'transform' ],
   [ 'shader' ],
+  [ 'opaque' ],
   [ 'path', [ 'path-utils.c' ], [ 'flaky'] ],
   [ 'path-special-cases' ],
   [ 'scaling' ],

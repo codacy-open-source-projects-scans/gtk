@@ -21,6 +21,7 @@
 
 #include <gdk-pixbuf/gdk-pixbuf.h>
 #include "gdkenumtypes.h"
+#include "gdkmemoryformatprivate.h"
 #include "gdksurface.h"
 #include "gdktoplevel.h"
 #include <graphene.h>
@@ -70,6 +71,7 @@ struct _GdkSurface
   guint shortcuts_inhibited : 1;
   guint request_motion : 1;
   guint has_pointer : 1;
+  guint is_srgb : 1;
 
   guint request_motion_id;
 
@@ -298,9 +300,11 @@ void                    gdk_surface_set_frame_clock             (GdkSurface     
                                                                  GdkFrameClock          *clock);
 void                    gdk_surface_set_egl_native_window       (GdkSurface             *self,
                                                                  gpointer                native_window);
-void                    gdk_surface_ensure_egl_surface          (GdkSurface             *self,
-                                                                 gboolean                hdr);
+GdkMemoryDepth          gdk_surface_ensure_egl_surface          (GdkSurface             *self,
+                                                                 GdkMemoryDepth          depth);
 gpointer /*EGLSurface*/ gdk_surface_get_egl_surface             (GdkSurface             *self);
+
+gboolean                gdk_surface_get_gl_is_srgb              (GdkSurface             *self);
 
 void                    gdk_surface_set_widget                  (GdkSurface             *self,
                                                                  gpointer                widget);
@@ -338,12 +342,6 @@ void       gdk_surface_queue_state_change  (GdkSurface       *surface,
                                             GdkToplevelState  set_flags);
 
 void       gdk_surface_apply_state_change  (GdkSurface       *surface);
-
-void       gdk_surface_emit_size_changed   (GdkSurface       *surface,
-                                            int               width,
-                                            int               height);
-
-void       gdk_surface_request_compute_size (GdkSurface      *surface);
 
 GDK_AVAILABLE_IN_ALL
 void           gdk_surface_request_motion (GdkSurface *surface);

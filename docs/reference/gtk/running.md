@@ -5,10 +5,12 @@ Slug: gtk-running
 
 GTK inspects a number of environment variables in addition to
 standard variables like `LANG`, `PATH`, `HOME` or `DISPLAY`; mostly
-to determine paths to look for certain files. The [X11](#x11-envar),
-[Wayland](#wayland-envar), [Windows](#win32-envar) and
-[Broadway](#broadway-envar) GDK backends use some additional
-environment variables.
+to determine paths to look for certain files. The
+[X11](https://docs.gtk.org/gtk4/x11.html#x11-specific-environment-variables),
+[Wayland](https://docs.gtk.org/gtk4/wayland.html#wayland-specific-environment-variables),
+[Windows](https://docs.gtk.org/gtk4/windows.html#windows-specific-environment-variables) and
+[Broadway](https://docs.gtk.org/gtk4/broadway.html#broadway-specific-environment-variables)
+GDK backends use some additional environment variables.
 
 Note that environment variables are generally used for debugging
 purposes. They are not guaranteed to be API stable, and should not
@@ -290,8 +292,8 @@ are only available when GTK has been configured with `-Ddebug=true`.
 `fallback`
 : Information about fallback usage in renderers
 
-`glyphcache`
-: Information about glyph caching
+`cache`
+: Information about caching
 
 `verbose`
 : Print verbose output while rendering

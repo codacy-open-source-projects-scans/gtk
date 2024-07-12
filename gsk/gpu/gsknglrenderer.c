@@ -75,12 +75,6 @@ gsk_ngl_renderer_create_context (GskGpuRenderer       *renderer,
 
   *supported = -1;
 
-  /* Shader compilation takes too long when texture() and get_float() calls
-   * use if/else ladders to avoid non-uniform indexing.
-   * And that is always true with GL.
-   */
-  *supported &= ~GSK_GPU_OPTIMIZE_UBER;
-
   return GDK_DRAW_CONTEXT (context);
 }
 
@@ -109,6 +103,7 @@ gsk_ngl_renderer_get_backbuffer (GskGpuRenderer *renderer)
   scale = gsk_gpu_renderer_get_scale (renderer);
 
   if (self->backbuffer == NULL ||
+      !!(gsk_gpu_image_get_flags (self->backbuffer) & GSK_GPU_IMAGE_SRGB) != gdk_surface_get_gl_is_srgb (surface) ||
       gsk_gpu_image_get_width (self->backbuffer) != ceil (gdk_surface_get_width (surface) * scale) ||
       gsk_gpu_image_get_height (self->backbuffer) != ceil (gdk_surface_get_height (surface) * scale))
     {
@@ -116,6 +111,7 @@ gsk_ngl_renderer_get_backbuffer (GskGpuRenderer *renderer)
       self->backbuffer = gsk_gl_image_new_backbuffer (GSK_GL_DEVICE (gsk_gpu_renderer_get_device (renderer)),
                                                       GDK_GL_CONTEXT (context),
                                                       GDK_MEMORY_DEFAULT /* FIXME */,
+                                                      gdk_surface_get_gl_is_srgb (surface),
                                                       ceil (gdk_surface_get_width (surface) * scale),
                                                       ceil (gdk_surface_get_height (surface) * scale));
     }
