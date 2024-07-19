@@ -27,6 +27,12 @@ struct _GskGpuFrameClass
   void                  (* wait)                                        (GskGpuFrame            *self);
   void                  (* setup)                                       (GskGpuFrame            *self);
   void                  (* cleanup)                                     (GskGpuFrame            *self);
+  void                  (* begin)                                       (GskGpuFrame            *self,
+                                                                         GdkDrawContext         *context,
+                                                                         GdkMemoryDepth          depth,
+                                                                         const cairo_region_t   *region);
+  void                  (* end)                                         (GskGpuFrame            *self,
+                                                                         GdkDrawContext         *context);
   GskGpuImage *         (* upload_texture)                              (GskGpuFrame            *self,
                                                                          gboolean                with_mipmap,
                                                                          GdkTexture             *texture);
@@ -36,6 +42,7 @@ struct _GskGpuFrameClass
   GskGpuBuffer *        (* create_storage_buffer)                       (GskGpuFrame            *self,
                                                                          gsize                   size);
   void                  (* submit)                                      (GskGpuFrame            *self,
+                                                                         GskRenderPassType       pass_type,
                                                                          GskGpuBuffer           *vertex_buffer,
                                                                          GskGpuOp               *op);
 };
@@ -47,6 +54,13 @@ void                    gsk_gpu_frame_setup                             (GskGpuF
                                                                          GskGpuRenderer         *renderer,
                                                                          GskGpuDevice           *device,
                                                                          GskGpuOptimizations     optimizations);
+
+void                    gsk_gpu_frame_begin                             (GskGpuFrame            *self,
+                                                                         GdkDrawContext         *context,
+                                                                         GdkMemoryDepth          depth,
+                                                                         const cairo_region_t   *region);
+void                    gsk_gpu_frame_end                               (GskGpuFrame            *self,
+                                                                         GdkDrawContext         *context);
 
 GdkDrawContext *        gsk_gpu_frame_get_context                       (GskGpuFrame            *self) G_GNUC_PURE;
 GskGpuDevice *          gsk_gpu_frame_get_device                        (GskGpuFrame            *self) G_GNUC_PURE;
@@ -84,6 +98,7 @@ void                    gsk_gpu_frame_download_texture                  (GskGpuF
                                                                          gint64                  timestamp,
                                                                          GdkTexture             *texture,
                                                                          GdkMemoryFormat         format,
+                                                                         GdkColorState          *color_state,
                                                                          guchar                 *data,
                                                                          gsize                   stride);
 GskGpuOp               *gsk_gpu_frame_get_last_op                       (GskGpuFrame            *self);

@@ -107,6 +107,7 @@ static void
 gsk_gpu_renderer_dmabuf_downloader_download (GdkDmabufDownloader *downloader,
                                              GdkDmabufTexture    *texture,
                                              GdkMemoryFormat      format,
+                                             GdkColorState       *color_state,
                                              guchar              *data,
                                              gsize                stride)
 {
@@ -121,6 +122,7 @@ gsk_gpu_renderer_dmabuf_downloader_download (GdkDmabufDownloader *downloader,
                                   g_get_monotonic_time (),
                                   GDK_TEXTURE (texture),
                                   format,
+                                  color_state,
                                   data,
                                   stride);
 
@@ -326,6 +328,9 @@ gsk_gpu_renderer_fallback_render_texture (GskGpuRenderer        *self,
           gdk_texture_downloader_finish (&downloader);
           g_object_unref (texture);
           g_clear_object (&image);
+
+          /* Let's GC like a madman, we draw oversized stuff and don't want to OOM */
+          gsk_gpu_device_maybe_gc (priv->device);
         }
     }
 
@@ -411,19 +416,19 @@ gsk_gpu_renderer_render (GskRenderer          *renderer,
       return;
     }
 
-  depth = gsk_render_node_get_preferred_depth (root);
-
-  gdk_draw_context_begin_frame_full (priv->context, depth, region);
-
   gsk_gpu_device_maybe_gc (priv->device);
+
+  depth = gsk_render_node_get_preferred_depth (root);
+  frame = gsk_gpu_renderer_get_frame (self);
+  scale = gsk_gpu_renderer_get_scale (self);
+
+  gsk_gpu_frame_begin (frame, priv->context, depth, region);
 
   gsk_gpu_renderer_make_current (self);
 
   backbuffer = GSK_GPU_RENDERER_GET_CLASS (self)->get_backbuffer (self);
 
-  frame = gsk_gpu_renderer_get_frame (self);
   render_region = get_render_region (self);
-  scale = gsk_gpu_renderer_get_scale (self);
 
   gsk_gpu_frame_render (frame,
                         g_get_monotonic_time (),
@@ -438,9 +443,9 @@ gsk_gpu_renderer_render (GskRenderer          *renderer,
                         ),
                         NULL);
 
-  gsk_gpu_device_queue_gc (priv->device);
+  gsk_gpu_frame_end (frame, priv->context);
 
-  gdk_draw_context_end_frame (priv->context);
+  gsk_gpu_device_queue_gc (priv->device);
 
   g_clear_pointer (&render_region, cairo_region_destroy);
 }

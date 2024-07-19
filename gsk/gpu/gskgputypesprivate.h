@@ -5,8 +5,6 @@
 
 #include "gdk/gdkmemoryformatprivate.h"
 
-#define GSK_GPU_PATTERN_STACK_SIZE 16
-
 typedef struct _GskGLDescriptors        GskGLDescriptors;
 typedef struct _GskGpuBuffer            GskGpuBuffer;
 typedef struct _GskGpuCache             GskGpuCache;
@@ -51,6 +49,7 @@ typedef enum {
 } GskGpuShaderClip;
 
 typedef enum {
+  GSK_GPU_BLEND_NONE,
   GSK_GPU_BLEND_OVER,
   GSK_GPU_BLEND_ADD,
   GSK_GPU_BLEND_CLEAR

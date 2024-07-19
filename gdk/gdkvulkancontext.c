@@ -76,11 +76,12 @@ struct _GdkVulkanContextPrivate {
   GdkMemoryDepth current_depth;
 
   VkSwapchainKHR swapchain;
-  VkSemaphore draw_semaphore;
 
   guint n_images;
   VkImage *images;
   cairo_region_t **regions;
+
+  VkSemaphore draw_semaphore;
 #endif
 
   guint32 draw_index;
@@ -367,14 +368,6 @@ gdk_vulkan_context_dispose (GObject *gobject)
 
   device = gdk_vulkan_context_get_device (context);
 
-  if (priv->draw_semaphore != VK_NULL_HANDLE)
-    {
-      vkDestroySemaphore (device,
-                           priv->draw_semaphore,
-                           NULL);
-      priv->draw_semaphore = VK_NULL_HANDLE;
-    }
-
   if (priv->swapchain != VK_NULL_HANDLE)
     {
       vkDestroySwapchainKHR (device,
@@ -642,8 +635,17 @@ gdk_vulkan_context_begin_frame (GdkDrawContext  *draw_context,
 {
   GdkVulkanContext *context = GDK_VULKAN_CONTEXT (draw_context);
   GdkVulkanContextPrivate *priv = gdk_vulkan_context_get_instance_private (context);
+  GdkSurface *surface = gdk_draw_context_get_surface (draw_context);
+  GdkColorState *color_state;
   VkResult acquire_result;
   guint i;
+
+  g_assert (priv->draw_semaphore != NULL);
+
+  color_state = gdk_surface_get_color_state (surface);
+  depth = gdk_memory_depth_merge (depth, gdk_color_state_get_depth (color_state));
+
+  g_assert (depth != GDK_MEMORY_U8_SRGB || gdk_color_state_get_no_srgb_tf (color_state) != NULL);
 
   if (depth != priv->current_depth && depth != GDK_MEMORY_NONE)
     {
@@ -692,12 +694,14 @@ gdk_vulkan_context_begin_frame (GdkDrawContext  *draw_context,
       break;
     }
 
+  priv->draw_semaphore = NULL;
+
   cairo_region_union (region, priv->regions[priv->draw_index]);
 
   if (priv->current_depth == GDK_MEMORY_U8_SRGB)
-    *out_color_state = GDK_COLOR_STATE_SRGB_LINEAR;
+    *out_color_state = gdk_color_state_get_no_srgb_tf (color_state);
   else
-    *out_color_state = GDK_COLOR_STATE_SRGB;
+    *out_color_state = color_state;
   *out_depth = priv->current_depth;
 }
 
@@ -744,10 +748,8 @@ gdk_vulkan_context_end_frame (GdkDrawContext *draw_context,
   GDK_VK_CHECK (vkQueuePresentKHR, gdk_vulkan_context_get_queue (context),
                                    &(VkPresentInfoKHR) {
                                        .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
-                                       .waitSemaphoreCount = 1,
-                                       .pWaitSemaphores = (VkSemaphore[]) {
-                                           priv->draw_semaphore
-                                       },
+                                       .waitSemaphoreCount = 0,
+                                       .pWaitSemaphores = NULL,
                                        .swapchainCount = 1,
                                        .pSwapchains = (VkSwapchainKHR[]) {
                                            priv->swapchain
@@ -965,13 +967,6 @@ gdk_vulkan_context_real_init (GInitable     *initable,
 
       if (!gdk_vulkan_context_check_swapchain (context, error))
         goto out_surface;
-
-      GDK_VK_CHECK (vkCreateSemaphore, gdk_vulkan_context_get_device (context),
-                                       &(VkSemaphoreCreateInfo) {
-                                           .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
-                                       },
-                                       NULL,
-                                       &priv->draw_semaphore);
 
       return TRUE;
     }
@@ -1379,26 +1374,28 @@ gdk_vulkan_context_get_draw_index (GdkVulkanContext *context)
 }
 
 /**
- * gdk_vulkan_context_get_draw_semaphore:
+ * gdk_vulkan_context_set_draw_semaphore:
  * @context: a `GdkVulkanContext`
+ * @semaphore: a `VkSemaphore`
  *
- * Gets the Vulkan semaphore that protects access to the image that is
- * currently being drawn.
+ * Sets the Vulkan semaphore that will be used in the immediately following
+ * gdk_draw_context_begin_frame() call.
+ * This is essentially an extra argument for that call, but without extending the
+ * arguments of that generic function with Vulkan-specific things.
  *
- * This function can only be used between [method@Gdk.DrawContext.begin_frame]
- * and [method@Gdk.DrawContext.end_frame] calls.
- *
- * Returns: (transfer none): the VkSemaphore
+ * This function must be called or begin_frame() will abort.
  */
-VkSemaphore
-gdk_vulkan_context_get_draw_semaphore (GdkVulkanContext *context)
+void
+gdk_vulkan_context_set_draw_semaphore (GdkVulkanContext *context,
+                                       VkSemaphore       semaphore)
 {
   GdkVulkanContextPrivate *priv = gdk_vulkan_context_get_instance_private (context);
 
-  g_return_val_if_fail (GDK_IS_VULKAN_CONTEXT (context), VK_NULL_HANDLE);
-  g_return_val_if_fail (gdk_draw_context_is_in_frame (GDK_DRAW_CONTEXT (context)), VK_NULL_HANDLE);
+  g_return_if_fail (GDK_IS_VULKAN_CONTEXT (context));
+  g_return_if_fail (!gdk_draw_context_is_in_frame (GDK_DRAW_CONTEXT (context)));
+  g_return_if_fail (priv->draw_semaphore == NULL);
 
-  return priv->draw_semaphore;
+  priv->draw_semaphore = semaphore;
 }
 
 static gboolean
@@ -1658,8 +1655,7 @@ gdk_display_create_vulkan_instance (GdkDisplay  *display,
   G_GNUC_UNUSED gint64 start_time = GDK_PROFILER_CURRENT_TIME;
   uint32_t i;
   GPtrArray *used_extensions;
-  GPtrArray *used_layers;
-  gboolean validate = FALSE, have_debug_report = FALSE;
+  gboolean have_debug_report = FALSE;
   VkResult res;
 
   if (gdk_display_get_debug_flags (display) & GDK_DEBUG_VULKAN_DISABLE)
@@ -1708,43 +1704,6 @@ gdk_display_create_vulkan_instance (GdkDisplay  *display,
         g_ptr_array_add (used_extensions, (gpointer) VK_KHR_EXTERNAL_SEMAPHORE_CAPABILITIES_EXTENSION_NAME);
     }
 
-  uint32_t n_layers;
-  GDK_VK_CHECK (vkEnumerateInstanceLayerProperties, &n_layers, NULL);
-  VkLayerProperties *layers = g_newa (VkLayerProperties, n_layers);
-  GDK_VK_CHECK (vkEnumerateInstanceLayerProperties, &n_layers, layers);
-
-  used_layers = g_ptr_array_new ();
-
-  for (i = 0; i < n_layers; i++)
-    {
-      if (GDK_DISPLAY_DEBUG_CHECK (display, VULKAN))
-        g_print ("Layer available: %s v%u.%u.%u (%s)\n",
-                                 layers[i].layerName,
-                                 VK_VERSION_MAJOR (layers[i].specVersion),
-                                 VK_VERSION_MINOR (layers[i].specVersion),
-                                 VK_VERSION_PATCH (layers[i].specVersion),
-                                 layers[i].description);
-      if (gdk_display_get_debug_flags (display) & GDK_DEBUG_VULKAN_VALIDATE)
-        {
-          const char *validation_layer_names[] = {
-            "VK_LAYER_LUNARG_standard_validation",
-            "VK_LAYER_KHRONOS_validation",
-            NULL,
-          };
-
-          if (g_strv_contains (validation_layer_names, layers[i].layerName))
-            {
-              g_ptr_array_add (used_layers, layers[i].layerName);
-              validate = TRUE;
-            }
-        }
-    }
-
-  if ((gdk_display_get_debug_flags (display) & GDK_DEBUG_VULKAN_VALIDATE) && !validate)
-    {
-      g_warning ("Vulkan validation layers were requested, but not found. Running without.");
-    }
-
   res = GDK_VK_CHECK (vkCreateInstance, &(VkInstanceCreateInfo) {
                                              .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
                                              .pNext = NULL,
@@ -1758,14 +1717,13 @@ gdk_display_create_vulkan_instance (GdkDisplay  *display,
                                                  .engineVersion = VK_MAKE_VERSION (GDK_MAJOR_VERSION, GDK_MINOR_VERSION, GDK_MICRO_VERSION),
                                                  .apiVersion = VK_API_VERSION_1_3
                                              },
-                                             .enabledLayerCount = used_layers->len,
-                                             .ppEnabledLayerNames = (const char * const *) used_layers->pdata,
+                                             .enabledLayerCount = 0,
+                                             .ppEnabledLayerNames = NULL,
                                              .enabledExtensionCount = used_extensions->len,
                                              .ppEnabledExtensionNames = (const char * const *) used_extensions->pdata,
                                          },
                                          NULL,
                                          &display->vk_instance);
-  g_ptr_array_free (used_layers, TRUE);
   g_ptr_array_free (used_extensions, TRUE);
 
   if (res != VK_SUCCESS)

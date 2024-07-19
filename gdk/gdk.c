@@ -121,6 +121,7 @@ static const GdkDebugKey gdk_debug_keys[] = {
   { "offload",         GDK_DEBUG_OFFLOAD, "Information about subsurfaces and graphics offload" },
 
   { "linear",          GDK_DEBUG_LINEAR, "Enable linear rendering" },
+  { "hdr",             GDK_DEBUG_HDR, "Force HDR rendering" },
   { "portals",         GDK_DEBUG_PORTALS, "Force use of portals" },
   { "no-portals",      GDK_DEBUG_NO_PORTALS, "Disable use of portals" },
   { "force-offload",   GDK_DEBUG_FORCE_OFFLOAD, "Force graphics offload for all textures" },
@@ -134,7 +135,6 @@ static const GdkDebugKey gdk_debug_keys[] = {
   { "gl-glx",          GDK_DEBUG_GL_GLX, "Use GLX on X11" },
   { "gl-wgl",          GDK_DEBUG_GL_WGL, "Use WGL on Windows" },
   { "vulkan-disable",  GDK_DEBUG_VULKAN_DISABLE, "Disable Vulkan support" },
-  { "vulkan-validate", GDK_DEBUG_VULKAN_VALIDATE, "Load the Vulkan validation layer" },
   { "default-settings",GDK_DEBUG_DEFAULT_SETTINGS, "Force default values for xsettings" },
   { "high-depth",      GDK_DEBUG_HIGH_DEPTH, "Use high bit depth rendering if possible" },
   { "no-vsync",        GDK_DEBUG_NO_VSYNC, "Repaint instantly (uses 100% CPU with animations)" },
