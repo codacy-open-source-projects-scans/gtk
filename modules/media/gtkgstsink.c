@@ -166,6 +166,36 @@ add_drm_formats_and_modifiers (GstCaps          *caps,
 }
 #endif
 
+static GdkColorState *
+gtk_gst_color_state_from_colorimetry (GtkGstSink                *self,
+                                      const GstVideoColorimetry *colorimetry)
+{
+  GdkCicpParams *params;
+  GdkColorState *color_state;
+  GError *error = NULL;
+
+  params = gdk_cicp_params_new ();
+  gdk_cicp_params_set_color_primaries (params, gst_video_color_primaries_to_iso (colorimetry->primaries));
+  gdk_cicp_params_set_transfer_function (params, gst_video_transfer_function_to_iso (colorimetry->transfer));
+#if 0
+  gdk_cicp_params_set_matrix_coefficients (params, gst_video_color_matrix_to_iso (colorimetry->matrix));
+  gdk_cicp_params_set_range (params, colorimetry->range == GST_VIDEO_COLOR_RANGE_0_255 ? GDK_CICP_RANGE_FULL : GDK_CICP_RANGE_NARROW);
+#else
+  gdk_cicp_params_set_matrix_coefficients (params, 0);
+  gdk_cicp_params_set_range (params, GDK_CICP_RANGE_FULL);
+#endif
+  color_state = gdk_cicp_params_build_color_state (params, &error);
+  g_object_unref (params);
+
+  if (color_state == NULL)
+    {
+      GST_ERROR_OBJECT (self, "Could not create GDK colorstate for given colorimetry: %s", error->message);
+      g_clear_error (&error);
+    }
+
+  return color_state;
+}
+
 static GstCaps *
 gtk_gst_sink_get_caps (GstBaseSink *bsink,
                        GstCaps     *filter)
@@ -236,6 +266,11 @@ gtk_gst_sink_set_caps (GstBaseSink *bsink,
 #ifdef HAVE_GSTREAMER_DRM
   }
 #endif
+
+  g_clear_pointer (&self->color_state, gdk_color_state_unref);
+  self->color_state = gtk_gst_color_state_from_colorimetry (self, &self->v_info.colorimetry);
+  if (self->color_state == NULL)
+    return FALSE;
 
   return TRUE;
 }
@@ -379,7 +414,7 @@ gtk_gst_sink_texture_from_buffer (GtkGstSink      *self,
 #ifdef HAVE_GSTREAMER_DRM
   if (gst_is_dmabuf_memory (gst_buffer_peek_memory (buffer, 0)))
     {
-      g_autoptr (GdkDmabufTextureBuilder) builder = NULL;
+      GdkDmabufTextureBuilder *builder = NULL;
       const GstVideoMeta *vmeta = gst_buffer_get_video_meta (buffer);
       GError *error = NULL;
       int i;
@@ -398,6 +433,7 @@ gtk_gst_sink_texture_from_buffer (GtkGstSink      *self,
       gdk_dmabuf_texture_builder_set_width (builder, vmeta->width);
       gdk_dmabuf_texture_builder_set_height (builder, vmeta->height);
       gdk_dmabuf_texture_builder_set_n_planes (builder, vmeta->n_planes);
+      gdk_dmabuf_texture_builder_set_color_state (builder, self->color_state);
 
       for (i = 0; i < vmeta->n_planes; i++)
         {
@@ -427,6 +463,7 @@ gtk_gst_sink_texture_from_buffer (GtkGstSink      *self,
                                                   (GDestroyNotify) gst_buffer_unref,
                                                   gst_buffer_ref (buffer),
                                                   &error);
+      g_object_unref (builder);
       if (!texture)
         GST_ERROR_OBJECT (self, "Failed to create dmabuf texture: %s", error->message);
 
@@ -458,6 +495,7 @@ gtk_gst_sink_texture_from_buffer (GtkGstSink      *self,
       gdk_gl_texture_builder_set_width (builder, frame->info.width);
       gdk_gl_texture_builder_set_height (builder, frame->info.height);
       gdk_gl_texture_builder_set_sync (builder, sync_meta ? sync_meta->data : NULL);
+      gdk_gl_texture_builder_set_color_state (builder, self->color_state);
 
       texture = gdk_gl_texture_builder_build (builder,
                                               (GDestroyNotify) video_frame_free,
@@ -781,6 +819,7 @@ gtk_gst_sink_dispose (GObject *object)
 {
   GtkGstSink *self = GTK_GST_SINK (object);
 
+  g_clear_object (&self->color_state);
   g_clear_object (&self->paintable);
   g_clear_object (&self->gst_gdk_context);
   g_clear_object (&self->gst_display);

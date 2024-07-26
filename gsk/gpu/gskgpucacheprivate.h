@@ -6,6 +6,36 @@
 
 G_BEGIN_DECLS
 
+typedef struct _GskGpuCached GskGpuCached;
+typedef struct _GskGpuCachedClass GskGpuCachedClass;
+typedef struct _GskGpuCachedAtlas GskGpuCachedAtlas;
+
+struct _GskGpuCachedClass
+{
+  gsize size;
+  const char *name;
+
+  void                  (* free)                        (GskGpuCache            *cache,
+                                                         GskGpuCached           *cached);
+  gboolean              (* should_collect)              (GskGpuCache            *cache,
+                                                         GskGpuCached           *cached,
+                                                         gint64                  cache_timeout,
+                                                         gint64                  timestamp);
+};
+
+struct _GskGpuCached
+{
+  const GskGpuCachedClass *class;
+
+  GskGpuCachedAtlas *atlas;
+  GskGpuCached *next;
+  GskGpuCached *prev;
+
+  gint64 timestamp;
+  gboolean stale;
+  guint pixels;   /* For glyphs and textures, pixels. For atlases, alive pixels */
+};
+
 #define GSK_TYPE_GPU_CACHE         (gsk_gpu_cache_get_type ())
 #define GSK_GPU_CACHE(o)           (G_TYPE_CHECK_INSTANCE_CAST ((o), GSK_TYPE_GPU_CACHE, GskGpuCache))
 #define GSK_GPU_CACHE_CLASS(k)     (G_TYPE_CHECK_CLASS_CAST ((k), GSK_TYPE_GPU_CACHE, GskGpuCacheClass))
@@ -24,6 +54,13 @@ GType                   gsk_gpu_cache_get_type                          (void) G
 
 GskGpuCache *           gsk_gpu_cache_new                               (GskGpuDevice           *device);
 
+gpointer                gsk_gpu_cached_new                              (GskGpuCache            *cache,
+                                                                         const GskGpuCachedClass *class);
+
+GskGpuDevice *          gsk_gpu_cache_get_device                        (GskGpuCache            *self);
+void                    gsk_gpu_cache_set_time                          (GskGpuCache            *self,
+                                                                         gint64                  timestamp);
+
 gboolean                gsk_gpu_cache_gc                                (GskGpuCache            *self,
                                                                          gint64                  cache_timeout,
                                                                          gint64                  timestamp);
@@ -32,20 +69,16 @@ GskGpuImage *           gsk_gpu_cache_get_atlas_image                   (GskGpuC
 
 GskGpuImage *           gsk_gpu_cache_lookup_texture_image              (GskGpuCache            *self,
                                                                          GdkTexture             *texture,
-                                                                         gint64                  timestamp,
                                                                          GdkColorState          *color_state);
 void                    gsk_gpu_cache_cache_texture_image               (GskGpuCache            *self,
                                                                          GdkTexture             *texture,
-                                                                         gint64                  timestamp,
                                                                          GskGpuImage            *image,
                                                                          GdkColorState          *color_state);
 GskGpuImage *           gsk_gpu_cache_lookup_tile                       (GskGpuCache            *self,
                                                                          GdkTexture             *texture,
                                                                          gsize                   tile_id,
-                                                                         gint64                  timestamp,
                                                                          GdkColorState         **out_color_state);
 void                    gsk_gpu_cache_cache_tile                        (GskGpuCache            *self,
-                                                                         gint64                  timestamp,
                                                                          GdkTexture             *texture,
                                                                          guint                   tile_id,
                                                                          GskGpuImage            *image,

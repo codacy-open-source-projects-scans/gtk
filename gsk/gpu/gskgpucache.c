@@ -27,9 +27,6 @@
 G_STATIC_ASSERT (MAX_ATLAS_ITEM_SIZE < ATLAS_SIZE);
 G_STATIC_ASSERT (MIN_ALIVE_PIXELS < ATLAS_SIZE * ATLAS_SIZE);
 
-typedef struct _GskGpuCached GskGpuCached;
-typedef struct _GskGpuCachedClass GskGpuCachedClass;
-typedef struct _GskGpuCachedAtlas GskGpuCachedAtlas;
 typedef struct _GskGpuCachedGlyph GskGpuCachedGlyph;
 typedef struct _GskGpuCachedTexture GskGpuCachedTexture;
 typedef struct _GskGpuCachedTile GskGpuCachedTile;
@@ -39,6 +36,7 @@ struct _GskGpuCache
   GObject parent_instance;
 
   GskGpuDevice *device;
+  gint64 timestamp;
 
   GskGpuCached *first_cached;
   GskGpuCached *last_cached;
@@ -56,31 +54,6 @@ struct _GskGpuCache
 G_DEFINE_TYPE (GskGpuCache, gsk_gpu_cache, G_TYPE_OBJECT)
 
 /* {{{ Cached base class */
-
-struct _GskGpuCachedClass
-{
-  gsize size;
-
-  void                  (* free)                        (GskGpuCache            *cache,
-                                                         GskGpuCached           *cached);
-  gboolean              (* should_collect)              (GskGpuCache            *cache,
-                                                         GskGpuCached           *cached,
-                                                         gint64                  cache_timeout,
-                                                         gint64                  timestamp);
-};
-
-struct _GskGpuCached
-{
-  const GskGpuCachedClass *class;
-
-  GskGpuCachedAtlas *atlas;
-  GskGpuCached *next;
-  GskGpuCached *prev;
-
-  gint64 timestamp;
-  gboolean stale;
-  guint pixels;   /* For glyphs and textures, pixels. For atlases, alive pixels */
-};
 
 static inline void
 mark_as_stale (GskGpuCached *cached,
@@ -128,9 +101,9 @@ gsk_gpu_cached_should_collect (GskGpuCache  *cache,
 }
 
 static gpointer
-gsk_gpu_cached_new (GskGpuCache             *cache,
-                    const GskGpuCachedClass *class,
-                    GskGpuCachedAtlas       *atlas)
+gsk_gpu_cached_new_from_atlas (GskGpuCache             *cache,
+                               const GskGpuCachedClass *class,
+                               GskGpuCachedAtlas       *atlas)
 {
   GskGpuCached *cached;
 
@@ -149,12 +122,18 @@ gsk_gpu_cached_new (GskGpuCache             *cache,
   return cached;
 }
 
+gpointer
+gsk_gpu_cached_new (GskGpuCache             *cache,
+                    const GskGpuCachedClass *class)
+{
+  return gsk_gpu_cached_new_from_atlas (cache, class, NULL);
+}
+
 static void
 gsk_gpu_cached_use (GskGpuCache  *self,
-                    GskGpuCached *cached,
-                    gint64        timestamp)
+                    GskGpuCached *cached)
 {
-  cached->timestamp = timestamp;
+  cached->timestamp = self->timestamp;
   mark_as_stale (cached, FALSE);
 }
 
@@ -229,6 +208,7 @@ gsk_gpu_cached_atlas_should_collect (GskGpuCache  *cache,
 static const GskGpuCachedClass GSK_GPU_CACHED_ATLAS_CLASS =
 {
   sizeof (GskGpuCachedAtlas),
+  "Atlas",
   gsk_gpu_cached_atlas_free,
   gsk_gpu_cached_atlas_should_collect
 };
@@ -238,588 +218,11 @@ gsk_gpu_cached_atlas_new (GskGpuCache *cache)
 {
   GskGpuCachedAtlas *self;
 
-  self = gsk_gpu_cached_new (cache, &GSK_GPU_CACHED_ATLAS_CLASS, NULL);
+  self = gsk_gpu_cached_new (cache, &GSK_GPU_CACHED_ATLAS_CLASS);
   self->image = gsk_gpu_device_create_atlas_image (cache->device, ATLAS_SIZE, ATLAS_SIZE);
   self->remaining_pixels = gsk_gpu_image_get_width (self->image) * gsk_gpu_image_get_height (self->image);
 
   return self;
-}
-
-/* }}} */
-/* {{{ CachedTexture */
-
-struct _GskGpuCachedTexture
-{
-  GskGpuCached parent;
-
-  /* atomic */ int use_count; /* We count the use by the cache (via the linked
-                               * list) and by the texture (via render data or
-                               * weak ref.
-                               */
-
-  gsize *dead_pixels_counter;
-
-  GdkTexture *texture;
-  GskGpuImage *image;
-  GdkColorState *color_state;  /* no ref because global. May be NULL */
-};
-
-static GHashTable *
-gsk_gpu_cache_get_texture_hash_table (GskGpuCache   *cache,
-                                      GdkColorState *color_state)
-{
-  if (color_state == NULL)
-    {
-      return cache->texture_cache;
-    }
-  else if (GDK_IS_DEFAULT_COLOR_STATE (color_state))
-    { 
-      GdkColorStateId id = GDK_DEFAULT_COLOR_STATE_ID (color_state);
-
-      if (cache->ccs_texture_caches[id] == NULL)
-        cache->ccs_texture_caches[id] = g_hash_table_new (g_direct_hash,
-                                                          g_direct_equal);
-      return cache->ccs_texture_caches[id];
-    }
-  else
-    {
-      return NULL;
-    }
-}
-
-static void
-gsk_gpu_cached_texture_free (GskGpuCache  *cache,
-                             GskGpuCached *cached)
-{
-  GskGpuCachedTexture *self = (GskGpuCachedTexture *) cached;
-  GHashTable *texture_cache;
-  gpointer key, value;
-
-  g_clear_object (&self->image);
-
-  texture_cache = gsk_gpu_cache_get_texture_hash_table (cache, self->color_state);
-
-  if (g_hash_table_steal_extended (texture_cache, self->texture, &key, &value))
-    {
-      /* If the texture has been reused already, we put the entry back */
-      if ((GskGpuCached *) value != cached)
-        g_hash_table_insert (texture_cache, key, value);
-    }
-
-  /* If the cached item itself is still in use by the texture, we leave
-   * it to the weak ref or render data to free it.
-   */
-  if (g_atomic_int_dec_and_test (&self->use_count))
-    {
-      g_free (self);
-      return;
-    }
-}
-
-static inline gboolean
-gsk_gpu_cached_texture_is_invalid (GskGpuCachedTexture *self)
-{
-  /* If the use count is less than 2, the orignal texture has died,
-   * and the memory may have been reused for a new texture, so we
-   * can't hand out the image that is for the original texture.
-   */
-  return g_atomic_int_get (&self->use_count) < 2;
-}
-
-static gboolean
-gsk_gpu_cached_texture_should_collect (GskGpuCache *cache,
-                                       GskGpuCached *cached,
-                                       gint64        cache_timeout,
-                                       gint64        timestamp)
-{
-  GskGpuCachedTexture *self = (GskGpuCachedTexture *) cached;
-
-  return gsk_gpu_cached_is_old (cache, cached, cache_timeout, timestamp) ||
-         gsk_gpu_cached_texture_is_invalid (self);
-}
-
-static const GskGpuCachedClass GSK_GPU_CACHED_TEXTURE_CLASS =
-{
-  sizeof (GskGpuCachedTexture),
-  gsk_gpu_cached_texture_free,
-  gsk_gpu_cached_texture_should_collect
-};
-
-/* Note: this function can run in an arbitrary thread, so it can
- * only access things atomically
- */
-static void
-gsk_gpu_cached_texture_destroy_cb (gpointer data)
-{
-  GskGpuCachedTexture *self = data;
-
-  if (!gsk_gpu_cached_texture_is_invalid (self))
-    g_atomic_pointer_add (self->dead_pixels_counter, ((GskGpuCached *) self)->pixels);
-
-  if (g_atomic_int_dec_and_test (&self->use_count))
-    g_free (self);
-}
-
-static GskGpuCachedTexture *
-gsk_gpu_cached_texture_new (GskGpuCache   *cache,
-                            GdkTexture    *texture,
-                            GskGpuImage   *image,
-                            GdkColorState *color_state)
-{
-  GskGpuCachedTexture *self;
-  GHashTable *texture_cache;
-
-  /* First, move any existing renderdata */
-  self = gdk_texture_get_render_data (texture, cache);
-  if (self)
-    {
-      if (gsk_gpu_cached_texture_is_invalid (self))
-        {
-          gdk_texture_clear_render_data (texture);
-        }
-      else
-        {
-          gdk_texture_steal_render_data (texture);
-          g_object_weak_ref (G_OBJECT (texture), (GWeakNotify) gsk_gpu_cached_texture_destroy_cb, self);
-          texture_cache = gsk_gpu_cache_get_texture_hash_table (cache, self->color_state);
-          g_assert (texture_cache != NULL);
-          g_hash_table_insert (texture_cache, texture, self);
-        }
-    }
-
-  self = gsk_gpu_cached_new (cache, &GSK_GPU_CACHED_TEXTURE_CLASS, NULL);
-  self->texture = texture;
-  self->image = g_object_ref (image);
-  self->color_state = color_state;
-  ((GskGpuCached *)self)->pixels = gsk_gpu_image_get_width (image) * gsk_gpu_image_get_height (image);
-  self->dead_pixels_counter = &cache->dead_texture_pixels;
-  self->use_count = 2;
-
-  if (!gdk_texture_set_render_data (texture, cache, self, gsk_gpu_cached_texture_destroy_cb))
-    {
-      g_object_weak_ref (G_OBJECT (texture), (GWeakNotify) gsk_gpu_cached_texture_destroy_cb, self);
-
-      texture_cache = gsk_gpu_cache_get_texture_hash_table (cache, self->color_state);
-      g_assert (texture_cache != NULL);
-      g_hash_table_insert (texture_cache, texture, self);
-    }
-
-  return self;
-}
-
-/* }}} */
-/* {{{ CachedTile */
-
-struct _GskGpuCachedTile
-{
-  GskGpuCached parent;
-
-  GdkTexture *texture;
-  gsize tile_id;
-
-  /* atomic */ int use_count; /* We count the use by the cache (via the linked
-                               * list) and by the texture (via weak ref)
-                               */
-
-  gsize *dead_pixels_counter;
-
-  GskGpuImage *image;
-  GdkColorState *color_state;
-};
-
-static void
-gsk_gpu_cached_tile_free (GskGpuCache  *cache,
-                          GskGpuCached *cached)
-{
-  GskGpuCachedTile *self = (GskGpuCachedTile *) cached;
-  gpointer key, value;
-
-  g_clear_object (&self->image);
-  g_clear_pointer (&self->color_state, gdk_color_state_unref);
-
-  if (g_hash_table_steal_extended (cache->tile_cache, self, &key, &value))
-    {
-      /* If the texture has been reused already, we put the entry back */
-      if ((GskGpuCached *) value != cached)
-        g_hash_table_insert (cache->tile_cache, key, value);
-    }
-
-  /* If the cached item itself is still in use by the texture, we leave
-   * it to the weak ref or render data to free it.
-   */
-  if (g_atomic_int_dec_and_test (&self->use_count))
-    {
-      g_free (self);
-      return;
-    }
-}
-
-static inline gboolean
-gsk_gpu_cached_tile_is_invalid (GskGpuCachedTile *self)
-{
-  /* If the use count is less than 2, the orignal texture has died,
-   * and the memory may have been reused for a new texture, so we
-   * can't hand out the image that is for the original texture.
-   */
-  return g_atomic_int_get (&self->use_count) < 2;
-}
-
-static gboolean
-gsk_gpu_cached_tile_should_collect (GskGpuCache  *cache,
-                                    GskGpuCached *cached,
-                                    gint64        cache_timeout,
-                                    gint64        timestamp)
-{
-  GskGpuCachedTile *self = (GskGpuCachedTile *) cached;
-
-  return gsk_gpu_cached_is_old (cache, cached, cache_timeout, timestamp) ||
-         gsk_gpu_cached_tile_is_invalid (self);
-}
-
-static const GskGpuCachedClass GSK_GPU_CACHED_TILE_CLASS =
-{
-  sizeof (GskGpuCachedTile),
-  gsk_gpu_cached_tile_free,
-  gsk_gpu_cached_tile_should_collect
-};
-
-/* Note: this function can run in an arbitrary thread, so it can
- * only access things atomically
- */
-static void
-gsk_gpu_cached_tile_destroy_cb (gpointer data)
-{
-  GskGpuCachedTile *self = data;
-
-  if (!gsk_gpu_cached_tile_is_invalid (self))
-    g_atomic_pointer_add (self->dead_pixels_counter, ((GskGpuCached *) self)->pixels);
-
-  if (g_atomic_int_dec_and_test (&self->use_count))
-    g_free (self);
-}
-
-static guint
-gsk_gpu_cached_tile_hash (gconstpointer data)
-{
-  const GskGpuCachedTile *self = data;
-
-  return g_direct_hash (self->texture) ^ self->tile_id;
-}
-
-static gboolean
-gsk_gpu_cached_tile_equal (gconstpointer data_a,
-                           gconstpointer data_b)
-{
-  const GskGpuCachedTile *a = data_a;
-  const GskGpuCachedTile *b = data_b;
-
-  return a->texture == b->texture &&
-         a->tile_id == b->tile_id;
-}
-
-static GskGpuCachedTile *
-gsk_gpu_cached_tile_new (GskGpuCache   *cache,
-                         GdkTexture    *texture,
-                         guint          tile_id,
-                         GskGpuImage   *image,
-                         GdkColorState *color_state)
-{
-  GskGpuCachedTile *self;
-
-  self = gsk_gpu_cached_new (cache, &GSK_GPU_CACHED_TILE_CLASS, NULL);
-  self->texture = texture;
-  self->tile_id = tile_id;
-  self->image = g_object_ref (image);
-  self->color_state = gdk_color_state_ref (color_state);
-  ((GskGpuCached *)self)->pixels = gsk_gpu_image_get_width (image) * gsk_gpu_image_get_height (image);
-  self->dead_pixels_counter = &cache->dead_texture_pixels;
-  self->use_count = 2;
-
-  g_object_weak_ref (G_OBJECT (texture), (GWeakNotify) gsk_gpu_cached_tile_destroy_cb, self);
-  if (cache->tile_cache == NULL)
-    cache->tile_cache = g_hash_table_new (gsk_gpu_cached_tile_hash,
-                                          gsk_gpu_cached_tile_equal);
-  g_hash_table_add (cache->tile_cache, self);
-
-  return self;
-}
-
-GskGpuImage *
-gsk_gpu_cache_lookup_tile (GskGpuCache    *self,
-                           GdkTexture     *texture,
-                           gsize           tile_id,
-                           gint64          timestamp,
-                           GdkColorState **out_color_state)
-{
-  GskGpuCachedTile *tile;
-  GskGpuCachedTile lookup = {
-    .texture = texture,
-    .tile_id = tile_id
-  };
-
-  if (self->tile_cache == NULL)
-    return NULL;
-
-  tile = g_hash_table_lookup (self->tile_cache, &lookup);
-  if (tile == NULL)
-    return NULL;
-
-  gsk_gpu_cached_use (self, (GskGpuCached *) tile, timestamp);
-
-  *out_color_state = tile->color_state;
-
-  return g_object_ref (tile->image);
-}
-
-void
-gsk_gpu_cache_cache_tile (GskGpuCache   *self,
-                          gint64         timestamp,
-                          GdkTexture    *texture,
-                          guint          tile_id,
-                          GskGpuImage   *image,
-                          GdkColorState *color_state)
-{
-  GskGpuCachedTile *tile;
-
-  tile = gsk_gpu_cached_tile_new (self, texture, tile_id, image, color_state);
-
-  gsk_gpu_cached_use (self, (GskGpuCached *) tile, timestamp);
-}
-
-/* }}} */
-/* {{{ CachedGlyph */
-
-struct _GskGpuCachedGlyph
-{
-  GskGpuCached parent;
-
-  PangoFont *font;
-  PangoGlyph glyph;
-  GskGpuGlyphLookupFlags flags;
-  float scale;
-
-  GskGpuImage *image;
-  graphene_rect_t bounds;
-  graphene_point_t origin;
-};
-
-static void
-gsk_gpu_cached_glyph_free (GskGpuCache  *cache,
-                           GskGpuCached *cached)
-{
-  GskGpuCachedGlyph *self = (GskGpuCachedGlyph *) cached;
-
-  g_hash_table_remove (cache->glyph_cache, self);
-
-  g_object_unref (self->font);
-  g_object_unref (self->image);
-
-  g_free (self);
-}
-
-static gboolean
-gsk_gpu_cached_glyph_should_collect (GskGpuCache  *cache,
-                                     GskGpuCached *cached,
-                                     gint64        cache_timeout,
-                                     gint64        timestamp)
-{
-  if (gsk_gpu_cached_is_old (cache, cached, cache_timeout, timestamp))
-    {
-      if (cached->atlas)
-        mark_as_stale (cached, TRUE);
-      else
-        return TRUE;
-    }
-
-  /* Glyphs are only collected when their atlas is freed */
-  return FALSE;
-}
-
-static guint
-gsk_gpu_cached_glyph_hash (gconstpointer data)
-{
-  const GskGpuCachedGlyph *glyph = data;
-
-  return GPOINTER_TO_UINT (glyph->font) ^
-         glyph->glyph ^
-         (glyph->flags << 24) ^
-         ((guint) glyph->scale * PANGO_SCALE);
-}
-
-static gboolean
-gsk_gpu_cached_glyph_equal (gconstpointer v1,
-                            gconstpointer v2)
-{
-  const GskGpuCachedGlyph *glyph1 = v1;
-  const GskGpuCachedGlyph *glyph2 = v2;
-
-  return glyph1->font == glyph2->font
-      && glyph1->glyph == glyph2->glyph
-      && glyph1->flags == glyph2->flags
-      && glyph1->scale == glyph2->scale;
-}
-
-static const GskGpuCachedClass GSK_GPU_CACHED_GLYPH_CLASS =
-{
-  sizeof (GskGpuCachedGlyph),
-  gsk_gpu_cached_glyph_free,
-  gsk_gpu_cached_glyph_should_collect
-};
-
-/* }}} */
-/* {{{ GskGpuCache */
-
-static void
-print_cache_stats (GskGpuCache *self)
-{
-  GskGpuCached *cached;
-  guint glyphs = 0;
-  guint stale_glyphs = 0;
-  guint textures = 0;
-  guint atlases = 0;
-  GString *ratios = g_string_new ("");
-
-  for (cached = self->first_cached; cached != NULL; cached = cached->next)
-    {
-      if (cached->class == &GSK_GPU_CACHED_GLYPH_CLASS)
-        {
-          glyphs++;
-          if (cached->stale)
-            stale_glyphs++;
-        }
-      else if (cached->class == &GSK_GPU_CACHED_TEXTURE_CLASS)
-        {
-          textures++;
-        }
-      else if (cached->class == &GSK_GPU_CACHED_ATLAS_CLASS)
-        {
-          double ratio;
-
-          atlases++;
-
-          ratio = (double) cached->pixels / (double) (ATLAS_SIZE * ATLAS_SIZE);
-
-          if (ratios->len == 0)
-            g_string_append (ratios, " (ratios ");
-          else
-            g_string_append (ratios, ", ");
-          g_string_append_printf (ratios, "%.2f", ratio);
-        }
-    }
-
-  if (ratios->len > 0)
-    g_string_append (ratios, ")");
-
-  gdk_debug_message ("Cached items\n"
-                     "  glyphs:   %5u (%u stale)\n"
-                     "  textures: %5u (%u in hash)\n"
-                     "  atlases:  %5u%s",
-                     glyphs, stale_glyphs,
-                     textures, g_hash_table_size (self->texture_cache),
-                     atlases, ratios->str);
-
-  g_string_free (ratios, TRUE);
-}
-
-/* Returns TRUE if everything was GC'ed */
-gboolean
-gsk_gpu_cache_gc (GskGpuCache *self,
-                  gint64       cache_timeout,
-                  gint64       timestamp)
-{
-  GskGpuCached *cached, *prev;
-  gint64 before G_GNUC_UNUSED = GDK_PROFILER_CURRENT_TIME;
-  gboolean is_empty = TRUE;
-
-  /* We walk the cache from the end so we don't end up with prev
-   * being a leftover glyph on the atlas we are freeing
-   */
-  for (cached = self->last_cached; cached != NULL; cached = prev)
-    {
-      prev = cached->prev;
-      if (gsk_gpu_cached_should_collect (self, cached, cache_timeout, timestamp))
-        gsk_gpu_cached_free (self, cached);
-      else
-        is_empty &= cached->stale;
-    }
-
-  g_atomic_pointer_set (&self->dead_texture_pixels, 0);
-
-  if (GSK_DEBUG_CHECK (CACHE))
-    print_cache_stats (self);
-
-  gdk_profiler_end_mark (before, "Glyph cache GC", NULL);
-
-  return is_empty;
-}
-
-gsize
-gsk_gpu_cache_get_dead_texture_pixels (GskGpuCache *self)
-{
-  return GPOINTER_TO_SIZE (g_atomic_pointer_get (&self->dead_texture_pixels));
-}
-
-static void
-gsk_gpu_cache_clear_cache (GskGpuCache *self)
-{
-  for (GskGpuCached *cached = self->first_cached; cached; cached = cached->next)
-    {
-      if (cached->prev == NULL)
-        g_assert (self->first_cached == cached);
-      else
-        g_assert (cached->prev->next == cached);
-      if (cached->next == NULL)
-        g_assert (self->last_cached == cached);
-      else
-        g_assert (cached->next->prev == cached);
-    }
-
-  /* We clear the cache from the end so glyphs get freed before their atlas */
-  while (self->last_cached)
-    gsk_gpu_cached_free (self, self->last_cached);
-
-  g_assert (self->last_cached == NULL);
-}
-
-static void
-gsk_gpu_cache_dispose (GObject *object)
-{
-  GskGpuCache *self = GSK_GPU_CACHE (object);
-
-  gsk_gpu_cache_clear_cache (self);
-  g_hash_table_unref (self->glyph_cache);
-  g_clear_pointer (&self->tile_cache, g_hash_table_unref);
-  g_hash_table_unref (self->texture_cache);
-
-  G_OBJECT_CLASS (gsk_gpu_cache_parent_class)->dispose (object);
-}
-
-static void
-gsk_gpu_cache_finalize (GObject *object)
-{
-  GskGpuCache *self = GSK_GPU_CACHE (object);
-
-  g_object_unref (self->device);
-
-  G_OBJECT_CLASS (gsk_gpu_cache_parent_class)->finalize (object);
-}
-
-static void
-gsk_gpu_cache_class_init (GskGpuCacheClass *klass)
-{
-  GObjectClass *object_class = G_OBJECT_CLASS (klass);
-
-  object_class->dispose = gsk_gpu_cache_dispose;
-  object_class->finalize = gsk_gpu_cache_finalize;
-}
-
-static void
-gsk_gpu_cache_init (GskGpuCache *self)
-{
-  self->glyph_cache = g_hash_table_new (gsk_gpu_cached_glyph_hash,
-                                        gsk_gpu_cached_glyph_equal);
-  self->texture_cache = g_hash_table_new (g_direct_hash,
-                                          g_direct_equal);
 }
 
 /* This rounds up to the next number that has <= 2 bits set:
@@ -930,7 +333,6 @@ gsk_gpu_cache_get_atlas_image (GskGpuCache *self)
 
 static GskGpuImage *
 gsk_gpu_cache_add_atlas_image (GskGpuCache      *self,
-                               gint64            timestamp,
                                gsize             width,
                                gsize             height,
                                gsize            *out_x,
@@ -943,7 +345,7 @@ gsk_gpu_cache_add_atlas_image (GskGpuCache      *self,
 
   if (gsk_gpu_cached_atlas_allocate (self->current_atlas, width, height, out_x, out_y))
     {
-      gsk_gpu_cached_use (self, (GskGpuCached *) self->current_atlas, timestamp);
+      gsk_gpu_cached_use (self, (GskGpuCached *) self->current_atlas);
       return self->current_atlas->image;
     }
 
@@ -951,17 +353,629 @@ gsk_gpu_cache_add_atlas_image (GskGpuCache      *self,
 
   if (gsk_gpu_cached_atlas_allocate (self->current_atlas, width, height, out_x, out_y))
     {
-      gsk_gpu_cached_use (self, (GskGpuCached *) self->current_atlas, timestamp);
+      gsk_gpu_cached_use (self, (GskGpuCached *) self->current_atlas);
       return self->current_atlas->image;
     }
 
   return NULL;
 }
 
+/* }}} */
+/* {{{ CachedTexture */
+
+struct _GskGpuCachedTexture
+{
+  GskGpuCached parent;
+
+  /* atomic */ int use_count; /* We count the use by the cache (via the linked
+                               * list) and by the texture (via render data or
+                               * weak ref.
+                               */
+
+  gsize *dead_pixels_counter;
+
+  GdkTexture *texture;
+  GskGpuImage *image;
+  GdkColorState *color_state;  /* no ref because global. May be NULL */
+};
+
+static GHashTable *
+gsk_gpu_cache_get_texture_hash_table (GskGpuCache   *cache,
+                                      GdkColorState *color_state)
+{
+  if (color_state == NULL)
+    {
+      return cache->texture_cache;
+    }
+  else if (GDK_IS_DEFAULT_COLOR_STATE (color_state))
+    { 
+      GdkColorStateId id = GDK_DEFAULT_COLOR_STATE_ID (color_state);
+
+      if (cache->ccs_texture_caches[id] == NULL)
+        cache->ccs_texture_caches[id] = g_hash_table_new (g_direct_hash,
+                                                          g_direct_equal);
+      return cache->ccs_texture_caches[id];
+    }
+  else
+    {
+      return NULL;
+    }
+}
+
+static void
+gsk_gpu_cached_texture_free (GskGpuCache  *cache,
+                             GskGpuCached *cached)
+{
+  GskGpuCachedTexture *self = (GskGpuCachedTexture *) cached;
+  GHashTable *texture_cache;
+  gpointer key, value;
+
+  g_clear_object (&self->image);
+
+  texture_cache = gsk_gpu_cache_get_texture_hash_table (cache, self->color_state);
+
+  if (g_hash_table_steal_extended (texture_cache, self->texture, &key, &value))
+    {
+      /* If the texture has been reused already, we put the entry back */
+      if ((GskGpuCached *) value != cached)
+        g_hash_table_insert (texture_cache, key, value);
+    }
+
+  /* If the cached item itself is still in use by the texture, we leave
+   * it to the weak ref or render data to free it.
+   */
+  if (g_atomic_int_dec_and_test (&self->use_count))
+    {
+      g_free (self);
+      return;
+    }
+}
+
+static inline gboolean
+gsk_gpu_cached_texture_is_invalid (GskGpuCachedTexture *self)
+{
+  /* If the use count is less than 2, the orignal texture has died,
+   * and the memory may have been reused for a new texture, so we
+   * can't hand out the image that is for the original texture.
+   */
+  return g_atomic_int_get (&self->use_count) < 2;
+}
+
+static gboolean
+gsk_gpu_cached_texture_should_collect (GskGpuCache *cache,
+                                       GskGpuCached *cached,
+                                       gint64        cache_timeout,
+                                       gint64        timestamp)
+{
+  GskGpuCachedTexture *self = (GskGpuCachedTexture *) cached;
+
+  return gsk_gpu_cached_is_old (cache, cached, cache_timeout, timestamp) ||
+         gsk_gpu_cached_texture_is_invalid (self);
+}
+
+static const GskGpuCachedClass GSK_GPU_CACHED_TEXTURE_CLASS =
+{
+  sizeof (GskGpuCachedTexture),
+  "Texture",
+  gsk_gpu_cached_texture_free,
+  gsk_gpu_cached_texture_should_collect
+};
+
+/* Note: this function can run in an arbitrary thread, so it can
+ * only access things atomically
+ */
+static void
+gsk_gpu_cached_texture_destroy_cb (gpointer data)
+{
+  GskGpuCachedTexture *self = data;
+
+  if (!gsk_gpu_cached_texture_is_invalid (self))
+    g_atomic_pointer_add (self->dead_pixels_counter, ((GskGpuCached *) self)->pixels);
+
+  if (g_atomic_int_dec_and_test (&self->use_count))
+    g_free (self);
+}
+
+static GskGpuCachedTexture *
+gsk_gpu_cached_texture_new (GskGpuCache   *cache,
+                            GdkTexture    *texture,
+                            GskGpuImage   *image,
+                            GdkColorState *color_state)
+{
+  GskGpuCachedTexture *self;
+  GHashTable *texture_cache;
+
+  /* First, move any existing renderdata */
+  self = gdk_texture_get_render_data (texture, cache);
+  if (self)
+    {
+      if (gsk_gpu_cached_texture_is_invalid (self))
+        {
+          gdk_texture_clear_render_data (texture);
+        }
+      else
+        {
+          gdk_texture_steal_render_data (texture);
+          g_object_weak_ref (G_OBJECT (texture), (GWeakNotify) gsk_gpu_cached_texture_destroy_cb, self);
+          texture_cache = gsk_gpu_cache_get_texture_hash_table (cache, self->color_state);
+          g_assert (texture_cache != NULL);
+          g_hash_table_insert (texture_cache, texture, self);
+        }
+    }
+
+  self = gsk_gpu_cached_new (cache, &GSK_GPU_CACHED_TEXTURE_CLASS);
+  self->texture = texture;
+  self->image = g_object_ref (image);
+  self->color_state = color_state;
+  ((GskGpuCached *)self)->pixels = gsk_gpu_image_get_width (image) * gsk_gpu_image_get_height (image);
+  self->dead_pixels_counter = &cache->dead_texture_pixels;
+  self->use_count = 2;
+
+  if (!gdk_texture_set_render_data (texture, cache, self, gsk_gpu_cached_texture_destroy_cb))
+    {
+      g_object_weak_ref (G_OBJECT (texture), (GWeakNotify) gsk_gpu_cached_texture_destroy_cb, self);
+
+      texture_cache = gsk_gpu_cache_get_texture_hash_table (cache, self->color_state);
+      g_assert (texture_cache != NULL);
+      g_hash_table_insert (texture_cache, texture, self);
+    }
+
+  return self;
+}
+
+/* }}} */
+/* {{{ CachedTile */
+
+struct _GskGpuCachedTile
+{
+  GskGpuCached parent;
+
+  GdkTexture *texture;
+  gsize tile_id;
+
+  /* atomic */ int use_count; /* We count the use by the cache (via the linked
+                               * list) and by the texture (via weak ref)
+                               */
+
+  gsize *dead_pixels_counter;
+
+  GskGpuImage *image;
+  GdkColorState *color_state;
+};
+
+static void
+gsk_gpu_cached_tile_free (GskGpuCache  *cache,
+                          GskGpuCached *cached)
+{
+  GskGpuCachedTile *self = (GskGpuCachedTile *) cached;
+  gpointer key, value;
+
+  g_clear_object (&self->image);
+  g_clear_pointer (&self->color_state, gdk_color_state_unref);
+
+  if (g_hash_table_steal_extended (cache->tile_cache, self, &key, &value))
+    {
+      /* If the texture has been reused already, we put the entry back */
+      if ((GskGpuCached *) value != cached)
+        g_hash_table_insert (cache->tile_cache, key, value);
+    }
+
+  /* If the cached item itself is still in use by the texture, we leave
+   * it to the weak ref or render data to free it.
+   */
+  if (g_atomic_int_dec_and_test (&self->use_count))
+    {
+      g_free (self);
+      return;
+    }
+}
+
+static inline gboolean
+gsk_gpu_cached_tile_is_invalid (GskGpuCachedTile *self)
+{
+  /* If the use count is less than 2, the orignal texture has died,
+   * and the memory may have been reused for a new texture, so we
+   * can't hand out the image that is for the original texture.
+   */
+  return g_atomic_int_get (&self->use_count) < 2;
+}
+
+static gboolean
+gsk_gpu_cached_tile_should_collect (GskGpuCache  *cache,
+                                    GskGpuCached *cached,
+                                    gint64        cache_timeout,
+                                    gint64        timestamp)
+{
+  GskGpuCachedTile *self = (GskGpuCachedTile *) cached;
+
+  return gsk_gpu_cached_is_old (cache, cached, cache_timeout, timestamp) ||
+         gsk_gpu_cached_tile_is_invalid (self);
+}
+
+static const GskGpuCachedClass GSK_GPU_CACHED_TILE_CLASS =
+{
+  sizeof (GskGpuCachedTile),
+  "Tile",
+  gsk_gpu_cached_tile_free,
+  gsk_gpu_cached_tile_should_collect
+};
+
+/* Note: this function can run in an arbitrary thread, so it can
+ * only access things atomically
+ */
+static void
+gsk_gpu_cached_tile_destroy_cb (gpointer data)
+{
+  GskGpuCachedTile *self = data;
+
+  if (!gsk_gpu_cached_tile_is_invalid (self))
+    g_atomic_pointer_add (self->dead_pixels_counter, ((GskGpuCached *) self)->pixels);
+
+  if (g_atomic_int_dec_and_test (&self->use_count))
+    g_free (self);
+}
+
+static guint
+gsk_gpu_cached_tile_hash (gconstpointer data)
+{
+  const GskGpuCachedTile *self = data;
+
+  return g_direct_hash (self->texture) ^ self->tile_id;
+}
+
+static gboolean
+gsk_gpu_cached_tile_equal (gconstpointer data_a,
+                           gconstpointer data_b)
+{
+  const GskGpuCachedTile *a = data_a;
+  const GskGpuCachedTile *b = data_b;
+
+  return a->texture == b->texture &&
+         a->tile_id == b->tile_id;
+}
+
+static GskGpuCachedTile *
+gsk_gpu_cached_tile_new (GskGpuCache   *cache,
+                         GdkTexture    *texture,
+                         guint          tile_id,
+                         GskGpuImage   *image,
+                         GdkColorState *color_state)
+{
+  GskGpuCachedTile *self;
+
+  self = gsk_gpu_cached_new (cache, &GSK_GPU_CACHED_TILE_CLASS);
+  self->texture = texture;
+  self->tile_id = tile_id;
+  self->image = g_object_ref (image);
+  self->color_state = gdk_color_state_ref (color_state);
+  ((GskGpuCached *)self)->pixels = gsk_gpu_image_get_width (image) * gsk_gpu_image_get_height (image);
+  self->dead_pixels_counter = &cache->dead_texture_pixels;
+  self->use_count = 2;
+
+  g_object_weak_ref (G_OBJECT (texture), (GWeakNotify) gsk_gpu_cached_tile_destroy_cb, self);
+  if (cache->tile_cache == NULL)
+    cache->tile_cache = g_hash_table_new (gsk_gpu_cached_tile_hash,
+                                          gsk_gpu_cached_tile_equal);
+  g_hash_table_add (cache->tile_cache, self);
+
+  return self;
+}
+
+GskGpuImage *
+gsk_gpu_cache_lookup_tile (GskGpuCache    *self,
+                           GdkTexture     *texture,
+                           gsize           tile_id,
+                           GdkColorState **out_color_state)
+{
+  GskGpuCachedTile *tile;
+  GskGpuCachedTile lookup = {
+    .texture = texture,
+    .tile_id = tile_id
+  };
+
+  if (self->tile_cache == NULL)
+    return NULL;
+
+  tile = g_hash_table_lookup (self->tile_cache, &lookup);
+  if (tile == NULL)
+    return NULL;
+
+  gsk_gpu_cached_use (self, (GskGpuCached *) tile);
+
+  *out_color_state = tile->color_state;
+
+  return g_object_ref (tile->image);
+}
+
+void
+gsk_gpu_cache_cache_tile (GskGpuCache   *self,
+                          GdkTexture    *texture,
+                          guint          tile_id,
+                          GskGpuImage   *image,
+                          GdkColorState *color_state)
+{
+  GskGpuCachedTile *tile;
+
+  tile = gsk_gpu_cached_tile_new (self, texture, tile_id, image, color_state);
+
+  gsk_gpu_cached_use (self, (GskGpuCached *) tile);
+}
+
+/* }}} */
+/* {{{ CachedGlyph */
+
+struct _GskGpuCachedGlyph
+{
+  GskGpuCached parent;
+
+  PangoFont *font;
+  PangoGlyph glyph;
+  GskGpuGlyphLookupFlags flags;
+  float scale;
+
+  GskGpuImage *image;
+  graphene_rect_t bounds;
+  graphene_point_t origin;
+};
+
+static void
+gsk_gpu_cached_glyph_free (GskGpuCache  *cache,
+                           GskGpuCached *cached)
+{
+  GskGpuCachedGlyph *self = (GskGpuCachedGlyph *) cached;
+
+  g_hash_table_remove (cache->glyph_cache, self);
+
+  g_object_unref (self->font);
+  g_object_unref (self->image);
+
+  g_free (self);
+}
+
+static gboolean
+gsk_gpu_cached_glyph_should_collect (GskGpuCache  *cache,
+                                     GskGpuCached *cached,
+                                     gint64        cache_timeout,
+                                     gint64        timestamp)
+{
+  if (gsk_gpu_cached_is_old (cache, cached, cache_timeout, timestamp))
+    {
+      if (cached->atlas)
+        mark_as_stale (cached, TRUE);
+      else
+        return TRUE;
+    }
+
+  /* Glyphs are only collected when their atlas is freed */
+  return FALSE;
+}
+
+static guint
+gsk_gpu_cached_glyph_hash (gconstpointer data)
+{
+  const GskGpuCachedGlyph *glyph = data;
+
+  return GPOINTER_TO_UINT (glyph->font) ^
+         glyph->glyph ^
+         (glyph->flags << 24) ^
+         ((guint) glyph->scale * PANGO_SCALE);
+}
+
+static gboolean
+gsk_gpu_cached_glyph_equal (gconstpointer v1,
+                            gconstpointer v2)
+{
+  const GskGpuCachedGlyph *glyph1 = v1;
+  const GskGpuCachedGlyph *glyph2 = v2;
+
+  return glyph1->font == glyph2->font
+      && glyph1->glyph == glyph2->glyph
+      && glyph1->flags == glyph2->flags
+      && glyph1->scale == glyph2->scale;
+}
+
+static const GskGpuCachedClass GSK_GPU_CACHED_GLYPH_CLASS =
+{
+  sizeof (GskGpuCachedGlyph),
+  "Glyph",
+  gsk_gpu_cached_glyph_free,
+  gsk_gpu_cached_glyph_should_collect
+};
+
+/* }}} */
+/* {{{ GskGpuCache */
+
+GskGpuDevice *
+gsk_gpu_cache_get_device (GskGpuCache *self)
+{
+  return self->device;
+}
+
+/*
+ * gsk_gpu_cache_set_time:
+ * @self: a `GskGpuCache`
+ * @timestamp: time in whatever the frameclock uses
+ *
+ * Sets the timestamp to use for all following operations.
+ * Frames should set this when they start drawing.
+ **/
+void
+gsk_gpu_cache_set_time (GskGpuCache *self,
+                        gint64       timestamp)
+{
+  self->timestamp = timestamp;
+}
+
+typedef struct
+{
+  guint n_items;
+  guint n_stale;
+} CacheData;
+
+static void
+print_cache_stats (GskGpuCache *self)
+{
+  GskGpuCached *cached;
+  GString *message;
+  GString *ratios = g_string_new ("");
+  GHashTable *classes = g_hash_table_new_full (g_direct_hash, g_direct_equal, NULL, g_free);
+  GHashTableIter iter;
+  gpointer key, value;
+
+  for (cached = self->first_cached; cached != NULL; cached = cached->next)
+    {
+      CacheData *cache_data = g_hash_table_lookup (classes, cached->class);
+      if (cache_data == NULL)
+        {
+          cache_data = g_new0 (CacheData, 1);
+          g_hash_table_insert (classes, (gpointer) cached->class, cache_data);
+        }
+      cache_data->n_items++;
+      if (cached->stale)
+        cache_data->n_stale++;
+
+      if (cached->class == &GSK_GPU_CACHED_ATLAS_CLASS)
+        {
+          double ratio;
+
+          ratio = (double) cached->pixels / (double) (ATLAS_SIZE * ATLAS_SIZE);
+
+          if (ratios->len == 0)
+            g_string_append (ratios, " (ratios ");
+          else
+            g_string_append (ratios, ", ");
+          g_string_append_printf (ratios, "%.2f", ratio);
+        }
+    }
+
+  if (ratios->len > 0)
+    g_string_append (ratios, ")");
+
+  message = g_string_new ("Cached items");
+  g_hash_table_iter_init (&iter, classes);
+  while (g_hash_table_iter_next (&iter, &key, &value))
+    {
+      const GskGpuCachedClass *class = key;
+      const CacheData *cache_data = value;
+
+      g_string_append_printf (message, "\n  %s:%*s%5u (%u stale)", class->name, 12 - MIN (12, (int) strlen (class->name)), "", cache_data->n_items, cache_data->n_stale);
+
+      if (class == &GSK_GPU_CACHED_ATLAS_CLASS)
+        g_string_append_printf (message, "%s", ratios->str);
+      else if (class == &GSK_GPU_CACHED_TEXTURE_CLASS)
+        g_string_append_printf (message, " (%u in hash)", g_hash_table_size (self->texture_cache));
+    }
+
+  gdk_debug_message ("%s", message->str);
+  g_string_free (message, TRUE);
+  g_hash_table_unref (classes);
+  g_string_free (ratios, TRUE);
+}
+
+/* Returns TRUE if everything was GC'ed */
+gboolean
+gsk_gpu_cache_gc (GskGpuCache *self,
+                  gint64       cache_timeout,
+                  gint64       timestamp)
+{
+  GskGpuCached *cached, *prev;
+  gint64 before G_GNUC_UNUSED = GDK_PROFILER_CURRENT_TIME;
+  gboolean is_empty = TRUE;
+
+  /* We walk the cache from the end so we don't end up with prev
+   * being a leftover glyph on the atlas we are freeing
+   */
+  for (cached = self->last_cached; cached != NULL; cached = prev)
+    {
+      prev = cached->prev;
+      if (gsk_gpu_cached_should_collect (self, cached, cache_timeout, timestamp))
+        gsk_gpu_cached_free (self, cached);
+      else
+        is_empty &= cached->stale;
+    }
+
+  g_atomic_pointer_set (&self->dead_texture_pixels, 0);
+
+  if (GSK_DEBUG_CHECK (CACHE))
+    print_cache_stats (self);
+
+  gdk_profiler_end_mark (before, "Glyph cache GC", NULL);
+
+  return is_empty;
+}
+
+gsize
+gsk_gpu_cache_get_dead_texture_pixels (GskGpuCache *self)
+{
+  return GPOINTER_TO_SIZE (g_atomic_pointer_get (&self->dead_texture_pixels));
+}
+
+static void
+gsk_gpu_cache_clear_cache (GskGpuCache *self)
+{
+  for (GskGpuCached *cached = self->first_cached; cached; cached = cached->next)
+    {
+      if (cached->prev == NULL)
+        g_assert (self->first_cached == cached);
+      else
+        g_assert (cached->prev->next == cached);
+      if (cached->next == NULL)
+        g_assert (self->last_cached == cached);
+      else
+        g_assert (cached->next->prev == cached);
+    }
+
+  /* We clear the cache from the end so glyphs get freed before their atlas */
+  while (self->last_cached)
+    gsk_gpu_cached_free (self, self->last_cached);
+
+  g_assert (self->last_cached == NULL);
+}
+
+static void
+gsk_gpu_cache_dispose (GObject *object)
+{
+  GskGpuCache *self = GSK_GPU_CACHE (object);
+
+  gsk_gpu_cache_clear_cache (self);
+  g_hash_table_unref (self->glyph_cache);
+  g_clear_pointer (&self->tile_cache, g_hash_table_unref);
+  g_hash_table_unref (self->texture_cache);
+
+  G_OBJECT_CLASS (gsk_gpu_cache_parent_class)->dispose (object);
+}
+
+static void
+gsk_gpu_cache_finalize (GObject *object)
+{
+  GskGpuCache *self = GSK_GPU_CACHE (object);
+
+  g_object_unref (self->device);
+
+  G_OBJECT_CLASS (gsk_gpu_cache_parent_class)->finalize (object);
+}
+
+static void
+gsk_gpu_cache_class_init (GskGpuCacheClass *klass)
+{
+  GObjectClass *object_class = G_OBJECT_CLASS (klass);
+
+  object_class->dispose = gsk_gpu_cache_dispose;
+  object_class->finalize = gsk_gpu_cache_finalize;
+}
+
+static void
+gsk_gpu_cache_init (GskGpuCache *self)
+{
+  self->glyph_cache = g_hash_table_new (gsk_gpu_cached_glyph_hash,
+                                        gsk_gpu_cached_glyph_equal);
+  self->texture_cache = g_hash_table_new (g_direct_hash,
+                                          g_direct_equal);
+}
+
 GskGpuImage *
 gsk_gpu_cache_lookup_texture_image (GskGpuCache   *self,
                                     GdkTexture    *texture,
-                                    gint64         timestamp,
                                     GdkColorState *color_state)
 {
   GskGpuCachedTexture *cache;
@@ -980,7 +994,7 @@ gsk_gpu_cache_lookup_texture_image (GskGpuCache   *self,
   if (!cache || !cache->image || gsk_gpu_cached_texture_is_invalid (cache))
     return NULL;
 
-  gsk_gpu_cached_use (self, (GskGpuCached *) cache, timestamp);
+  gsk_gpu_cached_use (self, (GskGpuCached *) cache);
 
   return g_object_ref (cache->image);
 }
@@ -988,7 +1002,6 @@ gsk_gpu_cache_lookup_texture_image (GskGpuCache   *self,
 void
 gsk_gpu_cache_cache_texture_image (GskGpuCache   *self,
                                    GdkTexture    *texture,
-                                   gint64         timestamp,
                                    GskGpuImage   *image,
                                    GdkColorState *color_state)
 {
@@ -997,7 +1010,7 @@ gsk_gpu_cache_cache_texture_image (GskGpuCache   *self,
   cache = gsk_gpu_cached_texture_new (self, texture, image, color_state);
   g_return_if_fail (cache != NULL);
 
-  gsk_gpu_cached_use (self, (GskGpuCached *) cache, timestamp);
+  gsk_gpu_cached_use (self, (GskGpuCached *) cache);
 }
 
 GskGpuImage *
@@ -1029,7 +1042,7 @@ gsk_gpu_cache_lookup_glyph_image (GskGpuCache            *self,
   cache = g_hash_table_lookup (self->glyph_cache, &lookup);
   if (cache)
     {
-      gsk_gpu_cached_use (self, (GskGpuCached *) cache, gsk_gpu_frame_get_timestamp (frame));
+      gsk_gpu_cached_use (self, (GskGpuCached *) cache);
 
       *out_bounds = cache->bounds;
       *out_origin = cache->origin;
@@ -1056,7 +1069,6 @@ gsk_gpu_cache_lookup_glyph_image (GskGpuCache            *self,
   padding = 1;
 
   image = gsk_gpu_cache_add_atlas_image (self,
-                                         gsk_gpu_frame_get_timestamp (frame),
                                          rect.size.width + 2 * padding, rect.size.height + 2 * padding,
                                          &atlas_x, &atlas_y);
   if (image)
@@ -1064,7 +1076,7 @@ gsk_gpu_cache_lookup_glyph_image (GskGpuCache            *self,
       g_object_ref (image);
       rect.origin.x = atlas_x + padding;
       rect.origin.y = atlas_y + padding;
-      cache = gsk_gpu_cached_new (self, &GSK_GPU_CACHED_GLYPH_CLASS, self->current_atlas);
+      cache = gsk_gpu_cached_new_from_atlas (self, &GSK_GPU_CACHED_GLYPH_CLASS, self->current_atlas);
     }
   else
     {
@@ -1072,7 +1084,7 @@ gsk_gpu_cache_lookup_glyph_image (GskGpuCache            *self,
       rect.origin.x = 0;
       rect.origin.y = 0;
       padding = 0;
-      cache = gsk_gpu_cached_new (self, &GSK_GPU_CACHED_GLYPH_CLASS, NULL);
+      cache = gsk_gpu_cached_new (self, &GSK_GPU_CACHED_GLYPH_CLASS);
     }
 
   cache->font = g_object_ref (font);
@@ -1099,7 +1111,7 @@ gsk_gpu_cache_lookup_glyph_image (GskGpuCache            *self,
                                                  cache->origin.y + padding));
 
   g_hash_table_insert (self->glyph_cache, cache, cache);
-  gsk_gpu_cached_use (self, (GskGpuCached *) cache, gsk_gpu_frame_get_timestamp (frame));
+  gsk_gpu_cached_use (self, (GskGpuCached *) cache);
 
   *out_bounds = cache->bounds;
   *out_origin = cache->origin;
