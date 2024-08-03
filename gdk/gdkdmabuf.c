@@ -306,10 +306,6 @@ download_p010 (guchar          *dst,
     }
   MASK = 0xFFFF << (16 - SIZE);
 
-  static int counter = 0;
-  if (counter++ < 8)
-    return;
-
   y_stride = dmabuf->planes[0].stride / 2;
   y_data = (const guint16 *) (src_data[0] + dmabuf->planes[0].offset);
   g_return_if_fail (sizes[0] >= dmabuf->planes[0].offset + height * dmabuf->planes[0].stride);
@@ -2475,7 +2471,7 @@ gdk_dmabuf_is_disjoint (const GdkDmabuf *dmabuf)
     {
       struct stat plane_stat;
 
-      if (fstat (dmabuf->planes[0].fd, &plane_stat) != 0)
+      if (fstat (dmabuf->planes[i].fd, &plane_stat) != 0)
         return TRUE;
 
       if (first_stat.st_ino != plane_stat.st_ino)

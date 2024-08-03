@@ -95,12 +95,12 @@ cicp_to_xyz (uint cp)
 {
   switch (cp)
     {
-    case 1: return srgb_to_xyz;
-    case 5: return pal_to_xyz;
-    case 6: return ntsc_to_xyz;
-    case 9: return rec2020_to_xyz;
-    case 10: return identity;
-    case 12: return p3_to_xyz;
+    case 1u: return srgb_to_xyz;
+    case 5u: return pal_to_xyz;
+    case 6u: return ntsc_to_xyz;
+    case 9u: return rec2020_to_xyz;
+    case 10u: return identity;
+    case 12u: return p3_to_xyz;
     default: return identity;
     }
 }
@@ -110,12 +110,12 @@ cicp_from_xyz (uint cp)
 {
   switch (cp)
     {
-    case 1: return xyz_to_srgb;
-    case 5: return xyz_to_pal;
-    case 6: return xyz_to_ntsc;
-    case 9: return xyz_to_rec2020;
-    case 10: return identity;
-    case 12: return xyz_to_p3;
+    case 1u: return xyz_to_srgb;
+    case 5u: return xyz_to_pal;
+    case 6u: return xyz_to_ntsc;
+    case 9u: return xyz_to_rec2020;
+    case 10u: return identity;
+    case 12u: return xyz_to_p3;
     default: return identity;
     }
 }
@@ -177,6 +177,30 @@ bt709_oetf (float v)
 }
 
 float
+gamma22_oetf (float v)
+{
+  return pow (v, 1.0 / 2.2);
+}
+
+float
+gamma22_eotf (float v)
+{
+  return pow (v, 2.2);
+}
+
+float
+gamma28_oetf (float v)
+{
+  return pow (v, 1.0 / 2.8);
+}
+
+float
+gamma28_eotf (float v)
+{
+  return pow (v, 2.8);
+}
+
+float
 hlg_eotf (float v)
 {
   const float a = 0.17883277;
@@ -208,28 +232,38 @@ apply_cicp_eotf (vec3 color,
 {
   switch (transfer_function)
     {
-    case 1:
-    case 6:
-    case 14:
-    case 15:
+    case 1u:
+    case 6u:
+    case 14u:
+    case 15u:
       return vec3 (bt709_eotf (color.r),
                    bt709_eotf (color.g),
                    bt709_eotf (color.b));
 
-    case 8:
+    case 4u:
+      return vec3 (gamma22_eotf (color.r),
+                   gamma22_eotf (color.g),
+                   gamma22_eotf (color.b));
+
+    case 5u:
+      return vec3 (gamma28_eotf (color.r),
+                   gamma28_eotf (color.g),
+                   gamma28_eotf (color.b));
+
+    case 8u:
       return color;
 
-    case 13:
+    case 13u:
       return vec3 (srgb_eotf (color.r),
                    srgb_eotf (color.g),
                    srgb_eotf (color.b));
 
-    case 16:
+    case 16u:
       return vec3 (pq_eotf (color.r),
                    pq_eotf (color.g),
                    pq_eotf (color.b));
 
-    case 18:
+    case 18u:
       return vec3 (hlg_eotf (color.r),
                    hlg_eotf (color.g),
                    hlg_eotf (color.b));
@@ -245,28 +279,38 @@ apply_cicp_oetf (vec3 color,
 {
   switch (transfer_function)
     {
-    case 1:
-    case 6:
-    case 14:
-    case 15:
+    case 1u:
+    case 6u:
+    case 14u:
+    case 15u:
       return vec3 (bt709_oetf (color.r),
                    bt709_oetf (color.g),
                    bt709_oetf (color.b));
 
-    case 8:
+    case 4u:
+      return vec3 (gamma22_oetf (color.r),
+                   gamma22_oetf (color.g),
+                   gamma22_oetf (color.b));
+
+    case 5u:
+      return vec3 (gamma28_oetf (color.r),
+                   gamma28_oetf (color.g),
+                   gamma28_oetf (color.b));
+
+    case 8u:
       return color;
 
-    case 13:
+    case 13u:
       return vec3 (srgb_oetf (color.r),
                    srgb_oetf (color.g),
                    srgb_oetf (color.b));
 
-    case 16:
+    case 16u:
       return vec3 (pq_oetf (color.r),
                    pq_oetf (color.g),
                    pq_oetf (color.b));
 
-    case 18:
+    case 18u:
       return vec3 (hlg_oetf (color.r),
                    hlg_oetf (color.g),
                    hlg_oetf (color.b));
@@ -326,11 +370,11 @@ run (out vec4 color,
     pixel = texture (GSK_TEXTURE0, _tex_coord);
 
   if (HAS_VARIATION (VARIATION_REVERSE))
-    pixel = convert_color_to_cicp (color,
+    pixel = convert_color_to_cicp (pixel,
                                    ALT_PREMULTIPLIED,
                                    OUTPUT_COLOR_SPACE, OUTPUT_PREMULTIPLIED);
   else
-    pixel = convert_color_from_cicp (color,
+    pixel = convert_color_from_cicp (pixel,
                                      ALT_PREMULTIPLIED,
                                      OUTPUT_COLOR_SPACE, OUTPUT_PREMULTIPLIED);
 

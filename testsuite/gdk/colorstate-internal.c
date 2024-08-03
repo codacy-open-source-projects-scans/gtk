@@ -18,6 +18,8 @@ TransferTest transfers[] = {
   { "pq", pq_oetf, pq_eotf },
   { "bt709", bt709_oetf, bt709_eotf },
   { "hlg", hlg_oetf, hlg_eotf },
+  { "gamma22", gamma22_oetf, gamma22_eotf },
+  { "gamma28", gamma28_oetf, gamma28_eotf },
 };
 
 static void
@@ -33,78 +35,71 @@ test_transfer (gconstpointer data)
     }
 }
 
-typedef const float Matrix[3][3];
-
 typedef struct
 {
   const char *name;
-  Matrix *to_xyz;
-  Matrix *from_xyz;
+  const float *to_xyz;
+  const float *from_xyz;
 } MatrixTest;
 static MatrixTest matrices[] = {
-  { "srgb", &srgb_to_xyz, &xyz_to_srgb },
-  { "rec2020", &rec2020_to_xyz, &xyz_to_rec2020 },
-  { "pal", &pal_to_xyz, &xyz_to_pal },
-  { "ntsc", &ntsc_to_xyz, &xyz_to_ntsc },
-  { "p3", &p3_to_xyz, &xyz_to_p3 },
-  { "srgb<>rec2020", &rec2020_to_srgb, &srgb_to_rec2020 },
+  { "srgb", srgb_to_xyz, xyz_to_srgb },
+  { "rec2020", rec2020_to_xyz, xyz_to_rec2020 },
+  { "pal", pal_to_xyz, xyz_to_pal },
+  { "ntsc", ntsc_to_xyz, xyz_to_ntsc },
+  { "p3", p3_to_xyz, xyz_to_p3 },
+  { "srgb<>rec2020", rec2020_to_srgb, srgb_to_rec2020 },
 };
 
+#define IDX(i,j) 3*i+j
 static inline void
-multiply (float       res[3][3],
-          const float m1[3][3],
-          const float m2[3][3])
+multiply (float       res[9],
+          const float m1[9],
+          const float m2[9])
 {
   for (int i = 0; i < 3; i++)
     for (int j = 0; j < 3; j++)
-      res[i][j] = m1[i][0] * m2[0][j] + m1[i][1] * m2[1][j] + m1[i][2] * m2[2][j];
+      res[IDX(i,j)] =   m1[IDX(i,0)] * m2[IDX(0,j)]
+                      + m1[IDX(i,1)] * m2[IDX(1,j)]
+                      + m1[IDX(i,2)] * m2[IDX(2,j)];
 }
 
 static inline void
-difference (float       res[3][3],
-            const float m1[3][3],
-            const float m2[3][3])
+difference (float       res[9],
+            const float m1[9],
+            const float m2[9])
 {
-  for (int i = 0; i < 3; i++)
-    for (int j = 0; j < 3; j++)
-      res[i][j] = m1[i][j] - m2[i][j];
+  for (int i = 0; i < 9; i++)
+    res[i] = m1[i] - m2[i];
 }
 
 static float
-norm (const float m[3][3])
+norm (const float m[9])
 {
   float sum = 0;
 
-  for (int i = 0; i < 3; i++)
-    for (int j = 0; j < 3; j++)
-      sum += m[i][j] * m[i][j];
+  for (int i = 0; i < 9; i++)
+    sum += m[i] * m[i];
 
   return sqrtf (sum);
 }
 
-static const float identity[3][3] = {
-  { 1, 0, 0 },
-  { 0, 1, 0 },
-  { 0, 0, 1 },
-};
-
 static void
-print_matrix (const float m[3][3])
+print_matrix (const float m[9])
 {
   g_print ("%f %f %f\n%f %f %f\n%f %f %f\n",
-           m[0][0], m[0][1], m[0][2],
-           m[1][0], m[1][1], m[1][2],
-           m[2][0], m[2][1], m[2][2]);
+           m[0], m[1], m[2],
+           m[3], m[4], m[5],
+           m[6], m[7], m[8]);
 }
 
 static void
 test_matrix (gconstpointer data)
 {
   MatrixTest *matrix = (MatrixTest *) data;
-  float res[3][3];
-  float res2[3][3];
+  float res[9];
+  float res2[9];
 
-  multiply (res, *matrix->to_xyz, *matrix->from_xyz);
+  multiply (res, matrix->to_xyz, matrix->from_xyz);
 
   if (g_test_verbose ())
     print_matrix (res);
@@ -120,7 +115,7 @@ test_matrix (gconstpointer data)
 static void
 test_srgb_to_rec2020 (void)
 {
-  float m[3][3], res[3][3];
+  float m[9], res[9];
 
   multiply (m, xyz_to_rec2020, srgb_to_xyz);
   difference (res, m, srgb_to_rec2020);
@@ -131,7 +126,7 @@ test_srgb_to_rec2020 (void)
 static void
 test_rec2020_to_srgb (void)
 {
-  float m[3][3], res[3][3];
+  float m[9], res[9];
 
   multiply (m, xyz_to_srgb, rec2020_to_xyz);
   difference (res, m, rec2020_to_srgb);
