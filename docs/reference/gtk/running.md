@@ -262,6 +262,12 @@ A number of options affect behavior instead of logging:
 `high-depth`
 : Use high bit depth rendering if possible
 
+`linear`
+: Enable linear rendering
+
+`hdr`
+: Force HDR rendering
+
 `no-vsync`
 : Repaint instantly (uses 100% CPU with animations)
 
@@ -279,9 +285,6 @@ are only available when GTK has been configured with `-Ddebug=true`.
 
 `renderer`
 : General renderer information
-
-`opengl`
-: OpenGL renderer information
 
 `vulkan`
 : Check Vulkan errors
@@ -314,6 +317,9 @@ A number of options affect behavior instead of logging:
 
 `cairo`
 : Overlay error pattern over cairo drawing (finds fallbacks)
+
+`occlusion`
+: Overlay highlight over areas optimized via occlusion culling
 
 The special value `all` can be used to turn on all debug options. The special
 value `help` can be used to obtain a list of all supported debug options.
@@ -461,11 +467,11 @@ using and the GDK backend supports them:
 This variable can be set to a list of values, which cause GSK to
 disable certain optimizations of the "ngl" and "vulkan" renderer.
 
-`uber`
-: Don't use the uber shader
-
 `clear`
 : Use shaders instead of vkCmdClearAttachment()/glClear()
+
+`merge`
+: USe one vkCmdDraw()/glDrawArrays() per operation
 
 `blit`
 : Use shaders instead of vkCmdBlit()/glBlitFramebuffer()
@@ -475,6 +481,13 @@ disable certain optimizations of the "ngl" and "vulkan" renderer.
 
 `mipmap`
 : Avoid creating mipmaps
+
+`to-image`
+: Don't fast-path creation of images for nodes
+
+`occlusion`
+: Disable occlusion culling via opacity tracking
+
 
 The special value `all` can be used to turn on all values. The special
 value `help` can be used to obtain a list of all supported values.
@@ -563,6 +576,12 @@ To enable the GTK inspector, you can use the <kbd>Control</kbd>+<kbd>Shift</kbd>
 <kbd>Control</kbd>+<kbd>Shift</kbd>+<kbd>D</kbd> keyboard shortcuts, or
 set the `GTK_DEBUG=interactive` environment variable.
 
+After opening the inspector, it listens for a few keyboard shortcuts that
+let you use its frame and event recording functionality without moving the
+focus away from the application window: <kbd>Super</kbd>+<kbd>R</kbd> turns
+the recording on and off, and <kbd>Super</kbd>+<kbd>C</kbd> records a single
+frame.
+
 There are a few more environment variables that can be set to influence
 how the inspector renders its UI. `GTK_INSPECTOR_DISPLAY` and
 `GTK_INSPECTOR_RENDERER` determine the GDK display and the GSK
@@ -572,6 +591,7 @@ In some situations, it may be inappropriate to give users access to
 the GTK inspector. The keyboard shortcuts can be disabled with the
 `enable-inspector-keybinding` key in the `org.gtk.Settings.Debug`
 GSettings schema.
+
 
 ## Profiling
 
