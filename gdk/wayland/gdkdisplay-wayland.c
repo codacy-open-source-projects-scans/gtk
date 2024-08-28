@@ -535,7 +535,8 @@ gdk_registry_handle_global (void               *data,
                           &wp_presentation_interface,
                           MIN (version, 1));
     }
-  else if (strcmp (interface, xx_color_manager_v4_interface.name) == 0)
+  else if (strcmp (interface, xx_color_manager_v4_interface.name) == 0 &&
+           gdk_has_feature (GDK_FEATURE_COLOR_MANAGEMENT))
     {
       display_wayland->color = gdk_wayland_color_new (display_wayland, registry, id, version);
     }
@@ -1943,7 +1944,8 @@ init_settings (GdkDisplay *display)
   GSettings *settings;
   int i;
 
-  if (gdk_should_use_portal ())
+  if (gdk_should_use_portal () &&
+      !(gdk_display_get_debug_flags (display) & GDK_DEBUG_DEFAULT_SETTINGS))
     {
       GVariant *ret;
       GError *error = NULL;
