@@ -33,7 +33,18 @@
  *
  * `GdkTexture` is an immutable object: That means you cannot change
  * anything about it other than increasing the reference count via
- * [method@GObject.Object.ref], and consequently, it is a thread-safe object.
+ * [method@GObject.Object.ref], and consequently, it is a threadsafe object.
+ *
+ * GDK provides a number of threadsafe texture loading functions:
+ * [ctor@Gdk.Texture.new_from_resource],
+ * [ctor@Gdk.Texture.new_from_bytes],
+ * [ctor@Gdk.Texture.new_from_file],
+ * [ctor@Gdk.Texture.new_from_filename],
+ * [ctor@Gdk.Texture.new_for_pixbuf]. Note that these are meant for loading
+ * icons and resources that are shipped with the toolkit or application. It
+ * is recommended that you use a dedicated image loading framework such as
+ * [glycin](https://lib.rs/crates/glycin), if you need to load untrusted image
+ * data.
  */
 
 #include "config.h"
@@ -384,7 +395,7 @@ gdk_texture_class_init (GdkTextureClass *klass)
   gobject_class->finalize = gdk_texture_finalize;
 
   /**
-   * GdkTexture:width: (attributes org.gtk.Property.get=gdk_texture_get_width)
+   * GdkTexture:width:
    *
    * The width of the texture, in pixels.
    */
@@ -399,7 +410,7 @@ gdk_texture_class_init (GdkTextureClass *klass)
                       G_PARAM_EXPLICIT_NOTIFY);
 
   /**
-   * GdkTexture:height: (attributes org.gtk.Property.get=gdk_texture_get_height)
+   * GdkTexture:height:
    *
    * The height of the texture, in pixels.
    */
@@ -414,7 +425,7 @@ gdk_texture_class_init (GdkTextureClass *klass)
                       G_PARAM_EXPLICIT_NOTIFY);
 
   /**
-   * GdkTexture:color-state: (attributes org.gtk.Property.get=gdk_texture_get_color_state)
+   * GdkTexture:color-state:
    *
    * The color state of the texture.
    *
@@ -770,7 +781,7 @@ gdk_texture_new_from_filename (const char  *path,
 }
 
 /**
- * gdk_texture_get_width: (attributes org.gtk.Method.get_property=width)
+ * gdk_texture_get_width:
  * @texture: a `GdkTexture`
  *
  * Returns the width of @texture, in pixels.
@@ -786,7 +797,7 @@ gdk_texture_get_width (GdkTexture *texture)
 }
 
 /**
- * gdk_texture_get_height: (attributes org.gtk.Method.get_property=height)
+ * gdk_texture_get_height:
  * @texture: a `GdkTexture`
  *
  * Returns the height of the @texture, in pixels.
@@ -802,7 +813,7 @@ gdk_texture_get_height (GdkTexture *texture)
 }
 
 /**
- * gdk_texture_get_color_state: (attributes org.gtk.Method.get_property=color-state)
+ * gdk_texture_get_color_state:
  * @self: a `GdkTexture`
  *
  * Returns the color state associated with the texture.

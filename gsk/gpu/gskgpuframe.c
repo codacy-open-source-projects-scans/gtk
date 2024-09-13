@@ -74,6 +74,7 @@ gsk_gpu_frame_default_cleanup (GskGpuFrame *self)
     }
   gsk_gpu_ops_set_size (&priv->ops, 0);
 
+  priv->first_op = NULL;
   priv->last_op = NULL;
 }
 
@@ -107,7 +108,7 @@ gsk_gpu_frame_default_upload_texture (GskGpuFrame *self,
 {
   GskGpuImage *image;
 
-  image = gsk_gpu_upload_texture_op_try (self, with_mipmap, texture);
+  image = gsk_gpu_upload_texture_op_try (self, with_mipmap, 0, GSK_SCALING_FILTER_NEAREST, texture);
 
   return image;
 }
@@ -282,6 +283,9 @@ gsk_gpu_frame_seal_ops (GskGpuFrame *self)
   GskGpuFramePrivate *priv = gsk_gpu_frame_get_instance_private (self);
   GskGpuOp *last, *op;
   gsize i;
+
+  if (gsk_gpu_ops_get_size (&priv->ops) == 0)
+    return;
 
   priv->first_op = (GskGpuOp *) gsk_gpu_ops_index (&priv->ops, 0);
 
