@@ -198,7 +198,8 @@ gsk_vulkan_device_create_vk_pipeline_layout (GskVulkanDevice       *self,
 static GskGpuImage *
 gsk_vulkan_device_create_offscreen_image (GskGpuDevice   *device,
                                           gboolean        with_mipmap,
-                                          GdkMemoryDepth  depth,
+                                          GdkMemoryFormat format,
+                                          gboolean        is_srgb,
                                           gsize           width,
                                           gsize           height)
 {
@@ -206,8 +207,8 @@ gsk_vulkan_device_create_offscreen_image (GskGpuDevice   *device,
 
   return gsk_vulkan_image_new_for_offscreen (self,
                                              with_mipmap,
-                                             gdk_memory_depth_get_format (depth),
-                                             gdk_memory_depth_is_srgb (depth),
+                                             format,
+                                             is_srgb,
                                              width,
                                              height);
 }
@@ -772,7 +773,7 @@ gsk_vulkan_device_get_vk_render_pass (GskVulkanDevice    *self,
                                       NULL,
                                       &render_pass);
 
-  cached_result = g_memdup (&cache_key, sizeof (RenderPassCacheKey));
+  cached_result = g_memdup2 (&cache_key, sizeof (RenderPassCacheKey));
   cached_result->render_pass = render_pass;
 
   g_hash_table_insert (self->render_pass_cache, cached_result, cached_result);
@@ -1024,7 +1025,7 @@ gsk_vulkan_device_get_vk_pipeline (GskVulkanDevice           *self,
   g_free (fragment_shader_name);
   g_free (vertex_shader_name);
 
-  cached_result = g_memdup (&cache_key, sizeof (PipelineCacheKey));
+  cached_result = g_memdup2 (&cache_key, sizeof (PipelineCacheKey));
   cached_result->vk_pipeline = vk_pipeline;
   g_hash_table_add (self->pipeline_cache, cached_result);
   gdk_display_vulkan_pipeline_cache_updated (display);
