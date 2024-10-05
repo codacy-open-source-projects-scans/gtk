@@ -1131,6 +1131,9 @@ get_cursor_theme (GdkWaylandDisplay *display_wayland,
         return theme;
     }
 
+  if (strcmp (name, "default") != 0)
+    return get_cursor_theme (display_wayland, "default", size);
+
   /* This may fall back to builtin cursors */
   return wl_cursor_theme_create ("/usr/share/icons/default/cursors", size, display_wayland->shm);
 }
@@ -1227,7 +1230,7 @@ _gdk_wayland_display_load_cursor_theme (GdkWaylandDisplay *display_wayland)
   if (gdk_display_get_setting (GDK_DISPLAY (display_wayland), "gtk-cursor-theme-size", &v))
     size = g_value_get_int (&v);
   else
-    size = 32;
+    size = 24;
   g_value_unset (&v);
 
   g_value_init (&v, G_TYPE_STRING);
@@ -1761,7 +1764,7 @@ static TranslationEntry translations[] = {
   { FALSE, "org.gnome.desktop.interface", "gtk-theme", "gtk-theme-name" , G_TYPE_STRING, { .s = "Adwaita" } },
   { FALSE, "org.gnome.desktop.interface", "icon-theme", "gtk-icon-theme-name", G_TYPE_STRING, { .s = "gnome" } },
   { FALSE, "org.gnome.desktop.interface", "cursor-theme", "gtk-cursor-theme-name", G_TYPE_STRING, { .s = "Adwaita" } },
-  { FALSE, "org.gnome.desktop.interface", "cursor-size", "gtk-cursor-theme-size", G_TYPE_INT, { .i = 32 } },
+  { FALSE, "org.gnome.desktop.interface", "cursor-size", "gtk-cursor-theme-size", G_TYPE_INT, { .i = 24 } },
   { FALSE, "org.gnome.desktop.interface", "font-name", "gtk-font-name", G_TYPE_STRING, { .s = "Cantarell 11" } },
   { FALSE, "org.gnome.desktop.interface", "cursor-blink", "gtk-cursor-blink", G_TYPE_BOOLEAN,  { .b = TRUE } },
   { FALSE, "org.gnome.desktop.interface", "cursor-blink-time", "gtk-cursor-blink-time", G_TYPE_INT, { .i = 1200 } },
@@ -2005,6 +2008,7 @@ init_settings (GdkDisplay *display)
           g_debug ("Received no portal settings");
           g_clear_pointer (&iter, g_variant_iter_free);
           g_clear_pointer (&ret, g_variant_unref);
+          g_clear_object (&display_wayland->settings_portal);
 
           goto fallback;
         }

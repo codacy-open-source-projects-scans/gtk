@@ -100,7 +100,7 @@ gsk_gl_renderer_dmabuf_downloader_supports (GdkDmabufDownloader  *downloader,
   return TRUE;
 }
 
-static void
+static gboolean
 gsk_gl_renderer_dmabuf_downloader_download (GdkDmabufDownloader *downloader_,
                                             GdkDmabufTexture    *texture,
                                             GdkMemoryFormat      format,
@@ -115,7 +115,12 @@ gsk_gl_renderer_dmabuf_downloader_download (GdkDmabufDownloader *downloader_,
   int width, height;
   GskRenderNode *node;
 
+  if (!gsk_gl_renderer_dmabuf_downloader_supports (downloader_, texture, NULL))
+    return FALSE;
+
   previous = gdk_gl_context_get_current ();
+  if (previous)
+    g_object_ref (previous);
 
   width = gdk_texture_get_width (GDK_TEXTURE (texture));
   height = gdk_texture_get_height (GDK_TEXTURE (texture));
@@ -133,9 +138,14 @@ gsk_gl_renderer_dmabuf_downloader_download (GdkDmabufDownloader *downloader_,
   g_object_unref (native);
 
   if (previous)
-    gdk_gl_context_make_current (previous);
+    {
+      gdk_gl_context_make_current (previous);
+      g_object_unref (previous);
+    }
   else
     gdk_gl_context_clear_current ();
+
+  return TRUE;
 }
 
 static void
@@ -148,7 +158,6 @@ static void
 gsk_gl_renderer_dmabuf_downloader_init (GdkDmabufDownloaderInterface *iface)
 {
   iface->close = gsk_gl_renderer_dmabuf_downloader_close;
-  iface->supports = gsk_gl_renderer_dmabuf_downloader_supports;
   iface->download = gsk_gl_renderer_dmabuf_downloader_download;
 }
 

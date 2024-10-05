@@ -1405,9 +1405,6 @@ gdk_display_create_vulkan_device (GdkDisplay  *display,
 {
   G_GNUC_UNUSED gint64 start_time = GDK_PROFILER_CURRENT_TIME;
   uint32_t i, j, k;
-  const char *override;
-  gboolean list_devices;
-  int first, last;
   GdkVulkanFeatures skip_features;
 
   uint32_t n_devices = 0;
@@ -1425,9 +1422,6 @@ gdk_display_create_vulkan_device (GdkDisplay  *display,
   devices = g_newa (VkPhysicalDevice, n_devices);
   GDK_VK_CHECK(vkEnumeratePhysicalDevices, display->vk_instance, &n_devices, devices);
 
-  first = 0;
-  last = n_devices;
-
   skip_features = gdk_parse_debug_var ("GDK_VULKAN_DISABLE",
       "GDK_VULKAN_DISABLE can be set to a list of Vulkan features to disable.\n",
       gsk_vulkan_feature_keys,
@@ -1435,35 +1429,7 @@ gdk_display_create_vulkan_device (GdkDisplay  *display,
   if (skip_features & GDK_VULKAN_FEATURE_YCBCR)
     skip_features |= GDK_VULKAN_FEATURE_DMABUF;
 
-  override = g_getenv ("GDK_VULKAN_DEVICE");
-  list_devices = FALSE;
-  if (override)
-    {
-      if (g_strcmp0 (override, "list") == 0)
-        list_devices = TRUE;
-      else
-        {
-          gint64 device_idx;
-          GError *error2 = NULL;
-
-          if (!g_ascii_string_to_signed (override, 10, 0, G_MAXINT, &device_idx, &error2))
-            {
-              g_warning ("Failed to parse %s: %s", "GDK_VULKAN_DEVICE", error2->message);
-              g_error_free (error2);
-              device_idx = -1;
-            }
-
-          if (device_idx < 0 || device_idx >= n_devices)
-            g_warning ("%s value out of range, ignoring", "GDK_VULKAN_DEVICE");
-          else
-            {
-              first = device_idx;
-              last = first + 1;
-            }
-        }
-    }
-
-  if (list_devices || GDK_DISPLAY_DEBUG_CHECK (display, VULKAN))
+  if (GDK_DISPLAY_DEBUG_CHECK (display, VULKAN))
     {
       for (i = 0; i < n_devices; i++)
         {
@@ -1514,7 +1480,7 @@ gdk_display_create_vulkan_device (GdkDisplay  *display,
         }
     }
 
-  for (i = first; i < last; i++)
+  for (i = 0; i < n_devices; i++)
     {
       GdkVulkanFeatures features, device_features;
       uint32_t n_queue_props;
@@ -1530,7 +1496,7 @@ gdk_display_create_vulkan_device (GdkDisplay  *display,
         {
           if (queue_props[j].queueFlags & VK_QUEUE_GRAPHICS_BIT)
             {
-              VkPhysicalDeviceSwapchainMaintenance1FeaturesEXT swapchain_maintenance1_features = { 
+              VkPhysicalDeviceSwapchainMaintenance1FeaturesEXT swapchain_maintenance1_features = {
                 .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_EXT,
                 .swapchainMaintenance1 = VK_TRUE,
               };
@@ -1945,19 +1911,20 @@ gdk_vulkan_init_dmabuf (GdkDisplay *display)
       g_warn_if_fail (modifier_props.drmFormatModifierCount < sizeof (modifier_list));
       for (j = 0; j < modifier_props.drmFormatModifierCount; j++)
         {
+          gboolean advertise = modifier_list[j].drmFormatModifier != DRM_FORMAT_MOD_LINEAR;
+
           GDK_DISPLAY_DEBUG (display, DMABUF,
-                             "Vulkan supports dmabuf format %.4s::%016llx with %u planes and features 0x%x",
+                             "Vulkan %s dmabuf format %.4s::%016"G_GINT64_MODIFIER"x with %u planes and features 0x%x",
+                             advertise ? "advertises" : "supports",
                              (char *) &fourcc,
-                             (long long unsigned) modifier_list[j].drmFormatModifier,
+                             modifier_list[j].drmFormatModifier,
                              modifier_list[j].drmFormatModifierPlaneCount,
                              modifier_list[j].drmFormatModifierTilingFeatures);
 
-          if (modifier_list[j].drmFormatModifier == DRM_FORMAT_MOD_LINEAR)
-            continue;
-
-          gdk_dmabuf_formats_builder_add_format (vulkan_builder,
-                                                 fourcc,
-                                                 modifier_list[j].drmFormatModifier);
+          if (advertise)
+            gdk_dmabuf_formats_builder_add_format (vulkan_builder,
+                                                   fourcc,
+                                                   modifier_list[j].drmFormatModifier);
         }
     }
 

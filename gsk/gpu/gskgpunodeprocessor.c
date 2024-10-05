@@ -532,7 +532,7 @@ gsk_gpu_node_processor_get_clip_bounds (GskGpuNodeProcessor *self,
     {
       if (!gsk_rect_intersection (&scissor, &self->clip.rect.bounds, out_bounds))
         {
-          g_warning ("Clipping is broken, everything is clipped, but we didn't early-exit.\n");
+          g_warning ("Clipping is broken, everything is clipped, but we didn't early-exit.");
           *out_bounds = self->clip.rect.bounds;
         }
     }
@@ -1039,6 +1039,19 @@ gsk_gpu_node_processor_add_node_clipped (GskGpuNodeProcessor   *self,
     }
   else
     {
+      graphene_rect_t scissored_clip;
+
+      if (gsk_gpu_node_processor_rect_device_to_clip (self,
+                                                      &GSK_RECT_INIT_CAIRO (&self->scissor),
+                                                      &scissored_clip))
+        {
+          if (!gsk_rect_intersection (&scissored_clip, &clip, &clip))
+            {
+              gsk_gpu_clip_init_copy (&self->clip, &old_clip);
+              return;
+            }
+        }
+
       if (!gsk_gpu_clip_intersect_rect (&self->clip, &old_clip, &clip))
         {
           GskGpuImage *image;
@@ -3252,6 +3265,7 @@ gsk_gpu_node_processor_add_repeat_node (GskGpuNodeProcessor *self,
   const graphene_rect_t *child_bounds;
   graphene_rect_t bounds;
   float tile_left, tile_right, tile_top, tile_bottom;
+  gboolean avoid_offscreen;
 
   child = gsk_repeat_node_get_child (node);
   child_bounds = gsk_repeat_node_get_child_bounds (node);
@@ -3266,10 +3280,12 @@ gsk_gpu_node_processor_add_repeat_node (GskGpuNodeProcessor *self,
   tile_right = (bounds.origin.x + bounds.size.width - child_bounds->origin.x) / child_bounds->size.width;
   tile_top = (bounds.origin.y - child_bounds->origin.y) / child_bounds->size.height;
   tile_bottom = (bounds.origin.y + bounds.size.height - child_bounds->origin.y) / child_bounds->size.height;
+  avoid_offscreen = !gsk_gpu_frame_should_optimize (self->frame, GSK_GPU_OPTIMIZE_REPEAT);
 
   /* the 1st check tests that a tile fully fits into the bounds,
    * the 2nd check is to catch the case where it fits exactly */
-  if (ceilf (tile_left) < floorf (tile_right) &&
+  if (!avoid_offscreen &&
+      ceilf (tile_left) < floorf (tile_right) &&
       bounds.size.width > child_bounds->size.width)
     {
       if (ceilf (tile_top) < floorf (tile_bottom) &&
@@ -3307,7 +3323,8 @@ gsk_gpu_node_processor_add_repeat_node (GskGpuNodeProcessor *self,
             }
         }
     }
-  else if (ceilf (tile_top) < floorf (tile_bottom) &&
+  else if (!avoid_offscreen &&
+           ceilf (tile_top) < floorf (tile_bottom) &&
            bounds.size.height > child_bounds->size.height)
     {
       /* repeat horizontally, tile vertically */

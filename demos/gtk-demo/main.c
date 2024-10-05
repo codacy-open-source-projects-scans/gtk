@@ -156,11 +156,6 @@ gtk_demo_run (GtkDemo   *self,
   if (result == NULL)
     return FALSE;
 
-  if (GTK_IS_WINDOW (result))
-    {
-      gtk_window_set_transient_for (GTK_WINDOW (result), GTK_WINDOW (window));
-      gtk_window_set_modal (GTK_WINDOW (result), TRUE);
-    }
   return TRUE;
 }
 
@@ -832,9 +827,6 @@ static gboolean
 demo_can_run (GtkWidget  *window,
               const char *name)
 {
-  if (name != NULL && strcmp (name, "gltransition") == 0)
-    return GSK_IS_GL_RENDERER (gtk_native_get_renderer (GTK_NATIVE (window)));
-
   return TRUE;
 }
 

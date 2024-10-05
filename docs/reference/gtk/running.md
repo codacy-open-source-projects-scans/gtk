@@ -380,13 +380,6 @@ does not support them.
 `base-instance`
 :GL_EXT_base_instance
 
-### `GDK_VULKAN_DEVICE`
-
-This variable can be set to the index of a Vulkan device to override
-the default selection of the device that is used for Vulkan rendering.
-The special value `list` can be used to obtain a list of all Vulkan
-devices.
-
 ### `GDK_VULKAN_DISABLE`
 
 This variable can be set to a list of values, which cause GDK to
@@ -430,14 +423,8 @@ using and the GDK backend supports them:
 `cairo`
 : Selects the fallback Cairo renderer
 
-`opengl`
-: Selects the default OpenGL renderer
-
-`gl`
-: Selects the "gl" OpenGL renderer
-
 `ngl`
-: Selects the "ngl" OpenGL renderer
+: Selects the OpenGL renderer
 
 `vulkan`
 : Selects the Vulkan renderer
