@@ -51,6 +51,12 @@ typedef enum {
   GDK_VULKAN_FEATURE_SWAPCHAIN_MAINTENANCE      = 1 << 5,
 } GdkVulkanFeatures;
 
+#define GDK_VULKAN_N_FEATURES 6
+
+#ifdef GDK_RENDERING_VULKAN
+extern const GdkDebugKey gdk_vulkan_feature_keys[];
+#endif
+
 /* Tracks information about the device grab on this display */
 typedef struct
 {
@@ -120,7 +126,7 @@ struct _GdkDisplay
   GdkDmabufFormats *vk_dmabuf_formats;
   GdkVulkanFeatures vulkan_features;
 
-  guint vulkan_refcount;
+  GError *vulkan_error;
 #endif /* GDK_RENDERING_VULKAN */
 
   /* egl info */
@@ -154,7 +160,6 @@ struct _GdkDisplayClass
   void                       (*beep)               (GdkDisplay *display);
   void                       (*sync)               (GdkDisplay *display);
   void                       (*flush)              (GdkDisplay *display);
-  gboolean                   (*has_pending)        (GdkDisplay *display);
   void                       (*queue_events)       (GdkDisplay *display);
   void                       (*make_default)       (GdkDisplay *display);
 
@@ -234,6 +239,8 @@ void                _gdk_display_unpause_events       (GdkDisplay       *display
 
 void                gdk_display_init_dmabuf           (GdkDisplay       *self);
 
+gboolean            gdk_display_prepare_vulkan        (GdkDisplay       *self,
+                                                       GError          **error);
 gboolean            gdk_display_has_vulkan_feature    (GdkDisplay       *self,
                                                        GdkVulkanFeatures feature);
 GdkVulkanContext *  gdk_display_create_vulkan_context (GdkDisplay       *self,

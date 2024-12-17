@@ -630,7 +630,7 @@ _gdk_wayland_display_open (const char *display_name)
   display = g_object_new (GDK_TYPE_WAYLAND_DISPLAY, NULL);
   display_wayland = GDK_WAYLAND_DISPLAY (display);
   display_wayland->wl_display = wl_display;
-  display_wayland->event_source = _gdk_wayland_display_event_source_new (display);
+  gdk_wayland_display_install_gsources (display_wayland);
 
   init_settings (display);
 
@@ -731,12 +731,7 @@ gdk_wayland_display_dispose (GObject *object)
 
   g_list_free_full (display_wayland->toplevels, destroy_toplevel);
 
-  if (display_wayland->event_source)
-    {
-      g_source_destroy (display_wayland->event_source);
-      g_source_unref (display_wayland->event_source);
-      display_wayland->event_source = NULL;
-    }
+  gdk_wayland_display_uninstall_gsources (display_wayland);
 
   g_list_free_full (display_wayland->async_roundtrips, (GDestroyNotify) wl_callback_destroy);
 
@@ -899,12 +894,6 @@ gdk_wayland_display_make_default (GdkDisplay *display)
   startup_id = gdk_get_startup_notification_id ();
   if (startup_id)
     display_wayland->startup_notification_id = g_strdup (startup_id);
-}
-
-static gboolean
-gdk_wayland_display_has_pending (GdkDisplay *display)
-{
-  return FALSE;
 }
 
 static gulong
@@ -1073,7 +1062,6 @@ gdk_wayland_display_class_init (GdkWaylandDisplayClass *class)
   display_class->sync = gdk_wayland_display_sync;
   display_class->flush = gdk_wayland_display_flush;
   display_class->make_default = gdk_wayland_display_make_default;
-  display_class->has_pending = gdk_wayland_display_has_pending;
   display_class->queue_events = _gdk_wayland_display_queue_events;
   display_class->get_app_launch_context = _gdk_wayland_display_get_app_launch_context;
   display_class->get_next_serial = gdk_wayland_display_get_next_serial;
@@ -1154,7 +1142,7 @@ get_cursor_theme (GdkWaylandDisplay *display_wayland,
     return get_cursor_theme (display_wayland, "default", size);
 
   /* This may fall back to builtin cursors */
-  return wl_cursor_theme_create ("/usr/share/icons/default/cursors", size, display_wayland->shm);
+  return wl_cursor_theme_create ("/usr/share/icons/Adwaita/cursors", size, display_wayland->shm);
 }
 
 /**
@@ -1977,7 +1965,7 @@ init_settings (GdkDisplay *display)
   GSettings *settings;
   int i;
 
-  if (gdk_should_use_portal () &&
+  if (gdk_display_should_use_portal (display, PORTAL_SETTINGS_INTERFACE, 0) &&
       !(gdk_display_get_debug_flags (display) & GDK_DEBUG_DEFAULT_SETTINGS))
     {
       GVariant *ret;
@@ -2044,7 +2032,7 @@ init_settings (GdkDisplay *display)
               if (entry)
                 {
                   char *a = g_variant_print (v, FALSE);
-                  g_debug ("Using portal setting for %s %s: %s\n", schema_str, key, a);
+                  g_debug ("Using portal setting for %s %s: %s", schema_str, key, a);
                   g_free (a);
                   entry->valid = TRUE;
                   apply_portal_setting (entry, v, display);

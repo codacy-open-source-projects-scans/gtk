@@ -53,8 +53,6 @@
 #define GDK_DEBUG_EVENTS_OR_INPUT (GDK_DEBUG_EVENTS|GDK_DEBUG_INPUT)
 #define GDK_DEBUG_MISC_OR_EVENTS (GDK_DEBUG_MISC|GDK_DEBUG_EVENTS)
 
-GdkWin32Screen *GDK_SURFACE_SCREEN(GObject *win);
-
 /* Use this for hWndInsertAfter (2nd argument to SetWindowPos()) if
  * SWP_NOZORDER flag is used. Otherwise it's unobvious why a particular
  * argument is used. Using NULL is misleading, because
@@ -96,6 +94,29 @@ gboolean   _gdk_modal_blocked       (GdkSurface *surface);
 
 gboolean gdk_win32_ensure_com (void);
 gboolean gdk_win32_ensure_ole (void);
+
+/*
+ * gdk_win32_com_clear:
+ * @com_ptr: pointer to a COM object pointer
+ * 
+ * Clears a reference to a COM object.
+ * 
+ * `com_ptr` must not be `NULL`.
+ * 
+ * If the reference is `NULL` then this function does nothing.
+ * Otherwise, the reference count of the object is decreased
+ * and the pointer is set to NULL.
+ * 
+ * Think of this function like g_clear_object() but for COM objects.
+ */
+#define gdk_win32_com_clear(com_ptr) \
+G_STMT_START {\
+  if (*(com_ptr)) \
+    { \
+      (*(com_ptr))->lpVtbl->Release (*(com_ptr)); \
+      *(com_ptr) = NULL; \
+    } \
+}G_STMT_END
 
 void   _gdk_win32_print_dc             (HDC          hdc);
 
@@ -234,9 +255,6 @@ void _gdk_win32_screen_on_displaychange_event (GdkWin32Screen *screen);
 /* Distributed display manager implementation */
 GdkDisplay *_gdk_win32_display_open (const char *display_name);
 void _gdk_win32_append_event (GdkEvent *event);
-
-void     _gdk_win32_surface_handle_aerosnap      (GdkSurface            *surface,
-                                                  GdkWin32AeroSnapCombo combo);
 
 gboolean gdk_win32_get_surface_hwnd_rect        (GdkSurface  *surface,
                                                  RECT       *rect);

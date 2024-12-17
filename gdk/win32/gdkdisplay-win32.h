@@ -28,7 +28,6 @@
 #include "gdkglversionprivate.h"
 
 /* Used for active language or text service change notifications */
-#define COBJMACROS
 #include <msctf.h>
 
 #ifdef HAVE_EGL
@@ -176,11 +175,6 @@ typedef struct
 
   /* to store keycodes for shift keys */
   int both_shift_pressed[2];
-
-  /* AeroSnap emulation event handling */
-  /* low-level keyboard hook handle */
-  HHOOK aerosnap_keyboard_hook;
-  UINT aerosnap_message;
 } event_records;
 
 struct _GdkWin32Display

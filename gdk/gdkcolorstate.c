@@ -172,12 +172,35 @@ gdk_color_state_get_rec2100_linear (void)
   return GDK_COLOR_STATE_REC2100_LINEAR;
 }
 
+/**
+ * gdk_color_state_get_oklab:
+ *
+ * Returns the color state object representing the oklab color space.
+ *
+ * This is a perceptually uniform color state.
+ *
+ * Returns: the color state object for oklab
+ *
+ * Since: 4.18
+ */
 GdkColorState *
 gdk_color_state_get_oklab (void)
 {
   return GDK_COLOR_STATE_OKLAB;
 }
 
+/**
+ * gdk_color_state_get_oklch:
+ *
+ * Returns the color state object representing the oklch color space.
+ *
+ * This is the polar variant of oklab, in which the hue is encoded as
+ * a polar coordinate.
+ *
+ * Returns: the color state object for oklch
+ *
+ * Since: 4.18
+ */
 GdkColorState *
 gdk_color_state_get_oklch (void)
 {
@@ -389,9 +412,6 @@ oklab_to_oklch (GdkColorState *self,
   values[2] = H;
 }
 
-CONVERT_FUNC (oklch_to_oklab)
-CONVERT_FUNC (oklab_to_oklch)
-
 TRANSFORM_PAIR (srgb_to_oklch,           srgb_to_oklab,           oklab_to_oklch)
 TRANSFORM_PAIR (srgb_linear_to_oklch,    srgb_linear_to_oklab,    oklab_to_oklch)
 TRANSFORM_PAIR (rec2100_pq_to_oklch,     rec2100_pq_to_oklab,     oklab_to_oklch)
@@ -552,8 +572,6 @@ GdkDefaultColorState gdk_default_color_states[] = {
       [GDK_COLOR_STATE_ID_SRGB_LINEAR] = gdk_convert_srgb_to_srgb_linear,
       [GDK_COLOR_STATE_ID_REC2100_PQ] = gdk_convert_srgb_to_rec2100_pq,
       [GDK_COLOR_STATE_ID_REC2100_LINEAR] = gdk_convert_srgb_to_rec2100_linear,
-      [GDK_COLOR_STATE_ID_OKLAB] = gdk_convert_srgb_to_oklab,
-      [GDK_COLOR_STATE_ID_OKLCH] = gdk_convert_srgb_to_oklch,
     },
     .clamp = gdk_color_state_clamp_0_1,
     .cicp = { 1, 13, 0, 1 },
@@ -572,8 +590,6 @@ GdkDefaultColorState gdk_default_color_states[] = {
       [GDK_COLOR_STATE_ID_SRGB] = gdk_convert_srgb_linear_to_srgb,
       [GDK_COLOR_STATE_ID_REC2100_PQ] = gdk_convert_srgb_linear_to_rec2100_pq,
       [GDK_COLOR_STATE_ID_REC2100_LINEAR] = gdk_convert_srgb_linear_to_rec2100_linear,
-      [GDK_COLOR_STATE_ID_OKLAB] = gdk_convert_srgb_linear_to_oklab,
-      [GDK_COLOR_STATE_ID_OKLCH] = gdk_convert_srgb_linear_to_oklch,
     },
     .clamp = gdk_color_state_clamp_0_1,
     .cicp = { 1, 8, 0, 1 },
@@ -592,8 +608,6 @@ GdkDefaultColorState gdk_default_color_states[] = {
       [GDK_COLOR_STATE_ID_SRGB] = gdk_convert_rec2100_pq_to_srgb,
       [GDK_COLOR_STATE_ID_SRGB_LINEAR] = gdk_convert_rec2100_pq_to_srgb_linear,
       [GDK_COLOR_STATE_ID_REC2100_LINEAR] = gdk_convert_rec2100_pq_to_rec2100_linear,
-      [GDK_COLOR_STATE_ID_OKLAB] = gdk_convert_rec2100_pq_to_oklab,
-      [GDK_COLOR_STATE_ID_OKLCH] = gdk_convert_rec2100_pq_to_oklch,
     },
     .clamp = gdk_color_state_clamp_0_1,
     .cicp = { 9, 16, 0, 1 },
@@ -612,47 +626,113 @@ GdkDefaultColorState gdk_default_color_states[] = {
       [GDK_COLOR_STATE_ID_SRGB] = gdk_convert_rec2100_linear_to_srgb,
       [GDK_COLOR_STATE_ID_SRGB_LINEAR] = gdk_convert_rec2100_linear_to_srgb_linear,
       [GDK_COLOR_STATE_ID_REC2100_PQ] = gdk_convert_rec2100_linear_to_rec2100_pq,
-      [GDK_COLOR_STATE_ID_OKLAB] = gdk_convert_rec2100_linear_to_oklab,
-      [GDK_COLOR_STATE_ID_OKLCH] = gdk_convert_rec2100_linear_to_oklch,
     },
     .clamp = gdk_color_state_clamp_unbounded,
     .cicp = { 9, 8, 0, 1 },
   },
-  [GDK_COLOR_STATE_ID_OKLAB] = {
+};
+
+static gboolean
+gdk_builtin_color_state_equal (GdkColorState *self,
+                               GdkColorState *other)
+{
+  return self == other;
+}
+
+static const char *
+gdk_builtin_color_state_get_name (GdkColorState *color_state)
+{
+  GdkBuiltinColorState *self = (GdkBuiltinColorState *) color_state;
+
+  return self->name;
+}
+
+static GdkColorState *
+gdk_builtin_color_state_get_no_srgb_tf (GdkColorState *color_state)
+{
+  return NULL;
+}
+
+static GdkFloatColorConvert
+gdk_builtin_color_state_get_convert_to (GdkColorState  *color_state,
+                                        GdkColorState  *target)
+{
+  GdkBuiltinColorState *self = (GdkBuiltinColorState *) color_state;
+
+  return self->convert_to[GDK_DEFAULT_COLOR_STATE_ID (target)];
+}
+
+static GdkFloatColorConvert
+gdk_builtin_color_state_get_convert_from (GdkColorState  *color_state,
+                                          GdkColorState  *source)
+{
+  GdkBuiltinColorState *self = (GdkBuiltinColorState *) color_state;
+
+  return self->convert_from[GDK_DEFAULT_COLOR_STATE_ID (source)];
+}
+
+static const GdkCicp *
+gdk_builtin_color_state_get_cicp (GdkColorState *color_state)
+{
+  return NULL;
+}
+
+/* }}} */
+
+static const
+GdkColorStateClass GDK_BUILTIN_COLOR_STATE_CLASS = {
+  .free = NULL, /* crash here if this ever happens */
+  .equal = gdk_builtin_color_state_equal,
+  .get_name = gdk_builtin_color_state_get_name,
+  .get_no_srgb_tf = gdk_builtin_color_state_get_no_srgb_tf,
+  .get_convert_to = gdk_builtin_color_state_get_convert_to,
+  .get_convert_from = gdk_builtin_color_state_get_convert_from,
+  .get_cicp = gdk_builtin_color_state_get_cicp,
+  .clamp = gdk_color_state_clamp_unbounded,
+};
+
+GdkBuiltinColorState gdk_builtin_color_states[] = {
+  [GDK_BUILTIN_COLOR_STATE_ID_OKLAB] = {
     .parent = {
-      .klass = &GDK_DEFAULT_COLOR_STATE_CLASS,
+      .klass = &GDK_BUILTIN_COLOR_STATE_CLASS,
       .ref_count = 0,
       .depth = GDK_MEMORY_FLOAT16,
       .rendering_color_state = GDK_COLOR_STATE_SRGB,
     },
     .name = "oklab",
-    .no_srgb = NULL,
     .convert_to = {
       [GDK_COLOR_STATE_ID_SRGB] = gdk_convert_oklab_to_srgb,
       [GDK_COLOR_STATE_ID_SRGB_LINEAR] = gdk_convert_oklab_to_srgb_linear,
       [GDK_COLOR_STATE_ID_REC2100_PQ] = gdk_convert_oklab_to_rec2100_pq,
       [GDK_COLOR_STATE_ID_REC2100_LINEAR] = gdk_convert_oklab_to_rec2100_linear,
-      [GDK_COLOR_STATE_ID_OKLCH] = gdk_convert_oklab_to_oklch,
     },
-    .cicp = { 0, 0, 0, 0 },
+    .convert_from = {
+      [GDK_COLOR_STATE_ID_SRGB] = gdk_convert_srgb_to_oklab,
+      [GDK_COLOR_STATE_ID_SRGB_LINEAR] = gdk_convert_srgb_linear_to_oklab,
+      [GDK_COLOR_STATE_ID_REC2100_PQ] = gdk_convert_rec2100_pq_to_oklab,
+      [GDK_COLOR_STATE_ID_REC2100_LINEAR] = gdk_convert_rec2100_linear_to_oklab,
+    },
   },
-  [GDK_COLOR_STATE_ID_OKLCH] = {
+  [GDK_BUILTIN_COLOR_STATE_ID_OKLCH] = {
     .parent = {
-      .klass = &GDK_DEFAULT_COLOR_STATE_CLASS,
+      .klass = &GDK_BUILTIN_COLOR_STATE_CLASS,
       .ref_count = 0,
       .depth = GDK_MEMORY_FLOAT16,
       .rendering_color_state = GDK_COLOR_STATE_SRGB,
     },
     .name = "oklch",
-    .no_srgb = NULL,
     .convert_to = {
       [GDK_COLOR_STATE_ID_SRGB] = gdk_convert_oklch_to_srgb,
       [GDK_COLOR_STATE_ID_SRGB_LINEAR] = gdk_convert_oklch_to_srgb_linear,
       [GDK_COLOR_STATE_ID_REC2100_PQ] = gdk_convert_oklch_to_rec2100_pq,
       [GDK_COLOR_STATE_ID_REC2100_LINEAR] = gdk_convert_oklch_to_rec2100_linear,
-      [GDK_COLOR_STATE_ID_OKLAB] = gdk_convert_oklch_to_oklab,
     },
-    .cicp = { 0, 0, 0, 0 },
+    .convert_from = {
+      [GDK_COLOR_STATE_ID_SRGB] = gdk_convert_srgb_to_oklch,
+      [GDK_COLOR_STATE_ID_SRGB_LINEAR] = gdk_convert_srgb_linear_to_oklch,
+      [GDK_COLOR_STATE_ID_REC2100_PQ] = gdk_convert_rec2100_pq_to_oklch,
+      [GDK_COLOR_STATE_ID_REC2100_LINEAR] = gdk_convert_rec2100_linear_to_oklch,
+    },
   },
 };
 
@@ -693,11 +773,6 @@ TRANSFORM(cicp_from_rec2100_pq,     pq_eotf,     cicp->from_rec2020, NONE, IDENT
 TRANSFORM(cicp_from_rec2100_linear, NONE,        cicp->from_rec2020, NONE, IDENTITY, cicp->oetf)
 
 #undef cicp
-
-TRANSFORM_PAIR (cicp_to_oklab,   cicp_to_srgb_linear,  srgb_linear_to_oklab)
-TRANSFORM_PAIR (cicp_from_oklab, oklab_to_srgb_linear, cicp_from_srgb_linear)
-TRANSFORM_PAIR (cicp_to_oklch,   cicp_to_srgb_linear,  srgb_linear_to_oklch)
-TRANSFORM_PAIR (cicp_from_oklch, oklch_to_srgb_linear, cicp_from_srgb_linear)
 
 /* }}} */
 /* {{{ Vfuncs */
@@ -758,10 +833,6 @@ gdk_cicp_color_state_get_convert_to (GdkColorState *self,
       return gdk_convert_cicp_to_rec2100_pq;
     case GDK_COLOR_STATE_ID_REC2100_LINEAR:
       return gdk_convert_cicp_to_rec2100_linear;
-    case GDK_COLOR_STATE_ID_OKLAB:
-      return gdk_convert_cicp_to_oklab;
-    case GDK_COLOR_STATE_ID_OKLCH:
-      return gdk_convert_cicp_to_oklch;
 
     case GDK_COLOR_STATE_N_IDS:
     default:
@@ -788,10 +859,6 @@ gdk_cicp_color_state_get_convert_from (GdkColorState *self,
       return gdk_convert_cicp_from_rec2100_pq;
     case GDK_COLOR_STATE_ID_REC2100_LINEAR:
       return gdk_convert_cicp_from_rec2100_linear;
-    case GDK_COLOR_STATE_ID_OKLAB:
-      return gdk_convert_cicp_from_oklab;
-    case GDK_COLOR_STATE_ID_OKLCH:
-      return gdk_convert_cicp_from_oklch;
 
     case GDK_COLOR_STATE_N_IDS:
     default:
@@ -1045,4 +1112,4 @@ gdk_color_state_clamp (GdkColorState *self,
 
 /* }}} */
 
-/* vim:set foldmethod=marker expandtab: */
+/* vim:set foldmethod=marker: */

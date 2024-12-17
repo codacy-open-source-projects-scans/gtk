@@ -4,7 +4,8 @@ compare_render = executable('compare-render',
   c_args: common_cflags + ['-DGTK_COMPILATION'],
 )
 
-node_parser = executable('node-parser', 'node-parser.c',
+node_parser = executable('node-parser', 
+  [ 'node-parser.c', '../testutils.c' ],
   dependencies: libgtk_dep,
   c_args: common_cflags,
 )
@@ -58,6 +59,7 @@ compare_render_tests = [
   'cross-fade-in-rotate',
   'css-background-nogl',
   'dihedral',
+  'dihedral-f',
   'empty-blend',
   'empty-blur',
   'empty-border',
@@ -488,7 +490,8 @@ endforeach
 
 # offload does not work outside of linux
 if os_linux
-  offload = executable('offload', 'offload.c', 'gskrendernodeattach.c',
+  offload = executable('offload',
+    [ 'offload.c', 'gskrendernodeattach.c', '../testutils.c' ],
     dependencies : libgtk_static_dep,
     c_args: common_cflags + [ '-DGTK_COMPILATION=1' ],
   )
@@ -531,7 +534,6 @@ endif
 
 tests = [
   [ 'normalize', [ 'normalize.c', '../reftests/reftest-compare.c' ] ],
-  [ 'transform' ],
   [ 'shader' ],
   [ 'opaque' ],
   [ 'path', [ 'path-utils.c' ], [ 'flaky'] ],
@@ -568,11 +570,12 @@ internal_tests = [
   [ 'boundingbox'],
   [ 'curve', [ ], [ 'flaky' ]],
   [ 'curve-special-cases' ],
-  [ 'diff' ],
   [ 'half-float' ],
+  [ 'not-diff' ],
   [ 'misc'],
   [ 'path-private' ],
   [ 'rounded-rect'],
+  [ 'transform' ],
 ]
 
 foreach t : internal_tests

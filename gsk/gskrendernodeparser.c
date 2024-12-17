@@ -56,6 +56,11 @@
 #include <pango/pangofc-fontmap.h>
 #endif
 
+#ifdef HAVE_PANGOWIN32
+#undef STRICT
+#include <pango/pangowin32.h>
+#endif
+
 #include <hb-subset.h>
 
 #include <glib/gstdio.h>
@@ -1134,8 +1139,6 @@ create_ascii_glyphs (PangoFont *font)
   return result;
 }
 
-#ifdef HAVE_PANGOFT
-
 static void
 delete_file (gpointer data)
 {
@@ -1148,7 +1151,6 @@ delete_file (gpointer data)
 static void
 ensure_fontmap (Context *context)
 {
-  FcConfig *config;
   GPtrArray *files;
 
   if (context->fontmap)
@@ -1156,13 +1158,20 @@ ensure_fontmap (Context *context)
 
   context->fontmap = pango_cairo_font_map_new ();
 
-  config = FcConfigCreate ();
-  pango_fc_font_map_set_config (PANGO_FC_FONT_MAP (context->fontmap), config);
-  FcConfigDestroy (config);
+#ifdef HAVE_PANGOFT
+  {
+    FcConfig *config;
+
+    config = FcConfigCreate ();
+    pango_fc_font_map_set_config (PANGO_FC_FONT_MAP (context->fontmap), config);
+    FcConfigDestroy (config);
+  }
+#endif
 
   files = g_ptr_array_new_with_free_func (delete_file);
 
-  g_object_set_data_full (G_OBJECT (context->fontmap), "font-files", files, (GDestroyNotify) g_ptr_array_unref);
+  g_object_set_data_full (G_OBJECT (context->fontmap), "font-files",
+                          files, (GDestroyNotify) g_ptr_array_unref);
 }
 
 static gboolean
@@ -1170,37 +1179,21 @@ add_font_from_file (Context     *context,
                     const char  *path,
                     GError     **error)
 {
-  FcConfig *config;
-  GPtrArray *files;
-
   ensure_fontmap (context);
 
-  if (!PANGO_IS_FC_FONT_MAP (context->fontmap))
+  if (pango_font_map_add_font_file (context->fontmap, path, error))
     {
-      g_set_error (error,
-                   GTK_CSS_PARSER_ERROR,
-                   GTK_CSS_PARSER_ERROR_FAILED,
-                   "Custom fonts are not implemented for %s", G_OBJECT_TYPE_NAME (context->fontmap));
+      GPtrArray *files;
+
+      files = (GPtrArray *) g_object_get_data (G_OBJECT (context->fontmap), "font-files");
+      g_ptr_array_add (files, g_strdup (path));
+      return TRUE;
+    }
+  else
+    {
+      g_remove (path);
       return FALSE;
     }
-
-  config = pango_fc_font_map_get_config (PANGO_FC_FONT_MAP (context->fontmap));
-
-  if (!FcConfigAppFontAddFile (config, (FcChar8 *) path))
-    {
-      g_set_error (error,
-                   GTK_CSS_PARSER_ERROR,
-                   GTK_CSS_PARSER_ERROR_UNKNOWN_VALUE,
-                   "Failed to load font");
-      return FALSE;
-    }
-
-  files = (GPtrArray *) g_object_get_data (G_OBJECT (context->fontmap), "font-files");
-  g_ptr_array_add (files, g_strdup (path));
-
-  pango_fc_font_map_config_changed (PANGO_FC_FONT_MAP (context->fontmap));
-
-  return TRUE;
 }
 
 static gboolean
@@ -1235,22 +1228,6 @@ add_font_from_bytes (Context  *context,
 
   return result;
 }
-
-#else /* !HAVE_PANGOFT */
-
-static gboolean
-add_font_from_bytes (Context  *context,
-                     GBytes   *bytes,
-                     GError  **error)
-{
-  g_set_error (error,
-               GTK_CSS_PARSER_ERROR,
-               GTK_CSS_PARSER_ERROR_FAILED,
-               "Not implemented");
-  return FALSE;
-}
-
-#endif
 
 static gboolean
 parse_font (GtkCssParser *parser,
@@ -1722,7 +1699,10 @@ parse_hue_interpolation (GtkCssParser *parser,
   else if (gtk_css_parser_try_ident (parser, "decreasing"))
     interpolation = GSK_HUE_INTERPOLATION_DECREASING;
   else
-    return FALSE;
+    {
+      gtk_css_parser_error_value (parser, "Unknown value for hue interpolation");
+      return FALSE;
+    }
 
   *((GskHueInterpolation *)out_value) = interpolation;
   return TRUE;
@@ -2629,11 +2609,11 @@ unpack_glyphs (PangoFont        *font,
         }
       else
         {
-          PangoRectangle ink_rect;
+          PangoRectangle rect;
 
-          pango_font_get_glyph_extents (font, gi->glyph, &ink_rect, NULL);
+          pango_font_get_glyph_extents (font, gi->glyph, NULL, &rect);
 
-          gi->geometry.width = ink_rect.width;
+          gi->geometry.width = rect.width;
         }
     }
 
@@ -3348,7 +3328,8 @@ printer_init_check_color_state (Printer       *printer,
 {
   gpointer name;
 
-  if (GDK_IS_DEFAULT_COLOR_STATE (cs))
+  if (GDK_IS_DEFAULT_COLOR_STATE (cs) ||
+      GDK_IS_BUILTIN_COLOR_STATE (cs))
     return;
 
   if (!g_hash_table_lookup_extended (printer->named_color_states, cs, NULL, &name))
@@ -3792,7 +3773,8 @@ static void
 print_color_state (Printer       *p,
                    GdkColorState *color_state)
 {
-  if (GDK_IS_DEFAULT_COLOR_STATE (color_state))
+  if (GDK_IS_DEFAULT_COLOR_STATE (color_state) ||
+      GDK_IS_BUILTIN_COLOR_STATE (color_state))
     {
       g_string_append (p->str, gdk_color_state_get_name (color_state));
     }

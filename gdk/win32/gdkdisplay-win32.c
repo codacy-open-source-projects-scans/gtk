@@ -527,18 +527,16 @@ _gdk_win32_display_open (const char *display_name)
 
   GDK_NOTE (MISC, g_print ("gdk_display_open: %s\n", (display_name ? display_name : "NULL")));
 
-  if (display_name == NULL || g_ascii_strcasecmp (display_name, gdk_display_get_name (display)) == 0)
+  if (display != NULL)
     {
-      if (display != NULL)
-        {
-          GDK_NOTE (MISC, g_print ("... return existing gdkdisplay\n"));
-          return display;
-        }
+      GDK_NOTE (MISC, g_print ("... Display is already open\n"));
+      return NULL;
     }
-  else
+
+  if (display_name != NULL)
     {
       /* we don't really support multiple GdkDisplay's on Windows at this point */
-      GDK_NOTE (MISC, g_print ("... return NULL\n"));
+      GDK_NOTE (MISC, g_print ("... win32 does not support named displays, but given name was \"%s\"\n", display_name));
       return NULL;
     }
 
@@ -658,25 +656,17 @@ gdk_win32_display_get_name (GdkDisplay *display)
 static void
 gdk_win32_display_beep (GdkDisplay *display)
 {
-  g_return_if_fail (display == gdk_display_get_default());
-  if (!MessageBeep (-1))
-    Beep(1000, 50);
+  MessageBeep ((UINT)-1);
 }
 
 static void
 gdk_win32_display_flush (GdkDisplay * display)
 {
-  g_return_if_fail (display == gdk_display_get_default());
-
-  GdiFlush ();
 }
 
 static void
 gdk_win32_display_sync (GdkDisplay * display)
 {
-  g_return_if_fail (display == gdk_display_get_default());
-
-  GdiFlush ();
 }
 
 static void
@@ -1365,7 +1355,6 @@ gdk_win32_display_class_init (GdkWin32DisplayClass *klass)
   display_class->beep = gdk_win32_display_beep;
   display_class->sync = gdk_win32_display_sync;
   display_class->flush = gdk_win32_display_flush;
-  display_class->has_pending = _gdk_win32_display_has_pending;
   display_class->queue_events = _gdk_win32_display_queue_events;
 
   //? display_class->get_app_launch_context = _gdk_win32_display_get_app_launch_context;

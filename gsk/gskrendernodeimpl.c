@@ -4604,6 +4604,7 @@ gsk_container_node_new (GskRenderNode **children,
         }
 
       node->offscreen_for_opacity = node->offscreen_for_opacity || !self->disjoint;
+      node->fully_opaque = have_opaque && graphene_rect_equal (&node->bounds, &self->opaque);
       node->is_hdr = is_hdr;
    }
 
@@ -7906,7 +7907,7 @@ apply_luminance_to_pattern (cairo_pattern_t *pattern,
   cairo_surface_t *surface, *image_surface;
   guchar *data;
   gsize x, y, width, height, stride;
-  int red, green, blue, alpha, luminance;
+  guint red, green, blue, alpha, luminance;
   guint32* pixel_data;
 
   cairo_pattern_get_surface (pattern, &surface);
@@ -9149,4 +9150,4 @@ gsk_render_node_init_types (void)
     }
 }
 
-/* vim:set foldmethod=marker expandtab: */
+/* vim:set foldmethod=marker: */

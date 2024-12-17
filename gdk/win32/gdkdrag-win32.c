@@ -192,9 +192,6 @@
 #define INITGUID
 #endif
 
-/* For C-style COM wrapper macros */
-#define COBJMACROS
-
 #include "gdkdrag.h"
 #include "gdkprivate-win32.h"
 #include "gdkwin32.h"
@@ -637,10 +634,8 @@ do_drag_drop (GdkWin32DnDThreadDoDragDrop *ddd)
 gpointer
 _gdk_win32_dnd_thread_main (gpointer data)
 {
-
-  clipdrop_thread_items *clipdrop_items = (clipdrop_thread_items *) data;
-  GAsyncQueue *queue = clipdrop_items->queue;
-  GdkWin32Clipdrop *clipdrop = clipdrop_items->clipdrop;
+  GdkWin32Clipdrop *clipdrop = data;
+  GAsyncQueue *queue = clipdrop->dnd_queue;
   GdkWin32DnDThreadQueueItem *item;
   MSG msg;
   HRESULT hr;

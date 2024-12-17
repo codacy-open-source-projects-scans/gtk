@@ -146,11 +146,8 @@ collect_states (GtkAtSpiContext    *self,
   set_atspi_state (&states, ATSPI_STATE_VISIBLE);
   set_atspi_state (&states, ATSPI_STATE_SHOWING);
 
-  if (ctx->accessible_role == GTK_ACCESSIBLE_ROLE_APPLICATION)
-    {
-      if (gtk_accessible_get_platform_state (accessible, GTK_ACCESSIBLE_PLATFORM_STATE_ACTIVE))
-        set_atspi_state (&states, ATSPI_STATE_ACTIVE);
-    }
+  if (gtk_accessible_get_platform_state (accessible, GTK_ACCESSIBLE_PLATFORM_STATE_ACTIVE))
+    set_atspi_state (&states, ATSPI_STATE_ACTIVE);
 
   if (ctx->accessible_role == GTK_ACCESSIBLE_ROLE_TEXT_BOX ||
       ctx->accessible_role == GTK_ACCESSIBLE_ROLE_SEARCH_BOX ||
@@ -905,15 +902,13 @@ emit_children_changed (GtkAtSpiContext         *self,
       !gtk_at_spi_root_has_event_listeners (self->root))
     return;
 
-  GVariant *context_ref = gtk_at_spi_context_to_ref (self);
   GVariant *child_ref = gtk_at_spi_context_to_ref (child_context);
 
   gtk_at_spi_emit_children_changed (self->connection,
                                     self->context_path,
                                     state,
                                     idx,
-                                    child_ref,
-                                    context_ref);
+                                    child_ref);
 }
 
 static void
@@ -2018,4 +2013,4 @@ gtk_at_spi_context_get_child_count (GtkAtSpiContext *self)
 }
 /* }}} */
 
-/* vim:set foldmethod=marker expandtab: */
+/* vim:set foldmethod=marker: */

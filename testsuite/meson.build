@@ -9,16 +9,22 @@ if catch.found()
 endif
 
 common_env = [
-  'GIO_USE_VOLUME_MONITOR=unix',
   'GIO_USE_VFS=local',
   'GSETTINGS_BACKEND=memory',
   'GTK_CSD=1',
   'G_ENABLE_DIAGNOSTIC=0',
   'GSETTINGS_SCHEMA_DIR=@0@'.format(gtk_schema_build_dir),
-  'GDK_DEBUG=default-settings',
+  'GDK_DEBUG=default-settings,no-portals',
   'GTK_DEBUG=css',
 ]
 exclude_unstable = ['flaky', 'failing']
+
+if os_win32
+  common_env += [ 'GIO_USE_VOLUME_MONITOR=win32' ]
+else
+  common_env += [ 'GIO_USE_VOLUME_MONITOR=unix' ]
+endif
+
 
 setups = [
   { 'backend': 'x11', 'if': x11_enabled, },

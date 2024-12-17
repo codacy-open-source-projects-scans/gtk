@@ -484,7 +484,6 @@ gtk_at_spi_root_child_changed (GtkAtSpiRoot             *self,
                                     self->root_path,
                                     state,
                                     idx,
-                                    gtk_at_spi_root_to_ref (self),
                                     window_ref);
 }
 
@@ -503,9 +502,8 @@ on_event_listener_registered (GDBusConnection *connection,
       g_strcmp0 (interface_name, "org.a11y.atspi.Registry") == 0 &&
       g_strcmp0 (signal_name, "EventListenerRegistered") == 0)
     {
-      char *sender = NULL;
-      char *event_name = NULL;
-      char **event_types = NULL;
+      const char *sender = NULL;
+      const char *event_name = NULL;
       unsigned int *count;
 
       if (self->event_listeners == NULL)
@@ -513,7 +511,7 @@ on_event_listener_registered (GDBusConnection *connection,
                                                        g_free,
                                                        g_free);
 
-      g_variant_get (parameters, "(ssas)", &sender, &event_name, &event_types);
+      g_variant_get (parameters, "(&s&sas)", &sender, &event_name, NULL);
 
       count = g_hash_table_lookup (self->event_listeners, sender);
       if (count == NULL)
@@ -523,7 +521,7 @@ on_event_listener_registered (GDBusConnection *connection,
                      event_name[0] != 0 ? event_name : "(none)");
           count = g_new (unsigned int, 1);
           *count = 1;
-          g_hash_table_insert (self->event_listeners, sender, count);
+          g_hash_table_insert (self->event_listeners, g_strdup (sender), count);
         }
       else if (*count == G_MAXUINT)
         {
@@ -534,9 +532,6 @@ on_event_listener_registered (GDBusConnection *connection,
           GTK_DEBUG (A11Y, "Incrementing refcount for event listener %s", sender);
           *count += 1;
         }
-
-      g_free (event_name);
-      g_strfreev (event_types);
     }
 }
 
@@ -769,7 +764,7 @@ on_registration_reply (GObject      *gobject,
    * sandbox to allow event registration signals to propagate, so we
    * check if the version of the Flatpak portal is recent enough.
    */
-  if (gdk_should_use_portal () &&
+  if (gdk_running_in_sandbox () &&
       !check_flatpak_portal_version (7))
     {
       GTK_DEBUG (A11Y, "Sandboxed does not allow event listener registration");

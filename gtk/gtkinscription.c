@@ -48,6 +48,10 @@
  * Users of this widget should take care to plan behaviour for the common case
  * where the text doesn't fit exactly in the allocated space.
  *
+ * ## CSS nodes
+ *
+ * `GtkInscription` has a single CSS node with the name label.
+ *
  * Since: 4.8
  */
 
@@ -1533,4 +1537,4 @@ gtk_inscription_accessible_text_init (GtkAccessibleTextInterface *iface)
 
 /* }}} */
 
-/* vim:set foldmethod=marker expandtab: */
+/* vim:set foldmethod=marker: */

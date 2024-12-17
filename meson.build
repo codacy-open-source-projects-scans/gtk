@@ -1,20 +1,20 @@
 project('gtk', 'c',
-        version: '4.17.0',
+        version: '4.17.2',
         default_options: [
           'buildtype=debugoptimized',
           'warning_level=1',
           # We only need c99, but glib needs GNU-specific features
           # https://github.com/mesonbuild/meson/issues/2289
-          'c_std=gnu99',
+          'c_std=gnu11',
         ],
         meson_version : '>= 1.2.0',
         license: 'LGPL-2.1-or-later')
 
 # keep these numbers in sync with wrap files where there exist
-glib_req           = '>= 2.76.0'
-introspection_req  = '>= 1.76.0' # keep this in sync with glib
-pango_req          = '>= 1.52.0' # keep this in sync with .gitlab-ci/test-msys.sh
-harfbuzz_req       = '>= 2.6.0'
+glib_req           = '>= 2.80.0'
+introspection_req  = '>= 1.80.0' # keep this in sync with glib
+pango_req          = '>= 1.55.0' # keep this in sync with .gitlab-ci/test-msys.sh
+harfbuzz_req       = '>= 8.4.0'
 fribidi_req        = '>= 1.0.6'
 cairo_req          = '>= 1.18.0'
 gdk_pixbuf_req     = '>= 2.30.0'
@@ -32,8 +32,14 @@ fs = import('fs')
 gnome = import('gnome')
 pkg_config = import('pkgconfig')
 
-add_project_arguments('-DG_LOG_USE_STRUCTURED=1', language: 'c')
-add_project_arguments('-DGLIB_DISABLE_DEPRECATION_WARNINGS', language: 'c')
+# Keep in sync with glib_req
+add_project_arguments([
+    '-DG_LOG_USE_STRUCTURED=1',
+    '-DGLIB_VERSION_MIN_REQUIRED=GLIB_VERSION_2_80',
+    '-DGLIB_VERSION_MAX_ALLOWED=GLIB_VERSION_2_80',
+  ],
+  language: 'c'
+)
 
 # Making releases:
 #  1. new development cycle:
@@ -56,14 +62,15 @@ gtk_micro_version = gtk_version.split('.')[2].to_int()
 # If new API is added during a stable cycle, reset to 0
 gtk_interface_age = gtk_minor_version.is_odd() ? 0 : gtk_micro_version
 
-add_project_arguments('-DGTK_VERSION="@0@"'.format(meson.project_version()), language: 'c')
+add_project_arguments('-DGTK_VERSION="@0@"'.format(gtk_version), language: 'c')
 
 add_project_arguments('-D_GNU_SOURCE', language: 'c')
 
 if host_machine.system() == 'windows'
   add_project_arguments(['-DUNICODE',
                          '-D_UNICODE',
-                         '-D_WIN32_WINNT=_WIN32_WINNT_WIN7'], language: 'c')
+                         '-DCOBJMACROS',
+                         '-D_WIN32_WINNT=_WIN32_WINNT_WIN10'], language: 'c')
 endif
 
 # Use debug/optimization flags to determine whether to enable debug or disable
@@ -99,7 +106,7 @@ gtk_api_version = '4.0'
 module_suffix = []
 # GModule requires file extension to be .so, not .dylib on Mac.
 # https://gitlab.gnome.org/GNOME/glib/issues/520
-if ['darwin', 'ios'].contains(host_machine.system())
+if host_machine.system() == 'darwin'
   module_suffix = 'so'
 endif
 
@@ -115,11 +122,25 @@ os_linux  = false
 os_win32  = false
 os_darwin = false
 
+cc = meson.get_compiler('c')
+
 # Some windowing system backends depend on the platform we're
 # building for, so we need to ensure they are disabled; in other
 # cases, they are the only windowing system available, so we need
 # to ensure they are enabled
 if host_machine.system() == 'darwin'
+
+  if not cc.compiles('''
+    #include <Availability.h>
+    #if __MAC_OS_X_VERSION_MIN_REQUIRED < 101500L
+    # error message "Minimal macOS SDK version not met"
+    #endif
+    ''',
+    name: 'macOS SDK version >= 10.15',
+  )
+    error('macOS SDK 10.15 or newer is required to build GTK')
+  endif
+
   os_darwin = true
 elif host_machine.system() == 'windows'
   os_win32 = true
@@ -152,8 +173,6 @@ gtk_bindir = join_paths(gtk_prefix, get_option('bindir'))
 gtk_applicationsdir = join_paths(gtk_datadir, 'applications')
 gtk_schemasdir = join_paths(gtk_datadir, 'glib-2.0/schemas')
 gtk_appdatadir = join_paths(gtk_datadir, 'metainfo')
-
-cc = meson.get_compiler('c')
 
 cdata = configuration_data()
 cdata.set_quoted('PACKAGE_VERSION', meson.project_version())
@@ -267,6 +286,14 @@ if cc.get_id() == 'msvc'
     '-D_USE_MATH_DEFINES',
     required_debug_cflags
   ]
+  # Extra warning flags and those that should be disabled because they are too common or
+  # break features.
+  test_cflags += [
+    '/wd4068', # unknown pragma, triggers for all gcc/clang pragmas
+    '/wd4116', # breaks G_ALIGNOF()
+    '/wd4090', # VC2017 is way too aggressive with this
+  ]
+  
   msvc_supported_cflags = cc.get_supported_arguments(test_cflags)
   if debug
     required_cflags += required_debug_cflags
@@ -339,6 +366,7 @@ elif cc.get_id() == 'gcc' or cc.get_id() == 'clang'
     'write-strings',
   ]
 
+  
   if get_option('buildtype').startswith('debug')
     foreach warning: extra_warnings
       test_cflags += '-Werror=@0@'.format(warning)
@@ -414,7 +442,7 @@ endif
 
 pangocairo_dep    = dependency('pangocairo', version: pango_req)
 pixbuf_dep        = dependency('gdk-pixbuf-2.0', version: gdk_pixbuf_req,
-                               default_options: ['png=enabled', 'jpeg=enabled', 'builtin_loaders=png,jpeg', 'man=false'])
+                               default_options: ['png=enabled', 'jpeg=enabled', 'gif=enabled', 'builtin_loaders=all', 'man=false'])
 png_dep           = dependency('libpng', 'png')
 tiff_dep          = dependency('libtiff-4', 'tiff')
 jpeg_dep          = dependency('libjpeg', 'jpeg')
@@ -501,6 +529,10 @@ if have_egl
 endif
 cdata.set('HAVE_HARFBUZZ', harfbuzz_dep.found())
 cdata.set('HAVE_PANGOFT', pangoft_dep.found())
+if win32_enabled
+  cdata.set('HAVE_PANGOWIN32', pangowin32_dep.found())
+  cdata.set('CONST_VTABLE', 1)
+endif
 
 wayland_pkgs = []
 if wayland_enabled
