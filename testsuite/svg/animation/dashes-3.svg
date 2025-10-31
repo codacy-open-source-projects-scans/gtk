@@ -1,0 +1,39 @@
+<svg
+        width='300'
+        height='200'
+        viewBox='0 0 300 200'
+        xmlns:gpa='https://www.gtk.org/grappa'
+        gpa:version='1'
+        gpa:state='empty'
+        gpa:state-change-delay='0ms'
+        gpa:time-since-load='11000ms'>
+  <path
+          id='p'
+          stroke='rgb(0,0,0)'
+          stroke-width='1'
+          d='M 30 160 L 270 40'
+          gpa:stroke-width='0.25 1 1.5'>
+  <animate
+          id='dashes'
+          attributeName='stroke-dasharray'
+          begin='0ms'
+          dur='10000ms'
+          from='1 1'
+          to='10 10'
+          keyTimes='0; 1'
+          gpa:status='done'/>
+  <animate
+          id='dashes'
+          attributeName='stroke-dasharray'
+          begin='10000ms'
+          dur='1000ms'
+          from='10 10'
+          to='none'
+          keyTimes='0; 1'
+          gpa:status='done'/>
+  </path>
+  <circle
+          fill='rgb(255,0,0)'
+          r='5'>
+  </circle>
+</svg>

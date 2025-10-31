@@ -1,0 +1,64 @@
+test_parser = executable('test-svg-parser',
+  sources: ['test-svg-parser.c', '../../testutils.c'],
+  c_args: common_cflags,
+  dependencies: libgtk_dep,
+)
+
+test_data = [
+  'all-animations.svg',
+  'all-attributes.svg',
+  'all-shapes.svg',
+  'animate-advanced.svg',
+  'animate-basic.svg',
+  'animate-begin.svg',
+  'animate-chained.svg',
+  'animate-colors.svg',
+  'animate-motion.svg',
+  'animate-paths.svg',
+  'animate-timing.svg',
+  'animate-transform.svg',
+  'bad-attr.svg',
+  'clip.svg',
+  'containers.svg',
+  'dashes.svg',
+  'ellipse.svg',
+  'filters.svg',
+  'gpa-attributes.svg',
+  'linear-gradient1.svg',
+  'linear-gradient2.svg',
+  'linear-gradient3.svg',
+  'linear-gradient4.svg',
+  'linear-gradient5.svg',
+  'linear-gradient6.svg',
+  'linear-gradient7.svg',
+  'linear-gradient8.svg',
+  'linear-gradient9.svg',
+  'long-values.svg',
+  'many-errors.svg',
+  'paint.svg',
+  'percentage.svg',
+  'radial-gradient1.svg',
+  'radial-gradient2.svg',
+  'radial-gradient3.svg',
+  'simple.svg',
+  'stroke.svg',
+  'style.svg',
+  'times.svg',
+  'transforms.svg',
+  'use.svg'
+]
+
+foreach testname : test_data
+  test('svg parser ' + testname, test_parser,
+        args: [ '--tap',
+                '-k',
+                join_paths(meson.current_source_dir(), testname),
+              ],
+        protocol: 'tap',
+        env: [
+              'G_TEST_SRCDIR=@0@'.format(meson.current_source_dir()),
+              'G_TEST_BUILDDIR=@0@'.format(meson.current_build_dir())
+             ],
+        suite: [ 'svg', 'svg parser' ]
+  )
+endforeach
