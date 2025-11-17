@@ -26,8 +26,8 @@
 #include "gtkenums.h"
 #include "gtksymbolicpaintable.h"
 #include "gtktypebuiltins.h"
-#include "gtk/css/gtkcss.h"
 #include "gtk/css/gtkcssparserprivate.h"
+#include "gtksnapshotprivate.h"
 #include <glib/gstdio.h>
 
 #include <tgmath.h>
@@ -78,8 +78,7 @@
  * In `<defs>`, only `<clipPath>`, `<mask>`, gradients and shapes are
  * supported, not `<filter>`, `<pattern>` or other things.
  *
- * Gradient templating is not implemented, and radial gradients with
- * `fx,fy != cx,cy` are not supported.
+ * Gradient templating is not implemented.
  *
  * The support for filters is limited to filter functions minus
  * `drop-shadow()` plus a custom `alpha-level()` function, which
@@ -1745,13 +1744,6 @@ svg_visibility_parse (const char *string)
   return NULL;
 }
 
-typedef enum
-{
-  SPREAD_METHOD_PAD,
-  SPREAD_METHOD_REFLECT,
-  SPREAD_METHOD_REPEAT,
-} SpreadMethod;
-
 static const SvgValueClass SVG_SPREAD_METHOD_CLASS = {
   "SvgSpreadMethod",
   svg_enum_free,
@@ -1762,13 +1754,13 @@ static const SvgValueClass SVG_SPREAD_METHOD_CLASS = {
 };
 
 static SvgEnum spread_method_values[] = {
-  { { &SVG_SPREAD_METHOD_CLASS, 1 }, SPREAD_METHOD_PAD, "pad" },
-  { { &SVG_SPREAD_METHOD_CLASS, 1 }, SPREAD_METHOD_REFLECT, "reflect" },
-  { { &SVG_SPREAD_METHOD_CLASS, 1 }, SPREAD_METHOD_REPEAT, "repeat" },
+  { { &SVG_SPREAD_METHOD_CLASS, 1 }, GSK_REPEAT_PAD, "pad" },
+  { { &SVG_SPREAD_METHOD_CLASS, 1 }, GSK_REPEAT_REFLECT, "reflect" },
+  { { &SVG_SPREAD_METHOD_CLASS, 1 }, GSK_REPEAT_REPEAT, "repeat" },
 };
 
 static SvgValue *
-svg_spread_method_new (SpreadMethod value)
+svg_spread_method_new (GskRepeat value)
 {
   return svg_value_ref ((SvgValue *) &visibility_values[value]);
 }
@@ -5043,7 +5035,7 @@ shape_attr_init_default_values (void)
   shape_attrs[SHAPE_ATTR_FY].initial_value = svg_number_new (0);
   shape_attrs[SHAPE_ATTR_FR].initial_value = svg_percentage_new (0);
   shape_attrs[SHAPE_ATTR_POINTS].initial_value = svg_points_new_none ();
-  shape_attrs[SHAPE_ATTR_SPREAD_METHOD].initial_value = svg_spread_method_new (SPREAD_METHOD_PAD);
+  shape_attrs[SHAPE_ATTR_SPREAD_METHOD].initial_value = svg_spread_method_new (GSK_REPEAT_PAD);
   shape_attrs[SHAPE_ATTR_GRADIENT_UNITS].initial_value = svg_coord_units_new (COORD_UNITS_OBJECT_BOUNDING_BOX);
   shape_attrs[SHAPE_ATTR_STROKE_MINWIDTH].initial_value = svg_number_new (0.25);
   shape_attrs[SHAPE_ATTR_STROKE_MAXWIDTH].initial_value = svg_number_new (1.5);
@@ -6400,7 +6392,6 @@ struct _Animation
 
   struct {
     unsigned int transition;
-    unsigned int transition_easing;
     unsigned int animation;
     unsigned int easing;
     double origin;
@@ -7647,34 +7638,34 @@ compute_current_values_for_shape (Shape          *shape,
 
 typedef enum
 {
-  TRANSITION_TYPE_NONE,
-  TRANSITION_TYPE_ANIMATE,
-  TRANSITION_TYPE_MORPH,
-  TRANSITION_TYPE_FADE,
+  GPA_TRANSITION_NONE,
+  GPA_TRANSITION_ANIMATE,
+  GPA_TRANSITION_MORPH,
+  GPA_TRANSITION_FADE,
 } GpaTransition;
 
 typedef enum
 {
-  EASING_FUNCTION_LINEAR,
-  EASING_FUNCTION_EASE_IN_OUT,
-  EASING_FUNCTION_EASE_IN,
-  EASING_FUNCTION_EASE_OUT,
-  EASING_FUNCTION_EASE
-} GpaEasingFunction;
+  GPA_EASING_LINEAR,
+  GPA_EASING_EASE_IN_OUT,
+  GPA_EASING_EASE_IN,
+  GPA_EASING_EASE_OUT,
+  GPA_EASING_EASE
+} GpaEasing;
 
 typedef enum
 {
-  ANIMATION_DIRECTION_NONE,
-  ANIMATION_DIRECTION_NORMAL,
-  ANIMATION_DIRECTION_ALTERNATE,
-  ANIMATION_DIRECTION_REVERSE,
-  ANIMATION_DIRECTION_REVERSE_ALTERNATE,
-  ANIMATION_DIRECTION_IN_OUT,
-  ANIMATION_DIRECTION_IN_OUT_ALTERNATE,
-  ANIMATION_DIRECTION_IN_OUT_REVERSE,
-  ANIMATION_DIRECTION_SEGMENT,
-  ANIMATION_DIRECTION_SEGMENT_ALTERNATE,
-} GpaAnimationDirection;
+  GPA_ANIMATION_NONE,
+  GPA_ANIMATION_NORMAL,
+  GPA_ANIMATION_ALTERNATE,
+  GPA_ANIMATION_REVERSE,
+  GPA_ANIMATION_REVERSE_ALTERNATE,
+  GPA_ANIMATION_IN_OUT,
+  GPA_ANIMATION_IN_OUT_ALTERNATE,
+  GPA_ANIMATION_IN_OUT_REVERSE,
+  GPA_ANIMATION_SEGMENT,
+  GPA_ANIMATION_SEGMENT_ALTERNATE,
+} GpaAnimation;
 
 static struct {
   double params[4];
@@ -7807,17 +7798,17 @@ create_path_length (Shape    *shape,
 }
 
 static void
-create_transition (Shape             *shape,
-                   Timeline          *timeline,
-                   uint64_t           states,
-                   int64_t            duration,
-                   int64_t            delay,
-                   GpaEasingFunction  easing,
-                   double             origin,
-                   GpaTransition      type,
-                   ShapeAttr          attr,
-                   SvgValue          *from,
-                   SvgValue          *to)
+create_transition (Shape         *shape,
+                   Timeline      *timeline,
+                   uint64_t       states,
+                   int64_t        duration,
+                   int64_t        delay,
+                   GpaEasing      easing,
+                   double         origin,
+                   GpaTransition  type,
+                   ShapeAttr      attr,
+                   SvgValue      *from,
+                   SvgValue      *to)
 {
   Animation *a;
   TimeSpec *begin;
@@ -7891,6 +7882,61 @@ create_transition (Shape             *shape,
   a->gpa.transition = type;
   a->gpa.easing = easing;
   a->gpa.origin = origin;
+
+  if (delay > 0)
+    {
+      a = animation_set_new ();
+      a->attr = attr;
+      a->simple_duration = duration;
+      a->repeat_duration = duration;
+      a->repeat_count = 1;
+
+      a->id = g_strdup_printf ("gpa:transition:delay-in:%s:%s", shape_attrs[attr].name, shape->id);
+      begin = animation_add_begin (a, timeline_get_states (timeline, states, TIME_SPEC_SIDE_BEGIN, 0));
+      time_spec_add_animation (begin, a);
+
+      a->has_begin = 1;
+      a->has_simple_duration = 1;
+      a->has_repeat_duration = 1;
+
+      a->n_frames = 2;
+      a->frames = g_new0 (Frame, a->n_frames);
+      a->frames[0].time = 0;
+      a->frames[1].time = 1;
+      a->frames[0].value = svg_value_ref (from);
+      a->frames[1].value = svg_value_ref (from);
+
+      a->fill = ANIMATION_FILL_FREEZE;
+
+      a->shape = shape;
+      g_ptr_array_add (shape->animations, a);
+
+      a = animation_set_new ();
+      a->attr = attr;
+      a->simple_duration = duration;
+      a->repeat_duration = duration;
+      a->repeat_count = 1;
+
+      a->id = g_strdup_printf ("gpa:transition:delay-out:%s:%s", shape_attrs[attr].name, shape->id);
+      begin = animation_add_begin (a, timeline_get_states (timeline, states, TIME_SPEC_SIDE_END, 0));
+      time_spec_add_animation (begin, a);
+
+      a->has_begin = 1;
+      a->has_simple_duration = 1;
+      a->has_repeat_duration = 1;
+
+      a->n_frames = 2;
+      a->frames = g_new0 (Frame, a->n_frames);
+      a->frames[0].time = 0;
+      a->frames[1].time = 1;
+      a->frames[0].value = svg_value_ref (to);
+      a->frames[1].value = svg_value_ref (to);
+
+      a->fill = ANIMATION_FILL_FREEZE;
+
+      a->shape = shape;
+      g_ptr_array_add (shape->animations, a);
+    }
 }
 
 static void
@@ -7962,20 +8008,20 @@ create_transition_delay (Shape     *shape,
 }
 
 static void
-create_transitions (Shape             *shape,
-                    Timeline          *timeline,
-                    uint64_t           states,
-                    GpaTransition      type,
-                    int64_t            duration,
-                    int64_t            delay,
-                    GpaEasingFunction  easing,
-                    double             origin)
+create_transitions (Shape         *shape,
+                    Timeline      *timeline,
+                    uint64_t       states,
+                    GpaTransition  type,
+                    int64_t        duration,
+                    int64_t        delay,
+                    GpaEasing      easing,
+                    double         origin)
 {
   switch (type)
     {
-    case TRANSITION_TYPE_NONE:
+    case GPA_TRANSITION_NONE:
       break;
-    case TRANSITION_TYPE_ANIMATE:
+    case GPA_TRANSITION_ANIMATE:
       create_transition (shape, timeline, states,
                          duration, delay, easing,
                          origin, type,
@@ -7994,7 +8040,7 @@ create_transitions (Shape             *shape,
                            svg_number_new (-origin),
                            svg_number_new (0));
       break;
-    case TRANSITION_TYPE_MORPH:
+    case GPA_TRANSITION_MORPH:
       create_transition (shape, timeline, states,
                          duration, delay, easing,
                          origin, type,
@@ -8002,7 +8048,7 @@ create_transitions (Shape             *shape,
                          svg_filter_parse ("blur(32) alpha-level(0.2)"),
                          svg_filter_parse ("blur(0) alpha-level(0.2)"));
       break;
-    case TRANSITION_TYPE_FADE:
+    case GPA_TRANSITION_FADE:
       create_transition (shape, timeline, states,
                          duration, delay, easing,
                          origin, type,
@@ -8066,10 +8112,10 @@ create_animation (Shape        *shape,
 }
 
 static void
-add_frame (GArray            *a,
-           double             time,
-           SvgValue          *value,
-           GpaEasingFunction  easing)
+add_frame (GArray    *a,
+           double     time,
+           SvgValue  *value,
+           GpaEasing  easing)
 {
   Frame frame;
   frame.time = time;
@@ -8080,10 +8126,10 @@ add_frame (GArray            *a,
 }
 
 static void
-add_point_frame (GArray            *a,
-                 double             time,
-                 double             point,
-                 GpaEasingFunction  easing)
+add_point_frame (GArray    *a,
+                 double     time,
+                 double     point,
+                 GpaEasing  easing)
 {
   Frame frame;
   frame.time = time;
@@ -8094,16 +8140,16 @@ add_point_frame (GArray            *a,
 }
 
 static void
-construct_animation_frames (GpaAnimationDirection  direction,
-                            GpaEasingFunction      easing,
-                            double                 segment,
-                            double                 origin,
-                            GArray                *array,
-                            GArray                *offset)
+construct_animation_frames (GpaAnimation  direction,
+                            GpaEasing     easing,
+                            double        segment,
+                            double        origin,
+                            GArray       *array,
+                            GArray       *offset)
 {
   switch (direction)
     {
-    case ANIMATION_DIRECTION_NORMAL:
+    case GPA_ANIMATION_NORMAL:
       add_frame (array, 0, svg_dash_array_new ((double[]) { 0, 2 }, 2), easing);
       add_frame (array, 1, svg_dash_array_new ((double[]) { 1, 0 }, 2), easing);
       if (origin != 0)
@@ -8113,7 +8159,7 @@ construct_animation_frames (GpaAnimationDirection  direction,
         }
       break;
 
-    case ANIMATION_DIRECTION_REVERSE:
+    case GPA_ANIMATION_REVERSE:
       add_frame (array, 0, svg_dash_array_new ((double[]) { 1, 0 }, 2), easing);
       add_frame (array, 1, svg_dash_array_new ((double[]) { 0, 2 }, 2), easing);
       if (origin != 0)
@@ -8123,7 +8169,7 @@ construct_animation_frames (GpaAnimationDirection  direction,
         }
       break;
 
-    case ANIMATION_DIRECTION_ALTERNATE:
+    case GPA_ANIMATION_ALTERNATE:
       add_frame (array, 0,   svg_dash_array_new ((double[]) { 0, 2 }, 2), easing);
       add_frame (array, 0.5, svg_dash_array_new ((double[]) { 1, 0 }, 2), easing);
       add_frame (array, 1,   svg_dash_array_new ((double[]) { 0, 2 }, 2), easing);
@@ -8135,7 +8181,7 @@ construct_animation_frames (GpaAnimationDirection  direction,
         }
       break;
 
-    case ANIMATION_DIRECTION_REVERSE_ALTERNATE:
+    case GPA_ANIMATION_REVERSE_ALTERNATE:
       add_frame (array, 0,   svg_dash_array_new ((double[]) { 1, 0 }, 2), easing);
       add_frame (array, 0.5, svg_dash_array_new ((double[]) { 0, 2 }, 2), easing);
       add_frame (array, 1,   svg_dash_array_new ((double[]) { 1, 0 }, 2), easing);
@@ -8147,7 +8193,7 @@ construct_animation_frames (GpaAnimationDirection  direction,
         }
       break;
 
-    case ANIMATION_DIRECTION_IN_OUT:
+    case GPA_ANIMATION_IN_OUT:
       add_frame (array, 0,   svg_dash_array_new ((double[]) { 0, 0, 0, 2 }, 4), easing);
       add_frame (array, 0.5, svg_dash_array_new ((double[]) { origin, 0, 1 - origin, 2 }, 4), easing);
       add_frame (array, 1,   svg_dash_array_new ((double[]) { 0, 1, 0, 2 }, 4), easing);
@@ -8156,7 +8202,7 @@ construct_animation_frames (GpaAnimationDirection  direction,
       add_frame (offset, 1,   svg_number_new (0), easing);
       break;
 
-    case ANIMATION_DIRECTION_IN_OUT_REVERSE:
+    case GPA_ANIMATION_IN_OUT_REVERSE:
       add_frame (array, 0  , svg_dash_array_new ((double[]) { origin, 0, 1 - origin, 2 }, 4), easing);
       add_frame (array, 0.5, svg_dash_array_new ((double[]) { 0, 0, 0, 2 }, 4), easing);
       add_frame (array, 1,   svg_dash_array_new ((double[]) { origin, 0, 1 - origin, 2 }, 4), easing);
@@ -8165,7 +8211,7 @@ construct_animation_frames (GpaAnimationDirection  direction,
       add_frame (offset, 1,   svg_number_new (0), easing);
       break;
 
-    case ANIMATION_DIRECTION_IN_OUT_ALTERNATE:
+    case GPA_ANIMATION_IN_OUT_ALTERNATE:
       add_frame (array, 0,    svg_dash_array_new ((double[]) { 0, 0, 0, 2 }, 4), easing);
       add_frame (array, 0.25, svg_dash_array_new ((double[]) { origin, 0, 1 - origin, 2 }, 4), easing);
       add_frame (array, 0.5,  svg_dash_array_new ((double[]) { 0, 1, 0, 2 }, 4), easing);
@@ -8181,14 +8227,14 @@ construct_animation_frames (GpaAnimationDirection  direction,
         }
       break;
 
-    case ANIMATION_DIRECTION_SEGMENT:
+    case GPA_ANIMATION_SEGMENT:
       add_frame (array, 0, svg_dash_array_new ((double[]) { segment, 1 - segment }, 2), easing);
       add_frame (array, 1, svg_dash_array_new ((double[]) { segment, 1 - segment }, 2), easing);
       add_frame (offset, 0, svg_number_new (0), easing);
       add_frame (offset, 1, svg_number_new (-1), easing);
       break;
 
-    case ANIMATION_DIRECTION_SEGMENT_ALTERNATE:
+    case GPA_ANIMATION_SEGMENT_ALTERNATE:
       add_frame (array, 0,   svg_dash_array_new ((double[]) { segment, 2 }, 2), easing);
       add_frame (array, 0.5, svg_dash_array_new ((double[]) { segment, 2 }, 2), easing);
       add_frame (array, 1,   svg_dash_array_new ((double[]) { segment, 2 }, 2), easing);
@@ -8197,57 +8243,57 @@ construct_animation_frames (GpaAnimationDirection  direction,
       add_frame (offset, 1,   svg_number_new (0), easing);
       break;
 
-    case ANIMATION_DIRECTION_NONE:
+    case GPA_ANIMATION_NONE:
     default:
       g_assert_not_reached ();
     }
 }
 
 static void
-construct_moving_frames (GpaAnimationDirection  direction,
-                         GpaEasingFunction      easing,
-                         double                 segment,
-                         double                 origin,
-                         double                 attach_pos,
-                         GArray                *array)
+construct_moving_frames (GpaAnimation  direction,
+                         GpaEasing     easing,
+                         double        segment,
+                         double        origin,
+                         double        attach_pos,
+                         GArray       *array)
 {
   switch ((int)direction)
     {
-    case ANIMATION_DIRECTION_NORMAL:
+    case GPA_ANIMATION_NORMAL:
       add_point_frame (array, 0, origin, easing);
       add_point_frame (array, 1, attach_pos, easing);
       break;
 
-    case ANIMATION_DIRECTION_ALTERNATE:
+    case GPA_ANIMATION_ALTERNATE:
       add_point_frame (array, 0, origin, easing);
       add_point_frame (array, 0.5, attach_pos, easing);
       add_point_frame (array, 1, origin, easing);
       break;
 
-    case ANIMATION_DIRECTION_REVERSE:
+    case GPA_ANIMATION_REVERSE:
       add_point_frame (array, 0, attach_pos, easing);
       add_point_frame (array, 1, origin, easing);
       break;
 
-    case ANIMATION_DIRECTION_REVERSE_ALTERNATE:
+    case GPA_ANIMATION_REVERSE_ALTERNATE:
       add_point_frame (array, 0,   attach_pos, easing);
       add_point_frame (array, 0.5, origin, easing);
       add_point_frame (array, 1,   attach_pos, easing);
       break;
 
-    case ANIMATION_DIRECTION_IN_OUT:
+    case GPA_ANIMATION_IN_OUT:
       add_point_frame (array, 0,   origin, easing);
       add_point_frame (array, 0.5, attach_pos, easing);
       add_point_frame (array, 1,   1, easing);
       break;
 
-    case ANIMATION_DIRECTION_IN_OUT_REVERSE:
+    case GPA_ANIMATION_IN_OUT_REVERSE:
       add_point_frame (array, 0,   1, easing);
       add_point_frame (array, 0.5, attach_pos, easing);
       add_point_frame (array, 1,   origin, easing);
       break;
 
-    case ANIMATION_DIRECTION_IN_OUT_ALTERNATE:
+    case GPA_ANIMATION_IN_OUT_ALTERNATE:
       add_point_frame (array, 0,    origin, easing);
       add_point_frame (array, 0.25, attach_pos, easing);
       add_point_frame (array, 0.5,  1, easing);
@@ -8255,12 +8301,12 @@ construct_moving_frames (GpaAnimationDirection  direction,
       add_point_frame (array, 1,    origin, easing);
       break;
 
-    case ANIMATION_DIRECTION_SEGMENT:
+    case GPA_ANIMATION_SEGMENT:
       add_point_frame (array, 0, attach_pos * segment, easing);
       add_point_frame (array, 1, 1 + attach_pos * segment, easing);
       break;
 
-    case ANIMATION_DIRECTION_SEGMENT_ALTERNATE:
+    case GPA_ANIMATION_SEGMENT_ALTERNATE:
       add_point_frame (array, 0, attach_pos * segment, easing);
       add_point_frame (array, 0.5, (1 - segment) + attach_pos * segment, easing);
       add_point_frame (array, 1, attach_pos * segment, easing);
@@ -8272,43 +8318,43 @@ construct_moving_frames (GpaAnimationDirection  direction,
 }
 
 static double
-repeat_duration_for_direction (GpaAnimationDirection direction,
-                               double                duration)
+repeat_duration_for_direction (GpaAnimation direction,
+                               double       duration)
 {
   switch (direction)
     {
-    case ANIMATION_DIRECTION_NONE:              return 0;
-    case ANIMATION_DIRECTION_NORMAL:            return duration;
-    case ANIMATION_DIRECTION_ALTERNATE:         return 2 * duration;
-    case ANIMATION_DIRECTION_REVERSE:           return duration;
-    case ANIMATION_DIRECTION_REVERSE_ALTERNATE: return 2 * duration;
-    case ANIMATION_DIRECTION_IN_OUT:            return 2 * duration;
-    case ANIMATION_DIRECTION_IN_OUT_ALTERNATE:  return 4 * duration;
-    case ANIMATION_DIRECTION_IN_OUT_REVERSE:    return 2 * duration;
-    case ANIMATION_DIRECTION_SEGMENT:           return duration;
-    case ANIMATION_DIRECTION_SEGMENT_ALTERNATE: return 2 * duration;
+    case GPA_ANIMATION_NONE:              return 0;
+    case GPA_ANIMATION_NORMAL:            return duration;
+    case GPA_ANIMATION_ALTERNATE:         return 2 * duration;
+    case GPA_ANIMATION_REVERSE:           return duration;
+    case GPA_ANIMATION_REVERSE_ALTERNATE: return 2 * duration;
+    case GPA_ANIMATION_IN_OUT:            return 2 * duration;
+    case GPA_ANIMATION_IN_OUT_ALTERNATE:  return 4 * duration;
+    case GPA_ANIMATION_IN_OUT_REVERSE:    return 2 * duration;
+    case GPA_ANIMATION_SEGMENT:           return duration;
+    case GPA_ANIMATION_SEGMENT_ALTERNATE: return 2 * duration;
     default: g_assert_not_reached ();
     }
 }
 
 static void
-create_animations (Shape                 *shape,
-                   Timeline              *timeline,
-                   uint64_t               states,
-                   unsigned int           initial,
-                   double                 repeat,
-                   int64_t                duration,
-                   GpaAnimationDirection  direction,
-                   GpaEasingFunction      easing,
-                   double                 segment,
-                   double                 origin)
+create_animations (Shape        *shape,
+                   Timeline     *timeline,
+                   uint64_t      states,
+                   unsigned int  initial,
+                   double        repeat,
+                   int64_t       duration,
+                   GpaAnimation  direction,
+                   GpaEasing     easing,
+                   double        segment,
+                   double        origin)
 {
   GArray *array, *offset;
   CalcMode calc_mode;
   Animation *a;
   double repeat_duration;
 
-  if (direction == ANIMATION_DIRECTION_NONE)
+  if (direction == GPA_ANIMATION_NONE)
     return;
 
   if (duration == 0)
@@ -8323,7 +8369,7 @@ create_animations (Shape                 *shape,
   construct_animation_frames (direction, easing, segment, origin, array, offset);
   repeat_duration = repeat_duration_for_direction (direction, duration);
 
-  if (easing == EASING_FUNCTION_LINEAR)
+  if (easing == GPA_EASING_LINEAR)
     calc_mode = CALC_MODE_LINEAR;
   else
     calc_mode = CALC_MODE_SPLINE;
@@ -8377,8 +8423,8 @@ create_attachment (Shape      *shape,
   end = animation_add_end (a, timeline_get_fixed (timeline, 1));
 
   frames = g_array_new (FALSE, FALSE, sizeof (Frame));
-  add_point_frame (frames, 0, attach_pos, EASING_FUNCTION_LINEAR);
-  add_point_frame (frames, 1, attach_pos, EASING_FUNCTION_LINEAR);
+  add_point_frame (frames, 0, attach_pos, GPA_EASING_LINEAR);
+  add_point_frame (frames, 1, attach_pos, GPA_EASING_LINEAR);
 
   a->n_frames = frames->len;
   a->frames = g_array_steal (frames, NULL);
@@ -8407,7 +8453,7 @@ create_attachment_connection_to (Animation *a,
 {
   Animation *a2;
   GArray *frames;
-  GpaAnimationDirection direction;
+  GpaAnimation direction;
   TimeSpec *begin, *end;
 
   a2 = animation_motion_new ();
@@ -8421,12 +8467,12 @@ create_attachment_connection_to (Animation *a,
   else if (g_str_has_prefix (da->id, "gpa:transition:fade-in:"))
     {
       a2->id = g_strdup_printf ("gpa:attachment-transition:fade-in:%s", a->shape->id);
-      direction = ANIMATION_DIRECTION_NORMAL;
+      direction = GPA_ANIMATION_NORMAL;
     }
   else if (g_str_has_prefix (da->id, "gpa:transition:fade-out:"))
     {
       a2->id = g_strdup_printf ("gpa:attachment-transition:fade-out:%s", a->shape->id);
-      direction = ANIMATION_DIRECTION_REVERSE;
+      direction = GPA_ANIMATION_REVERSE;
     }
   else
     g_assert_not_reached ();
@@ -9515,7 +9561,7 @@ parse_shape_gpa_attrs (Shape                *shape,
         gtk_svg_invalid_attribute (data->svg, context, "gpa:origin", NULL);
     }
 
-  transition_type = TRANSITION_TYPE_NONE;
+  transition_type = GPA_TRANSITION_NONE;
   if (transition_type_attr)
     {
       if (!parse_enum (transition_type_attr,
@@ -9538,7 +9584,7 @@ parse_shape_gpa_attrs (Shape                *shape,
         gtk_svg_invalid_attribute (data->svg, context, "gpa:transition-delay", NULL);
     }
 
-  transition_easing = EASING_FUNCTION_LINEAR;
+  transition_easing = GPA_EASING_LINEAR;
   if (transition_easing_attr)
     {
 
@@ -9558,7 +9604,7 @@ parse_shape_gpa_attrs (Shape                *shape,
         gtk_svg_invalid_attribute (data->svg, context, "gpa:animation-type", NULL);
     }
 
-  animation_direction = ANIMATION_DIRECTION_NONE;
+  animation_direction = GPA_ANIMATION_NONE;
   if (has_animation && animation_direction_attr)
     {
       if (!parse_enum (animation_direction_attr,
@@ -9593,7 +9639,7 @@ parse_shape_gpa_attrs (Shape                *shape,
         gtk_svg_invalid_attribute (data->svg, context, "gpa:animation-segment", NULL);
     }
 
-  animation_easing = EASING_FUNCTION_LINEAR;
+  animation_easing = GPA_EASING_LINEAR;
   if (animation_easing_attr)
     {
       if (!parse_enum (animation_easing_attr,
@@ -9621,8 +9667,8 @@ parse_shape_gpa_attrs (Shape                *shape,
                  data->svg->state);
 
   if (attach_to_attr ||
-      transition_type == TRANSITION_TYPE_ANIMATE ||
-      animation_direction != ANIMATION_DIRECTION_NONE)
+      transition_type == GPA_TRANSITION_ANIMATE ||
+      animation_direction != GPA_ANIMATION_NONE)
     create_path_length (shape, data->svg->timeline);
 
   if (attach_to_attr)
@@ -11504,22 +11550,24 @@ paint_linear_gradient (Shape                 *gradient,
                        PaintContext          *context)
 {
   graphene_point_t start, end;
-  GskColorStop *stops;
   double offset;
   GskTransform *transform, *gradient_transform;
+  GskGradient *g;
 
-  stops = g_newa (GskColorStop, gradient->color_stops->len);
+  g = gsk_gradient_new ();
   offset = 0;
   for (unsigned int i = 0; i < gradient->color_stops->len; i++)
     {
       ColorStop *cs = g_ptr_array_index (gradient->color_stops, i);
       SvgPaint *stop_color = (SvgPaint *) cs->current[COLOR_STOP_COLOR];
+      GdkColor color;
 
       g_assert (stop_color->kind == PAINT_COLOR);
-      stops[i].offset = MAX (svg_number_get (cs->current[COLOR_STOP_OFFSET], 1), offset);
-      stops[i].color = stop_color->color;
-      stops[i].color.alpha *= svg_number_get (cs->current[COLOR_STOP_OPACITY], 1);
-      offset = stops[i].offset;
+      offset = MAX (svg_number_get (cs->current[COLOR_STOP_OFFSET], 1), offset);
+      gdk_color_init_from_rgba (&color, &stop_color->color);
+      color.alpha *= svg_number_get (cs->current[COLOR_STOP_OPACITY], 1);
+      gsk_gradient_add_stop (g, offset, 0.5, &color);
+      gdk_color_finish (&color);
     }
 
   transform = NULL;
@@ -11550,24 +11598,11 @@ paint_linear_gradient (Shape                 *gradient,
   transform_gradient_line (transform, &start, &end, &start, &end);
   gsk_transform_unref (transform);
 
-  switch (svg_enum_get (gradient->current[SHAPE_ATTR_SPREAD_METHOD]))
-    {
-    case SPREAD_METHOD_PAD:
-      gtk_snapshot_append_linear_gradient (context->snapshot,
-                                           bounds, &start, &end,
-                                           stops, gradient->color_stops->len);
-      break;
-    case SPREAD_METHOD_REFLECT:
-      gtk_svg_rendering_error (context->svg, "the 'reflect' spreadMethod is not implemented");
-      G_GNUC_FALLTHROUGH;
-    case SPREAD_METHOD_REPEAT:
-      gtk_snapshot_append_repeating_linear_gradient (context->snapshot,
-                                                     bounds, &start, &end,
-                                                     stops, gradient->color_stops->len);
-      break;
-    default:
-      g_assert_not_reached ();
-    }
+  gsk_gradient_set_repeat (g, svg_enum_get (gradient->current[SHAPE_ATTR_SPREAD_METHOD]));
+
+  gtk_snapshot_add_linear_gradient (context->snapshot, bounds, &start, &end, g);
+
+  gsk_gradient_free (g);
 }
 
 static void
@@ -11578,12 +11613,10 @@ paint_radial_gradient (Shape                 *gradient,
   graphene_point_t start_center;
   graphene_point_t end_center;
   double start_radius, end_radius;
-  graphene_point_t center;
-  double radius, start, end;
-  GskColorStop *stops;
   double offset;
   GskTransform *gradient_transform;
   graphene_rect_t gradient_bounds;
+  GskGradient *g;
 
   graphene_point_init (&start_center, svg_number_get (gradient->current[SHAPE_ATTR_FX], context->viewport->width),
                                     svg_number_get (gradient->current[SHAPE_ATTR_FY], context->viewport->height));
@@ -11593,21 +11626,20 @@ paint_radial_gradient (Shape                 *gradient,
                                     svg_number_get (gradient->current[SHAPE_ATTR_CY], context->viewport->height));
   end_radius = svg_number_get (gradient->current[SHAPE_ATTR_R], normalized_diagonal (context->viewport));
 
-  if (!graphene_point_equal (&start_center, &end_center))
-    gtk_svg_rendering_error (context->svg, "non-concentric radial gradients are not implemented");
-
-  stops = g_newa (GskColorStop, gradient->color_stops->len);
+  g = gsk_gradient_new ();
   offset = 0;
   for (unsigned int i = 0; i < gradient->color_stops->len; i++)
     {
       ColorStop *cs = g_ptr_array_index (gradient->color_stops, i);
       SvgPaint *stop_color = (SvgPaint *) cs->current[COLOR_STOP_COLOR];
+      GdkColor color;
 
       g_assert (stop_color->kind == PAINT_COLOR);
-      stops[i].offset = MAX (svg_number_get (cs->current[COLOR_STOP_OFFSET], 1), offset);
-      stops[i].color = stop_color->color;
-      stops[i].color.alpha *= svg_number_get (cs->current[COLOR_STOP_OPACITY], 1);
-      offset = stops[i].offset;
+      offset = MAX (svg_number_get (cs->current[COLOR_STOP_OFFSET], 1), offset);
+      gdk_color_init_from_rgba (&color, &stop_color->color);
+      color.alpha *= svg_number_get (cs->current[COLOR_STOP_OPACITY], 1);
+      gsk_gradient_add_stop (g, offset, 0.5, &color);
+      gdk_color_finish (&color);
     }
 
   gtk_snapshot_save (context->snapshot);
@@ -11628,41 +11660,15 @@ paint_radial_gradient (Shape                 *gradient,
   gsk_transform_transform_bounds (gradient_transform, &gradient_bounds, &gradient_bounds);
   gsk_transform_unref (gradient_transform);
 
-  if (start_radius > end_radius)
-    {
-      radius = start_radius;
-      center = start_center;
-    }
-  else
-    {
-      radius = end_radius;
-      center = end_center;
-    }
-  start = start_radius / radius;
-  end = end_radius / radius;
+  gsk_gradient_set_repeat (g, svg_enum_get (gradient->current[SHAPE_ATTR_SPREAD_METHOD]));
 
-  switch (svg_enum_get (gradient->current[SHAPE_ATTR_SPREAD_METHOD]))
-    {
-    case SPREAD_METHOD_PAD:
-      gtk_snapshot_append_radial_gradient (context->snapshot,
-                                           &gradient_bounds,
-                                           &center, radius, radius,
-                                           start, end,
-                                           stops, gradient->color_stops->len);
-      break;
-    case SPREAD_METHOD_REFLECT:
-      gtk_svg_rendering_error (context->svg, "the 'reflect' spreadMethod is not implemented");
-      G_GNUC_FALLTHROUGH;
-    case SPREAD_METHOD_REPEAT:
-      gtk_snapshot_append_repeating_radial_gradient (context->snapshot,
-                                                     &gradient_bounds,
-                                                     &center, radius, radius,
-                                                     start, end,
-                                                     stops, gradient->color_stops->len);
-      break;
-    default:
-      g_assert_not_reached ();
-    }
+  gtk_snapshot_add_radial_gradient (context->snapshot,
+                                    &gradient_bounds,
+                                    &start_center, start_radius,
+                                    &end_center, end_radius,
+                                    1,
+                                    g);
+  gsk_gradient_free (g);
 
   gtk_snapshot_restore (context->snapshot);
 }
@@ -12694,6 +12700,8 @@ gtk_svg_serialize_full (GtkSvg               *self,
     }
 
   g_string_append (s, "<svg");
+  indent_for_attr (s, 0);
+  g_string_append (s, "xmlns='http://www.w3.org/2000/svg'");
   indent_for_attr (s, 0);
   g_string_append (s, "width='");
   string_append_double (s, self->width);
