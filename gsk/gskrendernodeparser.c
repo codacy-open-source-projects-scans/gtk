@@ -23,16 +23,29 @@
 
 #include "gskrendernodeparserprivate.h"
 
+#include "gskcaironodeprivate.h"
+#include "gskcolormatrixnode.h"
+#include "gskcolornodeprivate.h"
+#include "gskcomponenttransfernode.h"
+#include "gskcomponenttransferprivate.h"
+#include "gskcontainernodeprivate.h"
+#include "gskcrossfadenode.h"
+#include "gskdebugnode.h"
+#include "gskenumtypes.h"
+#include "gskfillnode.h"
+#include "gskglshadernode.h"
+#include "gskgradientprivate.h"
+#include "gskopacitynode.h"
+#include "gskprivate.h"
 #include "gskpath.h"
 #include "gskpathbuilder.h"
 #include "gskroundedrectprivate.h"
 #include "gskrendernodeprivate.h"
+#include "gskrepeatnode.h"
 #include "gskstroke.h"
+#include "gskstrokenode.h"
+#include "gsksubsurfacenode.h"
 #include "gsktransformprivate.h"
-#include "gskenumtypes.h"
-#include "gskcomponenttransferprivate.h"
-#include "gskprivate.h"
-#include "gskgradientprivate.h"
 
 #include "gdk/gdkcolorstateprivate.h"
 #include "gdk/gdkcolorprivate.h"
@@ -2721,7 +2734,6 @@ parse_conic_gradient_node (GtkCssParser *parser,
   GArray *stops = NULL;
   GdkColorState *interpolation = NULL;
   GskHueInterpolation hue_interpolation = GSK_HUE_INTERPOLATION_SHORTER;
-  GskRepeat repeat[2] = { GSK_REPEAT_PAD, GSK_REPEAT_PAD };
   const Declaration declarations[] = {
     { "bounds", parse_rect, NULL, &bounds },
     { "center", parse_point, NULL, &center },
@@ -2763,7 +2775,7 @@ parse_conic_gradient_node (GtkCssParser *parser,
     }
   gsk_gradient_set_interpolation (gradient, interpolation);
   gsk_gradient_set_hue_interpolation (gradient, hue_interpolation);
-  gsk_gradient_set_repeat (gradient, repeat[0]);
+  gsk_gradient_set_repeat (gradient, GSK_REPEAT_PAD);
 
   result = gsk_conic_gradient_node_new2 (&bounds, &center, rotation, gradient);
 
