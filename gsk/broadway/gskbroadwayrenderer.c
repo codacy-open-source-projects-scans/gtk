@@ -300,6 +300,9 @@ collect_reused_child_nodes (GskRenderer *renderer,
     case GSK_STROKE_NODE:
     case GSK_SUBSURFACE_NODE:
     case GSK_COMPONENT_TRANSFER_NODE:
+    case GSK_COPY_NODE:
+    case GSK_PASTE_NODE:
+    case GSK_COMPOSITE_NODE:
 
     default:
 
@@ -899,6 +902,9 @@ gsk_broadway_renderer_add_node (GskRenderer *renderer,
     case GSK_FILL_NODE:
     case GSK_STROKE_NODE:
     case GSK_COMPONENT_TRANSFER_NODE:
+    case GSK_COPY_NODE:
+    case GSK_PASTE_NODE:
+    case GSK_COMPOSITE_NODE:
     default:
       break; /* Fallback */
     }

@@ -312,6 +312,7 @@ create_list_model_for_render_node (GskRenderNode *node)
     case GSK_BORDER_NODE:
     case GSK_INSET_SHADOW_NODE:
     case GSK_OUTSET_SHADOW_NODE:
+    case GSK_PASTE_NODE:
       /* no children */
       return NULL;
 
@@ -409,6 +410,13 @@ G_GNUC_END_IGNORE_DEPRECATIONS
 
     case GSK_COMPONENT_TRANSFER_NODE:
       return create_render_node_list_model (&(RenderNode) { gsk_component_transfer_node_get_child (node), NULL }, 1);
+
+    case GSK_COPY_NODE:
+      return create_render_node_list_model (&(RenderNode) { gsk_copy_node_get_child (node), NULL }, 1);
+
+    case GSK_COMPOSITE_NODE:
+      return create_render_node_list_model ((RenderNode[2]) { { gsk_composite_node_get_child (node), "Child" },
+                                                              { gsk_composite_node_get_mask (node), "Mask" } }, 2);
     }
 }
 
@@ -499,6 +507,12 @@ node_type_name (GskRenderNodeType type)
       return "Subsurface";
     case GSK_COMPONENT_TRANSFER_NODE:
       return "Component Transfer";
+    case GSK_COPY_NODE:
+      return "Copy";
+    case GSK_PASTE_NODE:
+      return "Paste";
+    case GSK_COMPOSITE_NODE:
+      return "Composite";
     }
 }
 
@@ -537,6 +551,9 @@ node_name (GskRenderNode *node)
     case GSK_GL_SHADER_NODE:
     case GSK_SUBSURFACE_NODE:
     case GSK_COMPONENT_TRANSFER_NODE:
+    case GSK_COPY_NODE:
+    case GSK_PASTE_NODE:
+    case GSK_COMPOSITE_NODE:
       return g_strdup (node_type_name (gsk_render_node_get_node_type (node)));
 
     case GSK_DEBUG_NODE:
@@ -1724,6 +1741,22 @@ G_GNUC_END_IGNORE_DEPRECATIONS
           }
 
         g_string_free (s, TRUE);
+      }
+      break;
+
+    case GSK_COPY_NODE:
+      break;
+
+    case GSK_PASTE_NODE:
+      add_uint_row (store, "Copy to paste", gsk_paste_node_get_depth (node));
+      break;
+
+    case GSK_COMPOSITE_NODE:
+      {
+        GskPorterDuff operator = gsk_composite_node_get_operator (node);
+        gchar *tmp = g_enum_to_string (GSK_TYPE_PORTER_DUFF, operator);
+        add_text_row (store, "Operator", "%s", tmp);
+        g_free (tmp);
       }
       break;
 

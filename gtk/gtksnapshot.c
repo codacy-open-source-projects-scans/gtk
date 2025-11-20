@@ -147,6 +147,10 @@ G_GNUC_END_IGNORE_DEPRECATIONS
     struct {
       GdkSubsurface *subsurface;
     } subsurface;
+    struct {
+      GskPorterDuff op;
+      GskRenderNode *mask;
+    } composite;
   } data;
 };
 
@@ -479,11 +483,7 @@ gtk_snapshot_collect_opacity (GtkSnapshot      *snapshot,
   if (node == NULL)
     return NULL;
 
-  if (state->data.opacity.opacity == 1.0)
-    {
-      opacity_node = node;
-    }
-  else if (state->data.opacity.opacity == 0.0)
+  if (state->data.opacity.opacity == 0.0)
     {
       GdkRGBA color = GDK_RGBA ("00000000");
       graphene_rect_t bounds;
@@ -1738,6 +1738,132 @@ gtk_snapshot_push_mask (GtkSnapshot *snapshot,
   gtk_snapshot_push_state (snapshot,
                            source_state->transform,
                            gtk_snapshot_collect_mask_mask,
+                           NULL);
+}
+
+static GskRenderNode *
+gtk_snapshot_collect_copy (GtkSnapshot      *snapshot,
+                           GtkSnapshotState *state,
+                           GskRenderNode   **nodes,
+                           guint             n_nodes)
+{
+  GskRenderNode *node, *copy_node;
+
+  node = gtk_snapshot_collect_default (snapshot, state, nodes, n_nodes);
+  if (node == NULL)
+    return NULL;
+
+  copy_node = gsk_copy_node_new (node);
+  gsk_render_node_unref (node);
+
+  return copy_node;
+}
+
+/**
+ * gtk_snapshot_push_copy:
+ * @snapshot: a `GtkSnapshot`
+ *
+ * Stores the current rendering state for later pasting via
+ * [method@Gtk.Snapshot.append_paste].
+ *
+ * Pasting is possible until the matching call to [method@Gtk.Snapshot.pop].
+ *
+ * Since: 4.22
+ */
+void
+gtk_snapshot_push_copy (GtkSnapshot *snapshot)
+{
+  GtkSnapshotState *current_state = gtk_snapshot_get_current_state (snapshot);
+
+  /* need identity here because the coords are used
+   * by pastes */
+  gtk_snapshot_ensure_identity (snapshot);
+
+  gtk_snapshot_push_state (snapshot,
+                           current_state->transform,
+                           gtk_snapshot_collect_copy,
+                           NULL);
+}
+
+static GskRenderNode *
+gtk_snapshot_collect_composite_child (GtkSnapshot      *snapshot,
+                                      GtkSnapshotState *state,
+                                      GskRenderNode   **nodes,
+                                      guint             n_nodes)
+{
+  GskRenderNode *child, *mask, *result;
+
+  mask = state->data.composite.mask;
+  child = gtk_snapshot_collect_default (snapshot, state, nodes, n_nodes);
+  if (child == NULL)
+    return NULL;
+
+  if (mask == NULL)
+    {
+      gsk_render_node_unref (child);
+      return NULL;
+    }
+
+  result = gsk_composite_node_new (child, mask, state->data.composite.op);
+
+  gsk_render_node_unref (child);
+
+  return result;
+}
+
+static void
+gtk_snapshot_clear_composite_child (GtkSnapshotState *state)
+{
+  g_clear_pointer (&(state->data.composite.mask), gsk_render_node_unref);
+}
+
+static GskRenderNode *
+gtk_snapshot_collect_composite_mask (GtkSnapshot      *snapshot,
+                                     GtkSnapshotState *state,
+                                     GskRenderNode   **nodes,
+                                     guint             n_nodes)
+{
+  GtkSnapshotState *prev_state = gtk_snapshot_get_previous_state (snapshot);
+
+  g_assert (prev_state->collect_func == gtk_snapshot_collect_composite_child);
+
+  prev_state->data.composite.mask = gtk_snapshot_collect_default (snapshot, state, nodes, n_nodes);
+
+  return NULL;
+}
+
+/**
+ * gtk_snapshot_push_composite:
+ * @snapshot: a #GtkSnapshot
+ * @op: The Porter/Duff compositing operator to use
+ *
+ * Until the first call to [method@Gtk.Snapshot.pop], the
+ * mask image for the mask operation will be recorded.
+ *
+ * After that call, the child image will be recorded until
+ * the second call to [method@Gtk.Snapshot.pop].
+ *
+ * Calling this function requires 2 subsequent calls to gtk_snapshot_pop().
+ *
+ * Since: 4.22
+ */
+void
+gtk_snapshot_push_composite (GtkSnapshot   *snapshot,
+                             GskPorterDuff  op)
+{
+  GtkSnapshotState *current_state = gtk_snapshot_get_current_state (snapshot);
+  GtkSnapshotState *child_state;
+
+  child_state = gtk_snapshot_push_state (snapshot,
+                                         current_state->transform,
+                                         gtk_snapshot_collect_composite_child,
+                                         gtk_snapshot_clear_composite_child);
+
+  child_state->data.composite.op= op;
+
+  gtk_snapshot_push_state (snapshot,
+                           child_state->transform,
+                           gtk_snapshot_collect_composite_mask,
                            NULL);
 }
 
@@ -3169,6 +3295,37 @@ gtk_snapshot_add_outset_shadow (GtkSnapshot            *snapshot,
                                                             scale_y * offset->y),
                                       spread,
                                       blur_radius);
+
+  gtk_snapshot_append_node_internal (snapshot, node);
+}
+
+/**
+ * gtk_snapshot_append_paste:
+ * @snapshot: a `GtkSnapshot`
+ * @bounds: the bounds for the new node
+ * @nth: the index of the copy, with 0 being the latest
+ *  copy, 1 being the copy before that, and so on.
+ *
+ * Creates a new render node that pastes the contents
+ * copied by a previous call to [method@Gtk.Snapshot.push_copy]
+ *
+ * Since: 4.22
+ */
+void
+gtk_snapshot_append_paste (GtkSnapshot           *snapshot,
+                           const graphene_rect_t *bounds,
+                           gsize                  nth)
+{
+  GskRenderNode *node;
+
+  g_return_if_fail (snapshot != NULL);
+  g_return_if_fail (bounds != NULL);
+
+  /* need identity here because the bounds are used
+   * in the copy and the paste coordinate system. */
+  gtk_snapshot_ensure_identity (snapshot);
+
+  node = gsk_paste_node_new (bounds, nth);
 
   gtk_snapshot_append_node_internal (snapshot, node);
 }
