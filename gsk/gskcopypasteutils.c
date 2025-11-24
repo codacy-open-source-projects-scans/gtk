@@ -20,15 +20,15 @@
 
 #include "gskcopypasteutilsprivate.h"
 
+#include "gskclipnode.h"
 #include "gskcolornode.h"
 #include "gskcontainernode.h"
 #include "gskcopynode.h"
 #include "gskopacitynode.h"
 #include "gskpastenode.h"
-#include "gskrectprivate.h"
 #include "gskrendernodeprivate.h"
 #include "gskrenderreplay.h"
-#include "gsktransformprivate.h"
+#include "gsktransform.h"
 
 #include "gdk/gdkrgbaprivate.h"
 
@@ -65,9 +65,14 @@ replay_partial_node (const PartialNode *replay)
       switch (replay->node_type)
         {
         case GSK_TRANSFORM_NODE:
-          if (node)
-            node = gsk_transform_node_new (node, replay->transform);
-          transform = gsk_transform_transform (transform, replay->transform);
+          {
+            GskTransform *tmp;
+            if (node)
+              node = gsk_transform_node_new (node, replay->transform);
+            tmp = gsk_transform_transform (gsk_transform_ref (replay->transform), transform);
+            gsk_transform_unref (transform);
+            transform = tmp;
+          }
           break;
 
         case GSK_CONTAINER_NODE:
@@ -123,22 +128,27 @@ replay_partial_node (const PartialNode *replay)
         }
     }
 
-  if (transform)
+  if (node && transform)
     {
-      GskRenderNode *tmp;
-
       transform = gsk_transform_invert (transform);
       if (transform)
-        tmp = gsk_transform_node_new (node, transform);
+        {
+          GskRenderNode *tmp;
+
+          if (node)
+            {
+              tmp = gsk_transform_node_new (node, transform);
+              gsk_render_node_unref (node);
+              node = tmp;
+            }
+        }
       else
         {
           g_warning ("Trying to paste non-invertible transform, ignoring.");
-          tmp = NULL;
         }
-      gsk_render_node_unref (node);
-      node = tmp;
     }
-  if (gsk_render_node_clears_background (node))
+  g_clear_pointer (&transform, gsk_transform_unref);
+  if (node && gsk_render_node_clears_background (node))
     {
       /* Wrap in something that blocks background writes from
        * going through.
@@ -289,7 +299,13 @@ replace_copy_paste_node_record (GskRenderReplay *replay,
         if (paste)
           {
             GskRenderNode *child = replay_partial_node (paste->nodes_copied);
-            result = gsk_clip_node_new (child, &node->bounds);
+            if (child)
+              {
+                result = gsk_clip_node_new (child, &node->bounds);
+                gsk_render_node_unref (child);
+              }
+            else
+              result = NULL;
           }
         else
           result = NULL;
@@ -321,6 +337,8 @@ gsk_render_node_replace_copy_paste (GskRenderNode *node)
 
   if (result == NULL)
     result = gsk_color_node_new (&GDK_RGBA_TRANSPARENT, &node->bounds);
+
+  gsk_render_node_unref (node);
 
   return result;
 }

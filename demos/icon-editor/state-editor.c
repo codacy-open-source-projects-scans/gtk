@@ -20,7 +20,7 @@
  */
 
 #include "state-editor.h"
-#include "path-editor.h"
+#include "shape-editor.h"
 #include "path-paintable.h"
 
 struct _StateEditor
@@ -65,11 +65,10 @@ get_paintable_for_path (PathPaintable *paintable,
   unsigned int fill_symbolic = 0;
   GdkRGBA fill_color;
   GskFillRule rule;
-  float shape_params[6] = { 0, };
   PathPaintable *path_image;
 
   path_image = path_paintable_new ();
-  path_paintable_add_path (path_image, path_paintable_get_path (paintable, path), SHAPE_PATH, shape_params, 0);
+  path_paintable_add_path (path_image, path_paintable_get_path (paintable, path));
 
   do_stroke = path_paintable_get_path_stroke (paintable, path,
                                               stroke, &stroke_symbolic, &stroke_color);
@@ -205,7 +204,7 @@ repopulate (StateEditor *self)
 static void
 paths_changed (StateEditor *self)
 {
-  self->max_state = MAX (self->max_state, path_paintable_get_max_state (self->paintable));
+  self->max_state = MAX (self->max_state, path_paintable_get_n_states (self->paintable) - 1);
 
   repopulate (self);
 }
@@ -286,7 +285,7 @@ state_editor_class_init (StateEditorClass *class)
   GObjectClass *object_class = G_OBJECT_CLASS (class);
   GtkWidgetClass *widget_class = GTK_WIDGET_CLASS (class);
 
-  g_type_ensure (PATH_EDITOR_TYPE);
+  g_type_ensure (SHAPE_EDITOR_TYPE);
 
   object_class->dispose = state_editor_dispose;
   object_class->finalize = state_editor_finalize;

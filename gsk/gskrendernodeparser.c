@@ -23,7 +23,11 @@
 
 #include "gskrendernodeparserprivate.h"
 
+#include "gskblendnode.h"
+#include "gskblurnode.h"
+#include "gskbordernode.h"
 #include "gskcaironodeprivate.h"
+#include "gskclipnode.h"
 #include "gskcolormatrixnode.h"
 #include "gskcolornodeprivate.h"
 #include "gskcomponenttransfernode.h"
@@ -37,11 +41,13 @@
 #include "gskfillnode.h"
 #include "gskglshadernode.h"
 #include "gskgradientprivate.h"
+#include "gskmasknode.h"
 #include "gskopacitynode.h"
 #include "gskpastenode.h"
 #include "gskpath.h"
 #include "gskpathbuilder.h"
 #include "gskprivate.h"
+#include "gskroundedclipnode.h"
 #include "gskroundedrectprivate.h"
 #include "gskrendernodeprivate.h"
 #include "gskrepeatnode.h"
@@ -2696,23 +2702,11 @@ parse_radial_gradient_node_internal (GtkCssParser *parser,
   gsk_gradient_set_hue_interpolation (gradient, hue_interpolation);
   gsk_gradient_set_repeat (gradient, repeat);
 
-  if (end.radius <= start.radius)
-    {
-      gtk_css_parser_error (parser,
-                            GTK_CSS_PARSER_ERROR_UNKNOWN_VALUE,
-                            gtk_css_parser_get_block_location (parser),
-                            gtk_css_parser_get_end_location (parser),
-                            "\"start\" must be larger than \"end\"");
-      result = NULL;
-    }
-  else
-    {
-      result = gsk_radial_gradient_node_new2 (&bounds,
-                                              &start.center, start.radius,
-                                              &end.center, end.radius,
-                                              aspect_ratio.value,
-                                              gradient);
-    }
+  result = gsk_radial_gradient_node_new2 (&bounds,
+                                          &start.center, start.radius,
+                                          &end.center, end.radius,
+                                          aspect_ratio.value,
+                                          gradient);
 
   clear_stops (&stops);
   clear_color_state (&interpolation);

@@ -164,8 +164,6 @@
  * Since: 4.22
  */
 
-#define INDEFINITE G_MAXINT64
-
 /* Max. nesting level of paint calls we allow */
 #define MAX_DEPTH 256
 
@@ -1045,7 +1043,7 @@ svg_value_ref (SvgValue *value)
   return value;
 }
 
-static void
+void
 svg_value_unref (SvgValue *value)
 {
   if (value->ref_count > 1)
@@ -1292,7 +1290,7 @@ static const SvgValueClass SVG_NUMBER_CLASS = {
   svg_number_print
 };
 
-static SvgValue *
+SvgValue *
 svg_number_new (double value)
 {
   static SvgNumber singletons[] = {
@@ -1478,7 +1476,7 @@ static SvgEnum fill_rule_values[] = {
   { { &SVG_FILL_RULE_CLASS, 1 }, GSK_FILL_RULE_EVEN_ODD, "evenodd" },
 };
 
-static SvgValue *
+SvgValue *
 svg_fill_rule_new (GskFillRule value)
 {
   return svg_value_ref ((SvgValue *) &fill_rule_values[value]);
@@ -1546,7 +1544,7 @@ static SvgEnum line_cap_values[] = {
   { { &SVG_LINE_CAP_CLASS, 1 }, GSK_LINE_CAP_SQUARE, "square" },
 };
 
-static SvgValue *
+SvgValue *
 svg_linecap_new (GskLineCap value)
 {
   return svg_value_ref ((SvgValue *) &line_cap_values[value]);
@@ -1578,7 +1576,7 @@ static SvgEnum line_join_values[] = {
   { { &SVG_LINE_JOIN_CLASS, 1 }, GSK_LINE_JOIN_BEVEL, "bevel" },
 };
 
-static SvgValue *
+SvgValue *
 svg_linejoin_new (GskLineJoin value)
 {
   return svg_value_ref ((SvgValue *) &line_join_values[value]);
@@ -1693,6 +1691,40 @@ svg_coord_units_parse (const char *string)
         return svg_value_ref ((SvgValue *) &coord_units_values[i]);
     }
   return NULL;
+}
+
+static const SvgValueClass SVG_PAINT_ORDER_CLASS = {
+  "SvgPaintOrder",
+  svg_enum_free,
+  svg_enum_equal,
+  svg_enum_interpolate,
+  svg_enum_accumulate,
+  svg_enum_print,
+};
+
+static SvgEnum paint_order_values[] = {
+  { { &SVG_PAINT_ORDER_CLASS, 1 }, PAINT_ORDER_NORMAL, "normal" },
+  { { &SVG_PAINT_ORDER_CLASS, 1 }, PAINT_ORDER_REVERSE, "stroke fill" },
+};
+
+SvgValue *
+svg_paint_order_new (PaintOrder value)
+{
+  return svg_value_ref ((SvgValue *) &paint_order_values[value]);
+}
+
+static SvgValue *
+svg_paint_order_parse (const char *string)
+{
+  if (strcmp (string, "normal") == 0 ||
+      strcmp (string, "fill") == 0 ||
+      strcmp (string, "fill stroke") == 0)
+    return svg_paint_order_new (PAINT_ORDER_NORMAL);
+  else if (strcmp (string, "stroke") == 0 ||
+           strcmp (string, "stroke fill") == 0)
+    return svg_paint_order_new (PAINT_ORDER_REVERSE);
+  else
+    return NULL;
 }
 
 /* }}} */
@@ -2100,7 +2132,7 @@ fail:
   return NULL;
 }
 
-static SvgValue *
+SvgValue *
 svg_transform_parse (const char *value)
 {
   SvgValue *tf;
@@ -2672,7 +2704,7 @@ parse_symbolic_color (const char       *value,
   return TRUE;
 }
 
-static SvgValue *
+SvgValue *
 svg_paint_new_none (void)
 {
   static SvgPaint none = { { &SVG_PAINT_CLASS, 1 }, .kind = PAINT_NONE };
@@ -2680,7 +2712,7 @@ svg_paint_new_none (void)
   return svg_value_ref ((SvgValue *) &none);
 }
 
-static SvgValue *
+SvgValue *
 svg_paint_new_symbolic (GtkSymbolicColor symbolic)
 {
   static SvgPaint sym[] = {
@@ -2699,7 +2731,7 @@ static SvgPaint default_rgba[] = {
   { { &SVG_PAINT_CLASS, 1 }, .kind = PAINT_COLOR, .color = { 1, 1, 1, 1 } },
 };
 
-static SvgValue *
+SvgValue *
 svg_paint_new_rgba (const GdkRGBA *rgba)
 {
   if (gdk_rgba_equal (rgba, &default_rgba[0].color))
@@ -3118,7 +3150,7 @@ fail:
   return NULL;
 }
 
-static SvgValue *
+SvgValue *
 svg_filter_parse (const char *value)
 {
   SvgValue *filter;
@@ -3586,7 +3618,7 @@ svg_path_new_none (void)
   return svg_value_ref ((SvgValue *) &none);
 }
 
-static SvgValue *
+SvgValue *
 svg_path_new (GskPath *path)
 {
   SvgPath *result;
@@ -3860,10 +3892,24 @@ svg_points_new_none (void)
   return (SvgValue *) result;
 }
 
+SvgValue *
+svg_points_new (double       *values,
+                unsigned int  n_values)
+{
+  SvgPoints *result;
+
+  result = (SvgPoints *) svg_value_alloc (&SVG_POINTS_CLASS, svg_points_size (n_values));
+  result->n_values = n_values;
+
+  memcpy (result->values, values, sizeof (double) * n_values);
+
+  return (SvgValue *) result;
+}
+
 static SvgValue *
 svg_points_parse (const char *value)
 {
-  SvgPoints *result;
+  SvgValue *result;
   GArray *values;
 
   if (strcmp (value, "none") == 0)
@@ -3873,14 +3919,10 @@ svg_points_parse (const char *value)
   if (values->len % 2 != 0)
     g_array_remove_index (values, values->len - 1);
 
-  result = (SvgPoints *) svg_value_alloc (&SVG_POINTS_CLASS, svg_points_size (values->len));
-  result->n_values = values->len;
-
-  memcpy (result->values, values->data, sizeof (double) * values->len);
-
+  result = svg_points_new ((double *) values->data, values->len);
   g_array_unref (values);
 
-  return (SvgValue *) result;
+  return result;
 }
 
 static SvgValue *
@@ -3911,13 +3953,6 @@ svg_points_interpolate (const SvgValue *value0,
 
 /* }}} */
 /* {{{ Clips */
-
-typedef enum
-{
-  CLIP_NONE,
-  CLIP_PATH,
-  CLIP_REF,
-} ClipKind;
 
 typedef struct
 {
@@ -4014,14 +4049,14 @@ static const SvgValueClass SVG_CLIP_CLASS = {
   svg_clip_print
 };
 
-static SvgValue *
+SvgValue *
 svg_clip_new_none (void)
 {
   static SvgClip none = { { &SVG_CLIP_CLASS, 1 }, CLIP_NONE };
   return svg_value_ref ((SvgValue *) &none);
 }
 
-static SvgValue *
+SvgValue *
 svg_clip_new_path (GskPath *path)
 {
   SvgClip *result;
@@ -4672,6 +4707,13 @@ static ShapeAttribute shape_attrs[] = {
     .presentation = 1,
     .parse_value = parse_dash_offset,
   },
+  { .id = SHAPE_ATTR_PAINT_ORDER,
+    .name = "paint-order",
+    .inherited = 1,
+    .discrete = 1,
+    .presentation = 1,
+    .parse_value = svg_paint_order_parse,
+  },
   { .id = SHAPE_ATTR_HREF,
     .name = "href",
     .inherited = 0,
@@ -4889,6 +4931,7 @@ shape_attr_init_default_values (void)
   shape_attrs[SHAPE_ATTR_STROKE_MITERLIMIT].initial_value = svg_number_new (4);
   shape_attrs[SHAPE_ATTR_STROKE_DASHARRAY].initial_value = svg_dash_array_new_none ();
   shape_attrs[SHAPE_ATTR_STROKE_DASHOFFSET].initial_value = svg_number_new (0);
+  shape_attrs[SHAPE_ATTR_PAINT_ORDER].initial_value = svg_paint_order_new (PAINT_ORDER_NORMAL);
   shape_attrs[SHAPE_ATTR_HREF].initial_value = svg_href_new_none ();
   shape_attrs[SHAPE_ATTR_PATH_LENGTH].initial_value = svg_number_new (-1);
   shape_attrs[SHAPE_ATTR_PATH].initial_value = svg_path_new_none ();
@@ -6244,7 +6287,7 @@ animation_init (Animation *a)
   a->end = NULL;
 
   a->simple_duration = INDEFINITE;
-  a->repeat_count = DBL_MAX;
+  a->repeat_count = REPEAT_FOREVER;
   a->repeat_duration = INDEFINITE;
 
   a->fill = ANIMATION_FILL_REMOVE;
@@ -6592,7 +6635,7 @@ determine_repeat_duration (Animation *a)
 {
   if (a->repeat_duration < INDEFINITE)
     return a->repeat_duration;
-  else if (a->simple_duration < INDEFINITE && a->repeat_count < DBL_MAX)
+  else if (a->simple_duration < INDEFINITE && a->repeat_count != REPEAT_FOREVER)
     return a->simple_duration * a->repeat_count;
   else if (a->current.end < INDEFINITE)
     return a->current.end - a->current.begin;
@@ -6612,7 +6655,7 @@ determine_simple_duration (Animation *a)
 
   repeat_duration = determine_repeat_duration (a);
 
-  if (repeat_duration < INDEFINITE && a->repeat_count < DBL_MAX)
+  if (repeat_duration < INDEFINITE && a->repeat_count != REPEAT_FOREVER)
     return (int64_t) (repeat_duration / a->repeat_count);
 
   return INDEFINITE;
@@ -7884,7 +7927,7 @@ create_animation (Shape        *shape,
   a = animation_animate_new ();
   a->repeat_count = repeat;
   a->simple_duration = duration;
-  if (repeat == DBL_MAX)
+  if (repeat == REPEAT_FOREVER)
     a->repeat_duration = INDEFINITE;
   else
     a->repeat_duration =duration * repeat;
@@ -8489,12 +8532,12 @@ parse_base_animation_attrs (Animation            *a,
         }
     }
 
-  a->repeat_count = DBL_MAX;
+  a->repeat_count = REPEAT_FOREVER;
   if (repeat_count_attr)
     {
       a->has_repeat_count = 1;
       if (strcmp (repeat_count_attr, "indefinite") == 0)
-        a->repeat_count = DBL_MAX;
+        a->repeat_count = REPEAT_FOREVER;
       else if (!parse_number (repeat_count_attr, 0, DBL_MAX, &a->repeat_count))
         {
           gtk_svg_invalid_attribute (data->svg, context, "repeatCount", NULL);
@@ -8527,7 +8570,7 @@ parse_base_animation_attrs (Animation            *a,
     }
   else if (a->has_repeat_count && a->has_simple_duration && !a->has_repeat_duration)
     {
-      if (a->repeat_count == DBL_MAX)
+      if (a->repeat_count == REPEAT_FOREVER)
         a->repeat_duration = INDEFINITE;
       else
         a->repeat_duration = a->simple_duration * a->repeat_count;
@@ -8535,13 +8578,13 @@ parse_base_animation_attrs (Animation            *a,
   else if (a->has_repeat_duration && a->has_simple_duration && !a->has_repeat_count)
     {
       if (a->repeat_duration == INDEFINITE)
-        a->repeat_count = DBL_MAX;
+        a->repeat_count = REPEAT_FOREVER;
       else
         a->repeat_count = a->repeat_duration / a->simple_duration;
     }
   else if (a->has_repeat_duration && a->has_repeat_count && !a->has_simple_duration)
     {
-      if (a->repeat_duration == INDEFINITE || a->repeat_count == DBL_MAX)
+      if (a->repeat_duration == INDEFINITE || a->repeat_count == REPEAT_FOREVER)
         a->simple_duration = INDEFINITE;
       else
         a->simple_duration = a->repeat_duration / a->repeat_count;
@@ -9432,11 +9475,11 @@ parse_shape_gpa_attrs (Shape                *shape,
         gtk_svg_invalid_attribute (data->svg, context, "gpa:animation-duration", NULL);
     }
 
-  animation_repeat = DBL_MAX;
+  animation_repeat = REPEAT_FOREVER;
   if (animation_repeat_attr)
     {
       if (strcmp (animation_repeat_attr, "indefinite") == 0)
-        animation_repeat = DBL_MAX;
+        animation_repeat = REPEAT_FOREVER;
       else if (!parse_number (animation_repeat_attr, 0, DBL_MAX, &animation_repeat))
         gtk_svg_invalid_attribute (data->svg, context, "gpa:animation-repeat", NULL);
     }
@@ -10652,6 +10695,35 @@ serialize_shape_attrs (GString              *s,
 }
 
 static void
+states_to_string (GString  *s,
+                  uint64_t  states)
+{
+  if (states == ALL_STATES)
+    {
+      g_string_append (s, "all");
+    }
+  else if (states == NO_STATES)
+    {
+      g_string_append (s, "none");
+    }
+  else
+    {
+      gboolean first = TRUE;
+
+      for (unsigned int u = 0; u < 64; u++)
+        {
+          if ((states & (G_GUINT64_CONSTANT (1) << u)) != 0)
+            {
+              if (!first)
+                g_string_append_c (s, ' ');
+              g_string_append_printf (s, "%u", u);
+              first = FALSE;
+            }
+        }
+    }
+}
+
+static void
 serialize_gpa_attrs (GString              *s,
                      GtkSvg               *svg,
                      int                   indent,
@@ -10695,6 +10767,119 @@ serialize_gpa_attrs (GString              *s,
       g_string_append (s, "gpa:fill='");
       svg_paint_print_gpa (values[SHAPE_ATTR_FILL], s);
       g_string_append_c (s, '\'');
+    }
+
+  if (flags & GTK_SVG_SERIALIZE_INCLUDE_GPA_ATTRS)
+    {
+      if (shape->gpa.states != ALL_STATES)
+        {
+          indent_for_attr (s, indent);
+          g_string_append (s, "gpa:states='");
+          states_to_string (s, shape->gpa.states);
+          g_string_append_c (s, '\'');
+        }
+
+      if (shape->gpa.transition != GPA_TRANSITION_NONE)
+        {
+          const char *names[] = { "none", "animate", "morph", "fade" };
+          indent_for_attr (s, indent);
+          g_string_append_printf (s, "gpa:transition-type='%s'", names[shape->gpa.transition]);
+        }
+
+      if (shape->gpa.transition_easing != GPA_EASING_LINEAR)
+        {
+          const char *names[] = { "linear", "ease-in-out", "ease-in", "ease-out", "ease" };
+          indent_for_attr (s, indent);
+          g_string_append_printf (s, "gpa:transition-easing='%s'", names[shape->gpa.transition_easing]);
+        }
+
+      if (shape->gpa.transition_duration != 0)
+        {
+          char buffer[128];
+          indent_for_attr (s, indent);
+          g_string_append_printf (s, "gpa:transition-duration='%sms'",
+                                  g_ascii_formatd (buffer, sizeof (buffer),
+                                                   "%g", shape->gpa.transition_duration / (double) G_TIME_SPAN_MILLISECOND));
+        }
+
+      if (shape->gpa.transition_delay != 0)
+        {
+          char buffer[128];
+          indent_for_attr (s, indent);
+          g_string_append_printf (s, "gpa:transition-delay='%sms'",
+                                  g_ascii_formatd (buffer, sizeof (buffer),
+                                                   "%g", shape->gpa.transition_delay / (double) G_TIME_SPAN_MILLISECOND));
+        }
+
+      if (shape->gpa.animation != GPA_ANIMATION_NONE)
+        {
+          const char *names[] = { "none", "normal", "alternate", "reverse",
+            "reverse-alternate", "in-out", "in-out-alternate", "in-out-reverse",
+            "segment", "segment-alternate" };
+          indent_for_attr (s, indent);
+          g_string_append (s, "gpa:animation-type='automatic'");
+          indent_for_attr (s, indent);
+          g_string_append_printf (s, "gpa:animation-direction='%s'", names[shape->gpa.animation]);
+          indent_for_attr (s, indent);
+        }
+
+      if (shape->gpa.animation_easing != GPA_EASING_LINEAR)
+        {
+          const char *names[] = { "linear", "ease-in-out", "ease-in", "ease-out", "ease" };
+          indent_for_attr (s, indent);
+          g_string_append_printf (s, "gpa:animation-easing='%s'", names[shape->gpa.animation_easing]);
+        }
+
+      if (shape->gpa.animation_duration != 0)
+        {
+          char buffer[128];
+          indent_for_attr (s, indent);
+          g_string_append_printf (s, "gpa:animation-duration='%sms'",
+                                  g_ascii_formatd (buffer, sizeof (buffer),
+                                                   "%g", shape->gpa.animation_duration / (double) G_TIME_SPAN_MILLISECOND));
+        }
+
+      if (shape->gpa.animation_repeat != REPEAT_FOREVER)
+        {
+          char buffer[128];
+          indent_for_attr (s, indent);
+          g_string_append_printf (s, "gpa:animation-repeat='%s'",
+                                  g_ascii_formatd (buffer, sizeof (buffer),
+                                                   "%g", shape->gpa.animation_repeat));
+        }
+
+      if (shape->gpa.animation_segment != 0.2)
+        {
+          char buffer[128];
+          indent_for_attr (s, indent);
+          g_string_append_printf (s, "gpa:animation-segment='%s'",
+                                  g_ascii_formatd (buffer, sizeof (buffer),
+                                                   "%g", shape->gpa.animation_segment));
+        }
+
+      if (shape->gpa.origin != 0)
+        {
+          char buffer[128];
+          indent_for_attr (s, indent);
+          g_string_append_printf (s, "gpa:origin='%s'",
+                                  g_ascii_formatd (buffer, sizeof (buffer),
+                                                   "%g", shape->gpa.origin));
+        }
+
+      if (shape->gpa.attach.ref)
+        {
+          indent_for_attr (s, indent);
+          g_string_append_printf (s, "gpa:attach-to='%s'", shape->gpa.attach.ref);
+        }
+
+      if (shape->gpa.attach.pos != 0)
+        {
+          char buffer[128];
+          indent_for_attr (s, indent);
+          g_string_append_printf (s, "gpa:attach-pos='%s'",
+                                  g_ascii_formatd (buffer, sizeof (buffer),
+                                                   "%g", shape->gpa.attach.pos));
+        }
     }
 }
 
@@ -10751,7 +10936,7 @@ serialize_base_animation_attrs (GString   *s,
   if (a->has_repeat_count)
     {
       indent_for_attr (s, indent);
-      if (a->repeat_count == DBL_MAX)
+      if (a->repeat_count == REPEAT_FOREVER)
         {
           g_string_append (s, "repeatCount='indefinite'");
         }
@@ -11073,8 +11258,14 @@ serialize_animation (GString              *s,
                      Animation            *a,
                      GtkSvgSerializeFlags  flags)
 {
-  if ((flags & GTK_SVG_SERIALIZE_EXCLUDE_ANIMATION))
+  if (flags & GTK_SVG_SERIALIZE_EXCLUDE_ANIMATION)
     return;
+
+  if (flags & GTK_SVG_SERIALIZE_INCLUDE_GPA_ATTRS)
+    {
+      if (a->id && g_str_has_prefix (a->id, "gpa:"))
+        return;
+    }
 
   switch (a->type)
     {
@@ -11606,11 +11797,93 @@ shape_create_stroke (Shape        *shape,
 }
 
 static void
+fill_shape (Shape        *shape,
+            GskPath      *path,
+            PaintContext *context)
+{
+  SvgPaint *paint;
+  graphene_rect_t bounds;
+
+  paint = (SvgPaint *) shape->current[SHAPE_ATTR_FILL];
+  if (paint->kind != PAINT_NONE && gsk_path_get_bounds (path, &bounds))
+    {
+      GskFillRule fill_rule;
+      double opacity;
+
+      fill_rule = svg_enum_get (shape->current[SHAPE_ATTR_FILL_RULE]);
+      opacity = svg_number_get (shape->current[SHAPE_ATTR_FILL_OPACITY], 1);
+      if (paint->kind == PAINT_COLOR)
+        {
+          GdkRGBA color = paint->color;
+          color.alpha *= opacity;
+          gtk_snapshot_append_fill (context->snapshot, path, fill_rule, &color);
+        }
+      else if (paint->kind == PAINT_GRADIENT)
+        {
+          if (opacity < 1)
+            gtk_snapshot_push_opacity (context->snapshot, opacity);
+
+          gtk_snapshot_push_fill (context->snapshot, path, fill_rule);
+          paint_gradient (paint->gradient.shape, &bounds, context);
+          gtk_snapshot_pop (context->snapshot);
+
+          if (opacity < 1)
+            gtk_snapshot_pop (context->snapshot);
+        }
+      else
+        g_assert_not_reached ();
+   }
+}
+
+static void
+stroke_shape (Shape        *shape,
+              GskPath      *path,
+              PaintContext *context)
+{
+  SvgPaint *paint;
+
+  paint = (SvgPaint *) shape->current[SHAPE_ATTR_STROKE];
+  if (paint->kind != PAINT_NONE)
+    {
+      GskStroke *stroke;
+      graphene_rect_t bounds;
+
+      stroke = shape_create_stroke (shape, context);
+      if (gsk_path_get_stroke_bounds (path, stroke, &bounds))
+        {
+          double opacity;
+
+          opacity = svg_number_get (shape->current[SHAPE_ATTR_STROKE_OPACITY], 1);
+          if (paint->kind == PAINT_COLOR)
+            {
+              GdkRGBA color = paint->color;
+              color.alpha *= opacity;
+              gtk_snapshot_append_stroke (context->snapshot, path, stroke, &color);
+            }
+          else if (paint->kind == PAINT_GRADIENT)
+            {
+              if (opacity < 1)
+                gtk_snapshot_push_opacity (context->snapshot, opacity);
+
+              gtk_snapshot_push_stroke (context->snapshot, path, stroke);
+              paint_gradient (paint->gradient.shape, &bounds, context);
+              gtk_snapshot_pop (context->snapshot);
+
+              if (opacity < 1)
+                gtk_snapshot_pop (context->snapshot);
+            }
+          else
+            g_assert_not_reached ();
+        }
+      gsk_stroke_free (stroke);
+    }
+}
+
+static void
 paint_shape (Shape        *shape,
              PaintContext *context)
 {
   GskPath *path;
-  graphene_rect_t bounds;
 
   if (shape->type == SHAPE_USE)
     {
@@ -11658,75 +11931,21 @@ paint_shape (Shape        *shape,
 
   if (context->op == RENDERING || context->op == MASKING)
     {
-      SvgPaint *paint;
-
-      paint = (SvgPaint *) shape->current[SHAPE_ATTR_FILL];
-      if (paint->kind != PAINT_NONE && gsk_path_get_bounds (path, &bounds))
+      if (svg_enum_get (shape->current[SHAPE_ATTR_PAINT_ORDER]) == PAINT_ORDER_NORMAL)
         {
-          GskFillRule fill_rule;
-          double opacity;
-
-          fill_rule = svg_enum_get (shape->current[SHAPE_ATTR_FILL_RULE]);
-          opacity = svg_number_get (shape->current[SHAPE_ATTR_FILL_OPACITY], 1);
-          if (paint->kind == PAINT_COLOR)
-            {
-              GdkRGBA color = paint->color;
-              color.alpha *= opacity;
-              gtk_snapshot_append_fill (context->snapshot, path, fill_rule, &color);
-            }
-          else if (paint->kind == PAINT_GRADIENT)
-            {
-              if (opacity < 1)
-                gtk_snapshot_push_opacity (context->snapshot, opacity);
-
-              gtk_snapshot_push_fill (context->snapshot, path, fill_rule);
-              paint_gradient (paint->gradient.shape, &bounds, context);
-              gtk_snapshot_pop (context->snapshot);
-
-              if (opacity < 1)
-                gtk_snapshot_pop (context->snapshot);
-            }
-          else
-            g_assert_not_reached ();
+          fill_shape (shape, path, context);
+          stroke_shape (shape, path, context);
         }
-
-      paint = (SvgPaint *) shape->current[SHAPE_ATTR_STROKE];
-      if (paint->kind != PAINT_NONE)
+      else
         {
-          GskStroke *stroke;
-
-          stroke = shape_create_stroke (shape, context);
-          if (gsk_path_get_stroke_bounds (path, stroke, &bounds))
-            {
-              double opacity;
-
-              opacity = svg_number_get (shape->current[SHAPE_ATTR_STROKE_OPACITY], 1);
-              if (paint->kind == PAINT_COLOR)
-                {
-                  GdkRGBA color = paint->color;
-                  color.alpha *= opacity;
-                  gtk_snapshot_append_stroke (context->snapshot, path, stroke, &color);
-                }
-              else if (paint->kind == PAINT_GRADIENT)
-                {
-                  if (opacity < 1)
-                    gtk_snapshot_push_opacity (context->snapshot, opacity);
-
-                  gtk_snapshot_push_stroke (context->snapshot, path, stroke);
-                  paint_gradient (paint->gradient.shape, &bounds, context);
-                  gtk_snapshot_pop (context->snapshot);
-
-                  if (opacity < 1)
-                    gtk_snapshot_pop (context->snapshot);
-                }
-              else
-                g_assert_not_reached ();
-            }
-          gsk_stroke_free (stroke);
+          stroke_shape (shape, path, context);
+          fill_shape (shape, path, context);
         }
     }
   else if (context->op == CLIPPING)
     {
+      graphene_rect_t bounds;
+
       /* Clip mask - see language in the spec about 'raw geometry' */
       if (gsk_path_get_bounds (path, &bounds))
         {
@@ -12236,6 +12455,165 @@ timeline_dump (Timeline *timeline)
 
 /* }}} */
 /* {{{ Private API */
+
+GtkSvg *
+gtk_svg_copy (GtkSvg *orig)
+{
+  GBytes *bytes = NULL;
+  GtkSvg *svg;
+
+  bytes = gtk_svg_serialize_full (orig,
+                                  NULL, 0,
+                                  GTK_SVG_SERIALIZE_INCLUDE_GPA_ATTRS);
+  svg = gtk_svg_new_from_bytes (bytes);
+  g_bytes_unref (bytes);
+
+  gtk_svg_set_weight (svg, gtk_svg_get_weight (orig));
+  gtk_svg_set_state (svg, gtk_svg_get_state (orig));
+
+  return svg;
+}
+
+static gboolean
+color_stop_equal (ColorStop *stop1,
+                  ColorStop *stop2)
+{
+  for (unsigned int i = 0; i < N_STOP_PROPS; i++)
+    {
+      if (!svg_value_equal (stop1->base[i], stop2->base[i]))
+        return FALSE;
+    }
+
+  return TRUE;
+}
+
+static gboolean
+frame_equal (Frame *f1,
+             Frame *f2)
+{
+  return svg_value_equal (f1->value, f2->value) &&
+         f1->time == f2->time &&
+         f1->point == f2->point &&
+         memcmp (f1->params, f2->params, sizeof (double) * 4) == 0;
+}
+
+static gboolean
+animation_equal (Animation *a1,
+                 Animation *a2)
+{
+  if (a1->type != a2->type ||
+      g_strcmp0 (a1->id, a2->id) != 0 ||
+      a1->attr != a2->attr ||
+      a1->simple_duration != a2->simple_duration ||
+      a1->repeat_count != a2->repeat_count ||
+      a1->repeat_duration != a2->repeat_duration ||
+      a1->fill != a2->fill ||
+      a1->restart != a2->restart ||
+      a1->additive != a2->additive ||
+      a1->accumulate != a2->accumulate ||
+      a1->calc_mode != a2->calc_mode ||
+      a1->n_frames != a2->n_frames)
+    return FALSE;
+
+  for (unsigned int i = 0; i < a1->n_frames; i++)
+    {
+      if (!frame_equal (&a1->frames[i], &a2->frames[i]))
+        return FALSE;
+    }
+
+  if (a1->type == ANIMATION_TYPE_MOTION)
+    {
+      if (g_strcmp0 (a1->motion.path_ref, a2->motion.path_ref) != 0 ||
+          !(a1->motion.path == a2->motion.path ||
+            (a1->motion.path && a2->motion.path && gsk_path_equal (a1->motion.path, a2->motion.path))) ||
+          a1->motion.rotate != a2->motion.rotate ||
+          a1->motion.angle != a2->motion.angle)
+        return FALSE;
+    }
+
+  return TRUE;
+}
+
+static gboolean
+shape_equal (Shape *shape1,
+             Shape *shape2)
+{
+  if (shape1->type != shape2->type ||
+      g_strcmp0 (shape1->id, shape2->id) != 0 ||
+      shape1->display != shape2->display)
+    return FALSE;
+
+  for (unsigned int i = 0; i < N_SHAPE_ATTRS; i++)
+    {
+      if (!svg_value_equal (shape1->base[i], shape2->base[i]))
+        return FALSE;
+    }
+
+  if (shape_types[shape1->type].has_shapes)
+    {
+      if (shape1->shapes->len != shape2->shapes->len)
+        return FALSE;
+
+      for (unsigned int i = 0; i < shape1->shapes->len; i++)
+        {
+          Shape *s1 = g_ptr_array_index (shape1->shapes, i);
+          Shape *s2 = g_ptr_array_index (shape2->shapes, i);
+
+          if (!shape_equal (s1, s2))
+            return FALSE;
+        }
+    }
+
+  if (shape_types[shape1->type].has_color_stops)
+    {
+      if (shape1->color_stops->len != shape2->color_stops->len)
+        return FALSE;
+
+      for (unsigned int i = 0; i < shape1->color_stops->len; i++)
+        {
+          ColorStop *s1 = g_ptr_array_index (shape1->color_stops, i);
+          ColorStop *s2 = g_ptr_array_index (shape2->color_stops, i);
+
+          if (!color_stop_equal (s1, s2))
+            return FALSE;
+        }
+    }
+
+  if (shape1->animations->len != shape2->animations->len)
+    return FALSE;
+
+  for (unsigned int i = 0; i < shape1->animations->len; i++)
+    {
+      Animation *a1 = g_ptr_array_index (shape1->animations, i);
+      Animation *a2 = g_ptr_array_index (shape2->animations, i);
+
+      if (!animation_equal (a1, a2))
+        return FALSE;
+    }
+
+  return TRUE;
+}
+
+gboolean
+gtk_svg_equal (GtkSvg *svg1,
+               GtkSvg *svg2)
+{
+  if (svg1->width != svg2->width ||
+      svg1->height != svg2->height ||
+      !graphene_rect_equal (&svg1->view_box, &svg2->view_box))
+    return FALSE;
+
+  if (svg1->align != svg2->align ||
+      svg1->meet_or_slice != svg2->meet_or_slice)
+    return FALSE;
+
+  if (svg1->gpa_version != svg2->gpa_version ||
+      g_strcmp0 (svg1->gpa_keywords, svg2->gpa_keywords) != 0)
+    return FALSE;
+
+  return shape_equal (svg1->content, svg2->content);
+}
+
 /* {{{ Animation */
 
 static void
@@ -12582,6 +12960,11 @@ gtk_svg_serialize_full (GtkSvg               *self,
         g_string_append (s, "gpa:state='empty'");
       else
         g_string_append_printf (s, "gpa:state='%u'", self->state);
+      if (self->gpa_keywords)
+        {
+          indent_for_attr (s, 0);
+          g_string_append_printf (s, "gpa:keywords='%s'", self->gpa_keywords);
+        }
     }
 
   if (flags & GTK_SVG_SERIALIZE_INCLUDE_STATE)
@@ -12611,9 +12994,9 @@ gtk_svg_serialize_full (GtkSvg               *self,
 /* {{{ Getters and setters */
 
 double
-gtk_svg_attr_get_number (Shape                 *shape,
-                         ShapeAttr              attr,
-                         const graphene_size_t *viewport)
+svg_shape_attr_get_number (Shape                 *shape,
+                           ShapeAttr              attr,
+                           const graphene_size_t *viewport)
 {
   g_return_val_if_fail (shape_has_attr (shape->type, attr) ||
                         (attr == SHAPE_ATTR_STROKE_MINWIDTH ||
@@ -12658,8 +13041,8 @@ gtk_svg_attr_get_number (Shape                 *shape,
 }
 
 GskPath *
-gtk_svg_attr_get_path (Shape     *shape,
-                       ShapeAttr  attr)
+svg_shape_attr_get_path (Shape     *shape,
+                         ShapeAttr  attr)
 {
   g_return_val_if_fail (shape_has_attr (shape->type, attr), NULL);
   SvgValue *value;
@@ -12678,8 +13061,8 @@ gtk_svg_attr_get_path (Shape     *shape,
 }
 
 unsigned int
-gtk_svg_attr_get_enum (Shape     *shape,
-                       ShapeAttr  attr)
+svg_shape_attr_get_enum (Shape     *shape,
+                         ShapeAttr  attr)
 {
   g_return_val_if_fail (shape_has_attr (shape->type, attr), 0);
   SvgValue *value;
@@ -12693,10 +13076,10 @@ gtk_svg_attr_get_enum (Shape     *shape,
 }
 
 PaintKind
-gtk_svg_attr_get_paint (Shape            *shape,
-                        ShapeAttr         attr,
-                        GtkSymbolicColor *symbolic,
-                        GdkRGBA          *color)
+svg_shape_attr_get_paint (Shape            *shape,
+                          ShapeAttr         attr,
+                          GtkSymbolicColor *symbolic,
+                          GdkRGBA          *color)
 {
   g_return_val_if_fail (shape_has_attr (shape->type, attr), PAINT_NONE);
   SvgValue *value;
@@ -12708,6 +13091,9 @@ gtk_svg_attr_get_paint (Shape            *shape,
     value = shape_attr_get_initial_value (attr, shape->type);
 
   paint = (SvgPaint *) value;
+
+  *symbolic = 0xffff;
+  *color = (GdkRGBA) { 0, 0, 0, 1 };
 
   switch (paint->kind)
     {
@@ -12728,9 +13114,9 @@ gtk_svg_attr_get_paint (Shape            *shape,
 }
 
 double *
-gtk_svg_attr_get_points (Shape        *shape,
-                         ShapeAttr     attr,
-                         unsigned int *n_params)
+svg_shape_attr_get_points (Shape        *shape,
+                           ShapeAttr     attr,
+                           unsigned int *n_params)
 {
   g_return_val_if_fail (shape_has_attr (shape->type, attr), NULL);
   SvgValue *value;
@@ -12746,6 +13132,109 @@ gtk_svg_attr_get_points (Shape        *shape,
   *n_params = points->n_values;
 
   return points->values;
+}
+
+GskPath *
+svg_shape_get_path (Shape                 *shape,
+                    const graphene_size_t *viewport)
+{
+  return shape_get_path (shape, viewport, FALSE);
+}
+
+ClipKind
+svg_shape_attr_get_clip (Shape      *shape,
+                         ShapeAttr   attr,
+                         GskPath   **path)
+{
+  g_return_val_if_fail (shape_has_attr (shape->type, attr), CLIP_NONE);
+  SvgValue *value;
+  SvgClip *clip;
+
+  if (shape->attrs & BIT (attr))
+    value = shape_get_base_value (shape, NULL, attr);
+  else
+    value = shape_attr_get_initial_value (attr, shape->type);
+
+  clip = (SvgClip *) value;
+
+  if (clip->kind == CLIP_PATH)
+    *path = clip->path;
+  else
+    *path = NULL;
+
+  return clip->kind;
+}
+
+char *
+svg_shape_attr_get_transform (Shape     *shape,
+                              ShapeAttr  attr)
+{
+  g_return_val_if_fail (shape_has_attr (shape->type, attr), NULL);
+  SvgValue *value;
+  SvgTransform *transform;
+  GString *s = g_string_new ("");
+
+  if (shape->attrs & BIT (attr))
+    value = shape_get_base_value (shape, NULL, attr);
+  else
+    value = shape_attr_get_initial_value (attr, shape->type);
+
+  transform = (SvgTransform *) value;
+
+  if (transform->transforms[0].type != TRANSFORM_NONE)
+    svg_value_print (value, s);
+
+  return g_string_free (s, FALSE);
+}
+
+char *
+svg_shape_attr_get_filter (Shape     *shape,
+                           ShapeAttr  attr)
+{
+  g_return_val_if_fail (shape_has_attr (shape->type, attr), NULL);
+  SvgValue *value;
+  SvgFilter *filter;
+  GString *s = g_string_new ("");
+
+  if (shape->attrs & BIT (attr))
+    value = shape_get_base_value (shape, NULL, attr);
+  else
+    value = shape_attr_get_initial_value (attr, shape->type);
+
+  filter = (SvgFilter *) value;
+
+  if (filter->functions[0].kind != FILTER_NONE)
+    svg_value_print (value, s);
+
+  return g_string_free (s, FALSE);
+}
+
+void
+svg_shape_attr_set (Shape     *shape,
+                    ShapeAttr  attr,
+                    SvgValue  *value)
+{
+  if (shape->attrs & BIT (attr))
+    svg_value_unref (shape->base[attr]);
+  shape->base[attr] = value;
+  shape->attrs |= BIT (attr);
+}
+
+Shape *
+svg_shape_add (Shape     *parent,
+               ShapeType  type)
+{
+  Shape *shape = shape_new (parent, type);
+
+  g_ptr_array_add (parent->shapes, shape);
+
+  return shape;
+}
+
+void
+svg_shape_delete (Shape *shape)
+{
+  g_ptr_array_remove (shape->parent->shapes, shape);
 }
 
 /* }}} */

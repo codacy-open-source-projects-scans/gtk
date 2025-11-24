@@ -26,6 +26,9 @@
 
 G_BEGIN_DECLS
 
+#define INDEFINITE G_MAXINT64
+#define REPEAT_FOREVER INFINITY
+
 typedef struct _SvgValue SvgValue;
 typedef struct _Shape Shape;
 typedef struct _Timeline Timeline;
@@ -125,6 +128,7 @@ typedef enum
   SHAPE_ATTR_STROKE_MITERLIMIT,
   SHAPE_ATTR_STROKE_DASHARRAY,
   SHAPE_ATTR_STROKE_DASHOFFSET,
+  SHAPE_ATTR_PAINT_ORDER,
   SHAPE_ATTR_HREF,
   SHAPE_ATTR_PATH_LENGTH,
   SHAPE_ATTR_PATH,
@@ -263,29 +267,87 @@ typedef enum
   PAINT_GRADIENT,
 } PaintKind;
 
+typedef enum
+{
+  PAINT_ORDER_NORMAL,
+  PAINT_ORDER_REVERSE,
+} PaintOrder;
+
+typedef enum
+{
+  CLIP_NONE,
+  CLIP_PATH,
+  CLIP_REF,
+} ClipKind;
+
 double
-gtk_svg_attr_get_number (Shape                 *shape,
-                         ShapeAttr              attr,
-                         const graphene_size_t *viewport);
+svg_shape_attr_get_number (Shape                 *shape,
+                           ShapeAttr              attr,
+                           const graphene_size_t *viewport);
 
 GskPath *
-gtk_svg_attr_get_path   (Shape                 *shape,
-                         ShapeAttr              attr);
+svg_shape_attr_get_path   (Shape                 *shape,
+                           ShapeAttr              attr);
 
 unsigned int
-gtk_svg_attr_get_enum   (Shape                 *shape,
-                         ShapeAttr              attr);
+svg_shape_attr_get_enum   (Shape                 *shape,
+                           ShapeAttr              attr);
 
 PaintKind
-gtk_svg_attr_get_paint  (Shape                 *shape,
-                         ShapeAttr              attr,
-                         GtkSymbolicColor      *symbolic,
-                         GdkRGBA               *color);
+svg_shape_attr_get_paint  (Shape                 *shape,
+                           ShapeAttr              attr,
+                           GtkSymbolicColor      *symbolic,
+                           GdkRGBA               *color);
 
 double *
-gtk_svg_attr_get_points (Shape                 *shape,
-                         ShapeAttr              attr,
-                         unsigned int          *n_params);
+svg_shape_attr_get_points (Shape                 *shape,
+                           ShapeAttr              attr,
+                           unsigned int          *n_params);
+
+ClipKind
+svg_shape_attr_get_clip   (Shape                 *shape,
+                           ShapeAttr              attr,
+                           GskPath              **path);
+
+char *
+svg_shape_attr_get_transform (Shape              *shape,
+                              ShapeAttr           attr);
+
+char *
+svg_shape_attr_get_filter    (Shape              *shape,
+                              ShapeAttr           attr);
+
+GskPath *
+svg_shape_get_path        (Shape                 *shape,
+                           const graphene_size_t *viewport);
+
+void
+svg_shape_attr_set        (Shape                 *shape,
+                           ShapeAttr              attr,
+                           SvgValue              *value);
+
+void       svg_value_unref (SvgValue *value);
+
+SvgValue * svg_number_new (double value);
+SvgValue * svg_linecap_new (GskLineCap value);
+SvgValue * svg_linejoin_new (GskLineJoin value);
+SvgValue * svg_fill_rule_new (GskFillRule rule);
+SvgValue * svg_paint_order_new (PaintOrder order);
+SvgValue * svg_paint_new_none (void);
+SvgValue * svg_paint_new_symbolic (GtkSymbolicColor symbolic);
+SvgValue * svg_paint_new_rgba (const GdkRGBA *rgba);
+SvgValue * svg_points_new (double *values,
+                           unsigned int n_values);
+SvgValue * svg_path_new (GskPath *path);
+SvgValue * svg_clip_new_none (void);
+SvgValue * svg_clip_new_path (GskPath *path);
+SvgValue * svg_transform_parse (const char *value);
+SvgValue * svg_filter_parse (const char *value);
+
+Shape * svg_shape_add (Shape     *parent,
+                       ShapeType  type);
+
+void    svg_shape_delete (Shape  *shape);
 
 /* --- */
 
@@ -308,12 +370,18 @@ typedef enum
   GTK_SVG_SERIALIZE_AT_CURRENT_TIME   = 1 << 0,
   GTK_SVG_SERIALIZE_EXCLUDE_ANIMATION = 1 << 1,
   GTK_SVG_SERIALIZE_INCLUDE_STATE     = 1 << 2,
+  GTK_SVG_SERIALIZE_INCLUDE_GPA_ATTRS = 1 << 3,
 } GtkSvgSerializeFlags;
 
 GBytes *       gtk_svg_serialize_full  (GtkSvg                *self,
                                         const GdkRGBA         *colors,
                                         size_t                 n_colors,
                                         GtkSvgSerializeFlags   flags);
+
+GtkSvg * gtk_svg_copy (GtkSvg *orig);
+
+gboolean gtk_svg_equal (GtkSvg *svg1,
+                        GtkSvg *svg2);
 
 
 G_END_DECLS
