@@ -1,5 +1,6 @@
 <svg
         xmlns='http://www.w3.org/2000/svg'
+        xmlns:svg='http://www.w3.org/2000/svg'
         width='200'
         height='150'
         viewBox='0 0 200 150'>
@@ -9,7 +10,7 @@
           stroke='rgb(128,128,128)'
           stroke-width='1'
           d='M 20 20 Q 50 100, 180 20'
-          gpa:stroke-width='0.25 1 1.5'>
+          class='transparent-fill'>
   </path>
   <path
           id='motionPath2'
@@ -17,7 +18,7 @@
           stroke='rgb(128,128,128)'
           stroke-width='1'
           d='M 20 130 L 180 130 L 180 50 L 20 50 Z'
-          gpa:stroke-width='0.25 1 1.5'>
+          class='transparent-fill'>
   </path>
   <circle
           fill='rgb(255,0,0)'

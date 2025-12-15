@@ -203,7 +203,7 @@ blur_image_surface (cairo_surface_t *surface, int radius, int iterations)
 static void
 gsk_blur_node_draw (GskRenderNode *node,
                     cairo_t       *cr,
-                    GdkColorState *ccs)
+                    GskCairoData  *data)
 {
   GskBlurNode *self = (GskBlurNode *) node;
   cairo_surface_t *surface;
@@ -229,7 +229,7 @@ gsk_blur_node_draw (GskRenderNode *node,
                                    - blur_bounds.origin.y);
 
   cr2 = cairo_create (surface);
-  gsk_render_node_draw_ccs (self->child, cr2, ccs);
+  gsk_render_node_draw_full (self->child, cr2, data);
   cairo_destroy (cr2);
 
   blur_image_surface (surface, (int) ceil (0.5 * self->radius), 3);
@@ -260,7 +260,7 @@ gsk_blur_node_diff (GskRenderNode *node1,
 
       clip_radius = ceil (gsk_cairo_blur_compute_pixels (self1->radius / 2.0));
       sub = cairo_region_create ();
-      gsk_render_node_diff (self1->child, self2->child, &(GskDiffData) { sub, data->surface });
+      gsk_render_node_diff (self1->child, self2->child, &(GskDiffData) { sub, data->copies, data->surface });
 
       n = cairo_region_num_rectangles (sub);
       for (i = 0; i < n; i++)
@@ -278,6 +278,42 @@ gsk_blur_node_diff (GskRenderNode *node1,
     {
       gsk_render_node_diff_impossible (node1, node2, data);
     }
+}
+
+static void
+gsk_blur_node_render_opacity (GskRenderNode  *node,
+                              GskOpacityData *data)
+{
+  GskBlurNode *self = (GskBlurNode *) node;
+  GskOpacityData child_data = GSK_OPACITY_DATA_INIT_EMPTY (data->copies);
+
+  gsk_render_node_render_opacity (self->child, &child_data);
+
+  if (!gsk_rect_is_empty (&child_data.opaque))
+    {
+      float clip_radius = gsk_cairo_blur_compute_pixels (self->radius / 2.0);
+
+      graphene_rect_inset (&child_data.opaque, clip_radius, clip_radius);
+
+      if (!gsk_rect_is_empty (&child_data.opaque))
+        {
+          if (gsk_rect_is_empty (&data->opaque))
+            data->opaque = child_data.opaque;
+          else
+            gsk_rect_coverage (&data->opaque, &child_data.opaque, &data->opaque);
+        }
+    }
+}
+
+static GskRenderNode **
+gsk_blur_node_get_children (GskRenderNode *node,
+                            gsize         *n_children)
+{
+  GskBlurNode *self = (GskBlurNode *) node;
+
+  *n_children = 1;
+  
+  return &self->child;
 }
 
 static GskRenderNode *
@@ -313,7 +349,9 @@ gsk_blur_node_class_init (gpointer g_class,
   node_class->finalize = gsk_blur_node_finalize;
   node_class->draw = gsk_blur_node_draw;
   node_class->diff = gsk_blur_node_diff;
+  node_class->get_children = gsk_blur_node_get_children;
   node_class->replay = gsk_blur_node_replay;
+  node_class->render_opacity = gsk_blur_node_render_opacity;
 }
 
 GSK_DEFINE_RENDER_NODE_TYPE (GskBlurNode, gsk_blur_node)

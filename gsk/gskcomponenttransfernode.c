@@ -22,6 +22,7 @@
 
 #include "gskcomponenttransferprivate.h"
 #include "gskrendernodeprivate.h"
+#include "gskrenderreplay.h"
 #include "gskrectprivate.h"
 
 #include "gdk/gdkcairoprivate.h"
@@ -61,13 +62,13 @@ gsk_component_transfer_node_finalize (GskRenderNode *node)
 static void
 gsk_component_transfer_node_draw (GskRenderNode *node,
                                   cairo_t       *cr,
-                                  GdkColorState *ccs)
+                                  GskCairoData  *data)
 {
   GskComponentTransferNode *self = (GskComponentTransferNode *) node;
   int width, height;
   cairo_surface_t *surface;
   cairo_t *cr2;
-  guchar *data;
+  guchar *pixels;
   gsize stride;
   guint32 pixel;
   float r, g, b, a;
@@ -79,17 +80,17 @@ gsk_component_transfer_node_draw (GskRenderNode *node,
   surface = cairo_image_surface_create (CAIRO_FORMAT_ARGB32, width, height);
 
   cr2 = cairo_create (surface);
-  gsk_render_node_draw (self->child, cr2);
+  gsk_render_node_draw_full (self->child, cr2, data);
   cairo_destroy (cr2);
 
-  data = cairo_image_surface_get_data (surface);
+  pixels = cairo_image_surface_get_data (surface);
   stride = cairo_image_surface_get_stride (surface);
 
   for (guint y = 0; y < height; y++)
     {
       for (guint x = 0; x < width; x++)
         {
-          pixel = *(guint32 *)(data + y * stride + 4 * x);
+          pixel = *(guint32 *)(pixels + y * stride + 4 * x);
 
           a = ((pixel >> 24) & 0xff) / 255.;
           r = ((pixel >> 16) & 0xff) / 255.;
@@ -114,7 +115,7 @@ gsk_component_transfer_node_draw (GskRenderNode *node,
                   CLAMP ((int) roundf (g * 255), 0, 255) << 8 |
                   CLAMP ((int) roundf (b * 255), 0, 255) << 0;
 
-          *(guint32 *)(data + y * stride + 4 * x) = pixel;
+          *(guint32 *)(pixels + y * stride + 4 * x) = pixel;
         }
     }
 
@@ -156,11 +157,41 @@ gsk_component_transfer_node_diff (GskRenderNode *node1,
   gsk_render_node_diff_impossible (node1, node2, data);
 }
 
+static GskRenderNode **
+gsk_component_transfer_node_get_children (GskRenderNode *node,
+                                          gsize         *n_children)
+{
+  GskComponentTransferNode *self = (GskComponentTransferNode *) node;
+
+  *n_children = 1;
+  
+  return &self->child;
+}
+
 static GskRenderNode *
 gsk_component_transfer_node_replay (GskRenderNode   *node,
                                     GskRenderReplay *replay)
 {
-  return gsk_render_node_ref (node);
+  GskComponentTransferNode *self = (GskComponentTransferNode *) node;
+  GskRenderNode *result, *child;
+
+  child = gsk_render_replay_filter_node (replay, self->child);
+
+  if (child == NULL)
+    return NULL;
+
+  if (child == self->child)
+    result = gsk_render_node_ref (node);
+  else
+    result = gsk_component_transfer_node_new (child,
+                                              &self->transfer[0],
+                                              &self->transfer[1],
+                                              &self->transfer[2],
+                                              &self->transfer[3]);
+
+  gsk_render_node_unref (child);
+
+  return result;
 }
 
 static void
@@ -175,6 +206,7 @@ gsk_component_transfer_node_class_init (gpointer g_class,
   node_class->draw = gsk_component_transfer_node_draw;
   node_class->can_diff = gsk_component_transfer_node_can_diff;
   node_class->diff = gsk_component_transfer_node_diff;
+  node_class->get_children = gsk_component_transfer_node_get_children;
   node_class->replay = gsk_component_transfer_node_replay;
 }
 

@@ -37,8 +37,13 @@ struct _GskCrossFadeNode
 {
   GskRenderNode render_node;
 
-  GskRenderNode *start;
-  GskRenderNode *end;
+  union {
+    GskRenderNode *children[2];
+    struct {
+      GskRenderNode *start;
+      GskRenderNode *end;
+    };
+  };
   float          progress;
 };
 
@@ -57,7 +62,7 @@ gsk_cross_fade_node_finalize (GskRenderNode *node)
 static void
 gsk_cross_fade_node_draw (GskRenderNode *node,
                           cairo_t       *cr,
-                          GdkColorState *ccs)
+                          GskCairoData  *data)
 {
   GskCrossFadeNode *self = (GskCrossFadeNode *) node;
 
@@ -65,10 +70,10 @@ gsk_cross_fade_node_draw (GskRenderNode *node,
     return;
 
   cairo_push_group_with_content (cr, CAIRO_CONTENT_COLOR_ALPHA);
-  gsk_render_node_draw_ccs (self->start, cr, ccs);
+  gsk_render_node_draw_full (self->start, cr, data);
 
   cairo_push_group_with_content (cr, CAIRO_CONTENT_COLOR_ALPHA);
-  gsk_render_node_draw_ccs (self->end, cr, ccs);
+  gsk_render_node_draw_full (self->end, cr, data);
 
   cairo_pop_group_to_source (cr);
   cairo_set_operator (cr, CAIRO_OPERATOR_SOURCE);
@@ -94,6 +99,17 @@ gsk_cross_fade_node_diff (GskRenderNode *node1,
     }
 
   gsk_render_node_diff_impossible (node1, node2, data);
+}
+
+static GskRenderNode **
+gsk_cross_fade_node_get_children (GskRenderNode *node,
+                                  gsize         *n_children)
+{
+  GskCrossFadeNode *self = (GskCrossFadeNode *) node;
+
+  *n_children = G_N_ELEMENTS (self->children);
+
+  return self->children;
 }
 
 static GskRenderNode *
@@ -132,18 +148,25 @@ gsk_cross_fade_node_replay (GskRenderNode   *node,
   return result;
 }
 
-static gboolean
-gsk_cross_fade_node_get_opaque_rect (GskRenderNode   *node,
-                                     graphene_rect_t *opaque)
+static void
+gsk_cross_fade_node_render_opacity (GskRenderNode  *node,
+                                    GskOpacityData *data)
 {
   GskCrossFadeNode *self = (GskCrossFadeNode *) node;
-  graphene_rect_t start_opaque, end_opaque;
+  GskOpacityData start_data = GSK_OPACITY_DATA_INIT_EMPTY (data->copies);
+  GskOpacityData end_data = GSK_OPACITY_DATA_INIT_EMPTY (data->copies);
+  graphene_rect_t intersect;
 
-  if (!gsk_render_node_get_opaque_rect (self->start, &start_opaque) ||
-      !gsk_render_node_get_opaque_rect (self->end, &end_opaque))
-    return FALSE;
+  gsk_render_node_render_opacity (self->start, &start_data);
+  gsk_render_node_render_opacity (self->end, &end_data);
 
-  return graphene_rect_intersection (&start_opaque, &end_opaque, opaque);
+  if (gsk_rect_intersection (&start_data.opaque, &end_data.opaque, &intersect))
+    {
+      if (gsk_rect_is_empty (&data->opaque))
+        data->opaque = intersect;
+      else
+        gsk_rect_coverage (&data->opaque, &intersect, &data->opaque);
+    }
 }
 
 static void
@@ -157,8 +180,9 @@ gsk_cross_fade_node_class_init (gpointer g_class,
   node_class->finalize = gsk_cross_fade_node_finalize;
   node_class->draw = gsk_cross_fade_node_draw;
   node_class->diff = gsk_cross_fade_node_diff;
+  node_class->get_children = gsk_cross_fade_node_get_children;
   node_class->replay = gsk_cross_fade_node_replay;
-  node_class->get_opaque_rect = gsk_cross_fade_node_get_opaque_rect;
+  node_class->render_opacity = gsk_cross_fade_node_render_opacity;
 }
 
 GSK_DEFINE_RENDER_NODE_TYPE (GskCrossFadeNode, gsk_cross_fade_node)

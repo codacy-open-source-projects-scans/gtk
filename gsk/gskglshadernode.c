@@ -64,11 +64,11 @@ gsk_gl_shader_node_finalize (GskRenderNode *node)
 static void
 gsk_gl_shader_node_draw (GskRenderNode *node,
                          cairo_t       *cr,
-                         GdkColorState *ccs)
+                         GskCairoData  *data)
 {
   GdkRGBA pink = { 255 / 255., 105 / 255., 180 / 255., 1.0 };
 
-  gdk_cairo_set_source_rgba_ccs (cr, ccs, &pink);
+  gdk_cairo_set_source_rgba_ccs (cr, data->ccs, &pink);
   gdk_cairo_rect (cr, &node->bounds);
   cairo_fill (cr);
 }
@@ -88,7 +88,7 @@ gsk_gl_shader_node_diff (GskRenderNode *node1,
     {
       cairo_region_t *child_region = cairo_region_create();
       for (guint i = 0; i < self1->n_children; i++)
-        gsk_render_node_diff (self1->children[i], self2->children[i], &(GskDiffData) { child_region, data->surface });
+        gsk_render_node_diff (self1->children[i], self2->children[i], &(GskDiffData) { child_region, data->copies, data->surface });
       if (!cairo_region_is_empty (child_region))
         gsk_render_node_diff_impossible (node1, node2, data);
       cairo_region_destroy (child_region);
@@ -97,6 +97,17 @@ gsk_gl_shader_node_diff (GskRenderNode *node1,
     {
       gsk_render_node_diff_impossible (node1, node2, data);
     }
+}
+
+static GskRenderNode **
+gsk_gl_shader_node_get_children (GskRenderNode *node,
+                                 gsize         *n_children)
+{
+  GskGLShaderNode *self = (GskGLShaderNode *) node;
+
+  *n_children = self->n_children;
+
+  return self->children;
 }
 
 static GskRenderNode *
@@ -155,6 +166,7 @@ gsk_gl_shader_node_class_init (gpointer g_class,
   node_class->finalize = gsk_gl_shader_node_finalize;
   node_class->draw = gsk_gl_shader_node_draw;
   node_class->diff = gsk_gl_shader_node_diff;
+  node_class->get_children = gsk_gl_shader_node_get_children;
   node_class->replay = gsk_gl_shader_node_replay;
 }
 

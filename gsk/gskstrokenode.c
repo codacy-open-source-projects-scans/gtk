@@ -63,14 +63,14 @@ gsk_stroke_node_finalize (GskRenderNode *node)
 static void
 gsk_stroke_node_draw (GskRenderNode *node,
                       cairo_t       *cr,
-                      GdkColorState *ccs)
+                      GskCairoData  *data)
 {
   GskStrokeNode *self = (GskStrokeNode *) node;
 
   if (gsk_render_node_get_node_type (self->child) == GSK_COLOR_NODE &&
       gsk_rect_contains_rect (&self->child->bounds, &node->bounds))
     {
-      gdk_cairo_set_source_rgba_ccs (cr, ccs, gsk_color_node_get_color (self->child));
+      gdk_cairo_set_source_rgba_ccs (cr, data->ccs, gsk_color_node_get_color (self->child));
     }
   else
     {
@@ -80,7 +80,7 @@ gsk_stroke_node_draw (GskRenderNode *node,
         return;
 
       cairo_push_group (cr);
-      gsk_render_node_draw_ccs (self->child, cr, ccs);
+      gsk_render_node_draw_full (self->child, cr, data);
       cairo_pop_group_to_source (cr);
     }
 
@@ -101,20 +101,31 @@ gsk_stroke_node_diff (GskRenderNode *node1,
   if (self1->path == self2->path &&
       gsk_stroke_equal (&self1->stroke, &self2->stroke))
     {
-      cairo_region_t *sub;
+      cairo_region_t *save;
       cairo_rectangle_int_t clip_rect;
 
-      sub = cairo_region_create();
-      gsk_render_node_diff (self1->child, self2->child, &(GskDiffData) { sub, data->surface });
+      save = cairo_region_copy (data->region);
+      gsk_render_node_diff (self1->child, self2->child, data);
       gsk_rect_to_cairo_grow (&node1->bounds, &clip_rect);
-      cairo_region_intersect_rectangle (sub, &clip_rect);
-      cairo_region_union (data->region, sub);
-      cairo_region_destroy (sub);
+      cairo_region_intersect_rectangle (data->region, &clip_rect);
+      cairo_region_union (data->region, save);
+      cairo_region_destroy (save);
     }
   else
     {
       gsk_render_node_diff_impossible (node1, node2, data);
     }
+}
+
+static GskRenderNode **
+gsk_stroke_node_get_children (GskRenderNode *node,
+                              gsize         *n_children)
+{
+  GskStrokeNode *self = (GskStrokeNode *) node;
+
+  *n_children = 1;
+  
+  return &self->child;
 }
 
 static GskRenderNode *
@@ -150,6 +161,7 @@ gsk_stroke_node_class_init (gpointer g_class,
   node_class->finalize = gsk_stroke_node_finalize;
   node_class->draw = gsk_stroke_node_draw;
   node_class->diff = gsk_stroke_node_diff;
+  node_class->get_children = gsk_stroke_node_get_children;
   node_class->replay = gsk_stroke_node_replay;
 }
 

@@ -53,7 +53,7 @@ gsk_clip_node_finalize (GskRenderNode *node)
 static void
 gsk_clip_node_draw (GskRenderNode *node,
                     cairo_t       *cr,
-                    GdkColorState *ccs)
+                    GskCairoData  *data)
 {
   GskClipNode *self = (GskClipNode *) node;
 
@@ -62,7 +62,7 @@ gsk_clip_node_draw (GskRenderNode *node,
   gdk_cairo_rect (cr, &self->clip);
   cairo_clip (cr);
 
-  gsk_render_node_draw_ccs (self->child, cr, ccs);
+  gsk_render_node_draw_full (self->child, cr, data);
 
   cairo_restore (cr);
 }
@@ -77,15 +77,15 @@ gsk_clip_node_diff (GskRenderNode *node1,
 
   if (gsk_rect_equal (&self1->clip, &self2->clip))
     {
-      cairo_region_t *sub;
+      cairo_region_t *save;
       cairo_rectangle_int_t clip_rect;
 
-      sub = cairo_region_create();
-      gsk_render_node_diff (self1->child, self2->child, &(GskDiffData) { sub, data->surface });
+      save = cairo_region_copy (data->region);
+      gsk_render_node_diff (self1->child, self2->child, data);
       gsk_rect_to_cairo_grow (&self1->clip, &clip_rect);
-      cairo_region_intersect_rectangle (sub, &clip_rect);
-      cairo_region_union (data->region, sub);
-      cairo_region_destroy (sub);
+      cairo_region_intersect_rectangle (data->region, &clip_rect);
+      cairo_region_union (data->region, save);
+      cairo_region_destroy (save);
     }
   else
     {
@@ -93,18 +93,43 @@ gsk_clip_node_diff (GskRenderNode *node1,
     }
 }
  
-static gboolean
-gsk_clip_node_get_opaque_rect (GskRenderNode   *node,
-                               graphene_rect_t *opaque)
+static void
+gsk_clip_node_render_opacity (GskRenderNode  *node,
+                              GskOpacityData *data)
 {
   GskClipNode *self = (GskClipNode *) node;
-  graphene_rect_t child_opaque;
+  GskOpacityData child_data;
 
-  if (!gsk_render_node_get_opaque_rect (self->child, &child_opaque))
-    return FALSE;
+  child_data = GSK_OPACITY_DATA_INIT_COPY (data);
+  gsk_render_node_render_opacity (self->child, &child_data);
 
-  return graphene_rect_intersection (&self->clip, &child_opaque, opaque);
+  if (gsk_render_node_clears_background (self->child) &&
+      !gsk_rect_contains_rect (&child_data.opaque, &self->clip))
+    {
+      if (!gsk_rect_subtract (&data->opaque, &self->clip, &data->opaque))
+        data->opaque = GRAPHENE_RECT_INIT (0, 0, 0, 0);
+    }
+
+  if (gsk_rect_intersection (&child_data.opaque, &self->clip, &child_data.opaque))
+    {
+      if (gsk_rect_is_empty (&data->opaque))
+        data->opaque = child_data.opaque;
+      else
+        gsk_rect_coverage (&data->opaque, &child_data.opaque, &data->opaque);
+    }
 }
+
+static GskRenderNode **
+gsk_clip_node_get_children (GskRenderNode *node,
+                            gsize         *n_children)
+{
+  GskClipNode *self = (GskClipNode *) node;
+
+  *n_children = 1;
+  
+  return &self->child;
+}
+
 
 static GskRenderNode *
 gsk_clip_node_replay (GskRenderNode   *node,
@@ -139,8 +164,9 @@ gsk_clip_node_class_init (gpointer g_class,
   node_class->finalize = gsk_clip_node_finalize;
   node_class->draw = gsk_clip_node_draw;
   node_class->diff = gsk_clip_node_diff;
+  node_class->get_children = gsk_clip_node_get_children;
   node_class->replay = gsk_clip_node_replay;
-  node_class->get_opaque_rect = gsk_clip_node_get_opaque_rect;
+  node_class->render_opacity = gsk_clip_node_render_opacity;
 }
 
 GSK_DEFINE_RENDER_NODE_TYPE (GskClipNode, gsk_clip_node)

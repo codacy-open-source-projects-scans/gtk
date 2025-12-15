@@ -35,8 +35,13 @@ struct _GskBlendNode
 {
   GskRenderNode render_node;
 
-  GskRenderNode *bottom;
-  GskRenderNode *top;
+  union {
+    GskRenderNode *children[2];
+    struct {
+      GskRenderNode *bottom;
+      GskRenderNode *top;
+    };
+  };
   GskBlendMode blend_mode;
 };
 
@@ -97,21 +102,21 @@ gsk_blend_node_finalize (GskRenderNode *node)
 static void
 gsk_blend_node_draw (GskRenderNode *node,
                      cairo_t       *cr,
-                     GdkColorState *ccs)
+                     GskCairoData  *data)
 {
   GskBlendNode *self = (GskBlendNode *) node;
 
   if (gdk_cairo_is_all_clipped (cr))
     return;
 
-  if (!gdk_color_state_equal (ccs, GDK_COLOR_STATE_SRGB))
+  if (!gdk_color_state_equal (data->ccs, GDK_COLOR_STATE_SRGB))
     g_warning ("blend node in non-srgb colorstate isn't implemented yet.");
 
   cairo_push_group (cr);
-  gsk_render_node_draw_ccs (self->bottom, cr, ccs);
+  gsk_render_node_draw_full (self->bottom, cr, data);
 
   cairo_push_group (cr);
-  gsk_render_node_draw_ccs (self->top, cr, ccs);
+  gsk_render_node_draw_full (self->top, cr, data);
 
   cairo_pop_group_to_source (cr);
   cairo_set_operator (cr, gsk_blend_mode_to_cairo_operator (self->blend_mode));
@@ -138,6 +143,17 @@ gsk_blend_node_diff (GskRenderNode *node1,
     {
       gsk_render_node_diff_impossible (node1, node2, data);
     }
+}
+
+static GskRenderNode **
+gsk_blend_node_get_children (GskRenderNode *node,
+                             gsize         *n_children)
+{
+  GskBlendNode *self = (GskBlendNode *) node;
+
+  *n_children = G_N_ELEMENTS (self->children);
+
+  return self->children;
 }
 
 static GskRenderNode *
@@ -184,6 +200,7 @@ gsk_blend_node_class_init (gpointer g_class,
   node_class->finalize = gsk_blend_node_finalize;
   node_class->draw = gsk_blend_node_draw;
   node_class->diff = gsk_blend_node_diff;
+  node_class->get_children = gsk_blend_node_get_children;
   node_class->replay = gsk_blend_node_replay;
 }
 

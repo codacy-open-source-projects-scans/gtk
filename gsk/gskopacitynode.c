@@ -53,7 +53,7 @@ gsk_opacity_node_finalize (GskRenderNode *node)
 static void
 gsk_opacity_node_draw (GskRenderNode *node,
                        cairo_t       *cr,
-                       GdkColorState *ccs)
+                       GskCairoData  *data)
 {
   GskOpacityNode *self = (GskOpacityNode *) node;
 
@@ -66,7 +66,7 @@ gsk_opacity_node_draw (GskRenderNode *node,
 
   cairo_push_group (cr);
 
-  gsk_render_node_draw_ccs (self->child, cr, ccs);
+  gsk_render_node_draw_full (self->child, cr, data);
 
   cairo_pop_group_to_source (cr);
   cairo_paint_with_alpha (cr, self->opacity);
@@ -84,6 +84,17 @@ gsk_opacity_node_diff (GskRenderNode *node1,
     gsk_render_node_diff (self1->child, self2->child, data);
   else
     gsk_render_node_diff_impossible (node1, node2, data);
+}
+
+static GskRenderNode **
+gsk_opacity_node_get_children (GskRenderNode *node,
+                               gsize         *n_children)
+{
+  GskOpacityNode *self = (GskOpacityNode *) node;
+
+  *n_children = 1;
+  
+  return &self->child;
 }
 
 static GskRenderNode *
@@ -119,6 +130,7 @@ gsk_opacity_node_class_init (gpointer g_class,
   node_class->finalize = gsk_opacity_node_finalize;
   node_class->draw = gsk_opacity_node_draw;
   node_class->diff = gsk_opacity_node_diff;
+  node_class->get_children = gsk_opacity_node_get_children;
   node_class->replay = gsk_opacity_node_replay;
 }
 

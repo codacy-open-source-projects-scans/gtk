@@ -41,16 +41,17 @@
 #include "gskfillnode.h"
 #include "gskglshadernode.h"
 #include "gskgradientprivate.h"
+#include "gskisolationnode.h"
 #include "gskmasknode.h"
 #include "gskopacitynode.h"
 #include "gskpastenode.h"
 #include "gskpath.h"
 #include "gskpathbuilder.h"
 #include "gskprivate.h"
+#include "gskrendernodeprivate.h"
+#include "gskrepeatnodeprivate.h"
 #include "gskroundedclipnode.h"
 #include "gskroundedrectprivate.h"
-#include "gskrendernodeprivate.h"
-#include "gskrepeatnode.h"
 #include "gskstroke.h"
 #include "gskstrokenode.h"
 #include "gsksubsurfacenode.h"
@@ -70,6 +71,7 @@
 #include "gtk/css/gtkcssdataurlprivate.h"
 #include "gtk/css/gtkcssparserprivate.h"
 #include "gtk/css/gtkcssserializerprivate.h"
+#include "gtk/gtkpopcountprivate.h"
 
 #ifdef GDK_WINDOWING_WIN32
 #include "gdk/win32/gdkd3d12texturebuilder.h"
@@ -559,6 +561,7 @@ parse_dmabuf_fourcc (GtkCssParser *parser,
       if (strlen (fourcc_str) != 4)
         {
           gtk_css_parser_error_value (parser, "fourccs must be 4 characters long");
+          g_free (fourcc_str);
           return FALSE;
         }
 
@@ -566,6 +569,7 @@ parse_dmabuf_fourcc (GtkCssParser *parser,
                (fourcc_str[1] <<  8) |
                (fourcc_str[2] << 16) |
                (fourcc_str[3] << 24);
+      g_free (fourcc_str);
     }
   else if (gtk_css_parser_has_token (parser, GTK_CSS_TOKEN_SIGNLESS_INTEGER))
     {
@@ -1458,7 +1462,7 @@ parse_color_arg (GtkCssParser *parser,
 {
   ColorArgData *d = data;
   GdkColorState *color_state;
-  float values[4], clamped[4];
+  float values[4];
 
   if (!parse_color_state (parser, d->context, &color_state))
     return 0;
@@ -1487,20 +1491,7 @@ parse_color_arg (GtkCssParser *parser,
       values[3] = 1;
     }
 
-  gdk_color_state_clamp (color_state, values, clamped);
-  if (values[0] != clamped[0] ||
-      values[1] != clamped[1] ||
-      values[2] != clamped[2] ||
-      values[3] != clamped[3])
-    {
-      gtk_css_parser_error (parser,
-                            GTK_CSS_PARSER_ERROR_UNKNOWN_VALUE,
-                            gtk_css_parser_get_block_location (parser),
-                            gtk_css_parser_get_end_location (parser),
-                            "Color values out of range for color state");
-    }
-
-  gdk_color_init (d->color, color_state, clamped);
+  gdk_color_init (d->color, color_state, values);
   return 1;
 }
 
@@ -3382,10 +3373,12 @@ parse_repeat_node (GtkCssParser *parser,
   GskRenderNode *child = NULL;
   graphene_rect_t bounds = GRAPHENE_RECT_INIT (0, 0, 0, 0);
   graphene_rect_t child_bounds = GRAPHENE_RECT_INIT (0, 0, 0, 0);
+  GskRepeat repeat = GSK_REPEAT_REPEAT;
   const Declaration declarations[] = {
     { "child", parse_node, clear_node, &child },
     { "bounds", parse_rect, NULL, &bounds },
     { "child-bounds", parse_rect, NULL, &child_bounds },
+    { "repeat", parse_repeat, NULL, &repeat },
   };
   GskRenderNode *result;
   guint parse_result;
@@ -3399,7 +3392,7 @@ parse_repeat_node (GtkCssParser *parser,
   if (!(parse_result & (1 << 2)))
     gsk_render_node_get_bounds (child, &child_bounds);
 
-  result = gsk_repeat_node_new (&bounds, child, &child_bounds);
+  result = gsk_repeat_node_new2 (&bounds, child, &child_bounds, repeat);
 
   gsk_render_node_unref (child);
 
@@ -4039,7 +4032,7 @@ parse_composite_node (GtkCssParser *parser,
   };
   GskRenderNode *result;
 
-  parse_declarations (parser, context, declarations, G_N_ELEMENTS(declarations));
+  parse_declarations (parser, context, declarations, G_N_ELEMENTS (declarations));
   if (child == NULL)
     child = create_default_render_node ();
   if (mask == NULL)
@@ -4049,6 +4042,103 @@ parse_composite_node (GtkCssParser *parser,
 
   gsk_render_node_unref (child);
   gsk_render_node_unref (mask);
+
+  return result;
+}
+
+static struct {
+  const char *name;
+  GskIsolation value;
+} isolation_flags[] = {
+  { "background", GSK_ISOLATION_BACKGROUND },
+  { "copy-paste", GSK_ISOLATION_COPY_PASTE }
+};
+
+static gboolean
+parse_isolation_flags (GtkCssParser *parser,
+                       GskIsolation *out_result)
+{
+  GskIsolation result = 0;
+  guint i;
+
+  do
+    {
+      for (i = 0; i < G_N_ELEMENTS (isolation_flags); i++)
+        {
+          if (gtk_css_parser_try_ident (parser, isolation_flags[i].name))
+            {
+              if (result & isolation_flags[i].value)
+                {
+                  gtk_css_parser_error_value (parser, "Duplicate value");
+                  return FALSE;
+                }
+              result |= isolation_flags[i].value;
+              break;
+            }
+        }
+    }
+  while (i < G_N_ELEMENTS (isolation_flags));
+
+  if (result == 0)
+    {
+      gtk_css_parser_error_value (parser, "Expected an isolation feature");
+      return FALSE;
+    }
+
+  *out_result = result;
+  return TRUE;
+}
+
+static gboolean
+parse_isolation (GtkCssParser *parser,
+                 Context      *context,
+                 gpointer      out)
+{
+  GskIsolation isolation;
+
+  if (gtk_css_parser_try_ident (parser, "none"))
+    {
+      isolation = GSK_ISOLATION_NONE;
+    }
+  else if (gtk_css_parser_try_ident (parser, "all"))
+    {
+      isolation = GSK_ISOLATION_ALL;
+    }
+  else if (gtk_css_parser_try_ident (parser, "not"))
+    {
+      if (!parse_isolation_flags (parser, &isolation))
+        return FALSE;
+      isolation = GSK_ISOLATION_ALL & ~isolation;
+    }
+  else
+    {
+      if (!parse_isolation_flags (parser, &isolation))
+        return FALSE;
+    }
+
+  *(GskIsolation *) out = isolation;
+  return TRUE;
+}
+
+static GskRenderNode *
+parse_isolation_node (GtkCssParser *parser,
+                      Context      *context)
+{
+  GskRenderNode *child = NULL;
+  GskIsolation features = GSK_ISOLATION_ALL;
+  const Declaration declarations[] = {
+    { "child", parse_node, clear_node, &child },
+    { "isolations", parse_isolation, NULL, &features },
+  };
+  GskRenderNode *result;
+
+  parse_declarations (parser, context, declarations, G_N_ELEMENTS (declarations));
+  if (child == NULL)
+    child = create_default_render_node ();
+
+  result = gsk_isolation_node_new (child, features);
+
+  gsk_render_node_unref (child);
 
   return result;
 }
@@ -4096,6 +4186,7 @@ parse_node (GtkCssParser *parser,
     { "copy", parse_copy_node },
     { "paste", parse_paste_node },
     { "composite", parse_composite_node },
+    { "isolation", parse_isolation_node },
   };
   GskRenderNode **node_p = out_node;
   guint i;
@@ -4348,15 +4439,29 @@ printer_init_duplicates_for_node (Printer       *printer,
 {
   gpointer name;
 
-  if (!g_hash_table_lookup_extended (printer->named_nodes, node, NULL, &name))
-    g_hash_table_insert (printer->named_nodes, node, NULL);
-  else if (name == NULL)
-    g_hash_table_insert (printer->named_nodes, node, g_strdup (""));
+  if (g_hash_table_lookup_extended (printer->named_nodes, node, NULL, &name))
+    {
+      /* We've handled this node before */
+
+      if (name == NULL)
+        g_hash_table_insert (printer->named_nodes, node, g_strdup (""));
+      return;
+    }
+
+  g_hash_table_insert (printer->named_nodes, node, NULL);
 
   switch (gsk_render_node_get_node_type (node))
     {
     case GSK_TEXT_NODE:
       printer_init_collect_font_info (printer, node);
+      break;
+
+    case GSK_TEXTURE_NODE:
+      printer_init_check_texture (printer, gsk_texture_node_get_texture (node));
+      break;
+
+    case GSK_TEXTURE_SCALE_NODE:
+      printer_init_check_texture (printer, gsk_texture_scale_node_get_texture (node));
       break;
 
     case GSK_COLOR_NODE:
@@ -4370,115 +4475,37 @@ printer_init_duplicates_for_node (Printer       *printer,
     case GSK_CONIC_GRADIENT_NODE:
     case GSK_CAIRO_NODE:
     case GSK_PASTE_NODE:
-      /* no children */
-      break;
-
-    case GSK_TEXTURE_NODE:
-      printer_init_check_texture (printer, gsk_texture_node_get_texture (node));
-      break;
-
-    case GSK_TEXTURE_SCALE_NODE:
-      printer_init_check_texture (printer, gsk_texture_scale_node_get_texture (node));
-      break;
-
     case GSK_TRANSFORM_NODE:
-      printer_init_duplicates_for_node (printer, gsk_transform_node_get_child (node));
-      break;
-
     case GSK_OPACITY_NODE:
-      printer_init_duplicates_for_node (printer, gsk_opacity_node_get_child (node));
-      break;
-
     case GSK_COLOR_MATRIX_NODE:
-      printer_init_duplicates_for_node (printer, gsk_color_matrix_node_get_child (node));
-      break;
-
     case GSK_BLUR_NODE:
-      printer_init_duplicates_for_node (printer, gsk_blur_node_get_child (node));
-      break;
-
     case GSK_REPEAT_NODE:
-      printer_init_duplicates_for_node (printer, gsk_repeat_node_get_child (node));
-      break;
-
     case GSK_CLIP_NODE:
-      printer_init_duplicates_for_node (printer, gsk_clip_node_get_child (node));
-      break;
-
     case GSK_ROUNDED_CLIP_NODE:
-      printer_init_duplicates_for_node (printer, gsk_rounded_clip_node_get_child (node));
-      break;
-
     case GSK_SHADOW_NODE:
-      printer_init_duplicates_for_node (printer, gsk_shadow_node_get_child (node));
-      break;
-
     case GSK_DEBUG_NODE:
-      printer_init_duplicates_for_node (printer, gsk_debug_node_get_child (node));
-      break;
-
     case GSK_FILL_NODE:
-      printer_init_duplicates_for_node (printer, gsk_fill_node_get_child (node));
-      break;
-
     case GSK_STROKE_NODE:
-      printer_init_duplicates_for_node (printer, gsk_stroke_node_get_child (node));
-      break;
-
     case GSK_BLEND_NODE:
-      printer_init_duplicates_for_node (printer, gsk_blend_node_get_bottom_child (node));
-      printer_init_duplicates_for_node (printer, gsk_blend_node_get_top_child (node));
-      break;
-
     case GSK_MASK_NODE:
-      printer_init_duplicates_for_node (printer, gsk_mask_node_get_source (node));
-      printer_init_duplicates_for_node (printer, gsk_mask_node_get_mask (node));
-      break;
-
     case GSK_CROSS_FADE_NODE:
-      printer_init_duplicates_for_node (printer, gsk_cross_fade_node_get_start_child (node));
-      printer_init_duplicates_for_node (printer, gsk_cross_fade_node_get_end_child (node));
-      break;
-
     case GSK_GL_SHADER_NODE:
-      {
-G_GNUC_BEGIN_IGNORE_DEPRECATIONS
-        guint i;
-
-        for (i = 0; i < gsk_gl_shader_node_get_n_children (node); i++)
-          {
-            printer_init_duplicates_for_node (printer, gsk_gl_shader_node_get_child (node, i));
-          }
-G_GNUC_END_IGNORE_DEPRECATIONS
-      }
-      break;
-
     case GSK_CONTAINER_NODE:
+    case GSK_SUBSURFACE_NODE:
+    case GSK_COMPONENT_TRANSFER_NODE:
+    case GSK_COPY_NODE:
+    case GSK_COMPOSITE_NODE:
+    case GSK_ISOLATION_NODE:
       {
-        guint i;
+        GskRenderNode **children;
+        gsize i, n_children;
 
-        for (i = 0; i < gsk_container_node_get_n_children (node); i++)
+        children = gsk_render_node_get_children (node, &n_children);
+        for (i = 0; i < n_children; i++)
           {
-            printer_init_duplicates_for_node (printer, gsk_container_node_get_child (node, i));
+            printer_init_duplicates_for_node (printer, children[i]);
           }
       }
-      break;
-
-    case GSK_SUBSURFACE_NODE:
-      printer_init_duplicates_for_node (printer, gsk_subsurface_node_get_child (node));
-      break;
-
-    case GSK_COMPONENT_TRANSFER_NODE:
-      printer_init_duplicates_for_node (printer, gsk_component_transfer_node_get_child (node));
-      break;
-
-    case GSK_COPY_NODE:
-      printer_init_duplicates_for_node (printer, gsk_copy_node_get_child (node));
-      break;
-
-    case GSK_COMPOSITE_NODE:
-      printer_init_duplicates_for_node (printer, gsk_composite_node_get_child (node));
-      printer_init_duplicates_for_node (printer, gsk_composite_node_get_mask (node));
       break;
 
     default:
@@ -5617,6 +5644,46 @@ append_component_transfer_param (Printer                    *p,
 }
 
 static void
+append_isolation_param (Printer      *p,
+                        const char   *param_name,
+                        GskIsolation  isolation)
+{
+  _indent (p);
+  g_string_append_printf (p->str, "%s:", param_name);
+
+  if (isolation == GSK_ISOLATION_NONE)
+    {
+      g_string_append (p->str, " none");
+    }
+  else if (isolation == GSK_ISOLATION_ALL)
+    {
+      g_string_append (p->str, " all");
+    }
+  else
+    {
+      gsize i;
+
+      if (gtk_popcount (GSK_ISOLATION_ALL & ~isolation) < gtk_popcount (isolation))
+        {
+          g_string_append (p->str, " not");
+          isolation = GSK_ISOLATION_ALL & ~isolation;
+        }
+
+      for (i = 0; i < G_N_ELEMENTS (isolation_flags); i++)
+        {
+          if (isolation & isolation_flags[i].value)
+            {
+              g_string_append_c (p->str, ' ');
+              g_string_append (p->str, isolation_flags[i].name);
+            }
+        }
+    }
+
+  g_string_append_c (p->str, ';');
+  g_string_append_c (p->str, '\n');
+}
+
+static void
 render_node_print (Printer       *p,
                    GskRenderNode *node)
 {
@@ -6218,6 +6285,7 @@ G_GNUC_END_IGNORE_DEPRECATIONS
     case GSK_REPEAT_NODE:
       {
         GskRenderNode *child = gsk_repeat_node_get_child (node);
+        GskRepeat repeat = gsk_repeat_node_get_repeat (node);
         const graphene_rect_t *child_bounds = gsk_repeat_node_get_child_bounds (node);
 
         start_node (p, "repeat", node_name);
@@ -6227,6 +6295,8 @@ G_GNUC_END_IGNORE_DEPRECATIONS
         if (!graphene_rect_equal (child_bounds, &child->bounds))
           append_rect_param (p, "child-bounds", child_bounds);
         append_node_param (p, "child", gsk_repeat_node_get_child (node));
+        if (repeat != GSK_REPEAT_REPEAT)
+          append_repeat_param (p, "repeat", repeat);
 
         end_node (p);
       }
@@ -6373,6 +6443,14 @@ G_GNUC_END_IGNORE_DEPRECATIONS
       append_node_param (p, "child", gsk_composite_node_get_child (node));
       append_node_param (p, "mask", gsk_composite_node_get_mask (node));
       append_enum_param (p, "operator", GSK_TYPE_PORTER_DUFF, gsk_composite_node_get_operator (node));
+      end_node (p);
+      break;
+
+    case GSK_ISOLATION_NODE:
+      start_node (p, "isolation", node_name);
+      append_node_param (p, "child", gsk_isolation_node_get_child (node));
+      if (gsk_isolation_node_get_isolations (node) != GSK_ISOLATION_ALL)
+        append_isolation_param (p, "isolations", gsk_isolation_node_get_isolations (node));
       end_node (p);
       break;
 

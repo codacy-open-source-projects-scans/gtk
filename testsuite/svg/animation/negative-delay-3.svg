@@ -1,17 +1,18 @@
 <svg
         xmlns='http://www.w3.org/2000/svg'
-        width='100'
-        height='100'
+        xmlns:svg='http://www.w3.org/2000/svg'
         xmlns:gpa='https://www.gtk.org/grappa'
         gpa:version='1'
         gpa:state='1'
         gpa:state-change-delay='250ms'
-        gpa:time-since-load='500ms'>
+        gpa:time-since-load='500ms'
+        width='100'
+        height='100'>
   <path
           id='line1'
           visibility='hidden'
           fill='none'
-          stroke='rgb(190,190,190)'
+          stroke='rgb(0,0,0)'
           stroke-width='2'
           stroke-linecap='round'
           stroke-linejoin='round'
@@ -85,7 +86,7 @@
   <path
           id='line2'
           fill='none'
-          stroke='rgb(190,190,190)'
+          stroke='rgb(0,0,0)'
           stroke-width='2'
           stroke-linecap='round'
           stroke-linejoin='round'

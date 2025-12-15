@@ -2,6 +2,8 @@
 #include <gtk/gtksnapshotprivate.h>
 #include <gsk/gskcolornodeprivate.h>
 #include <gsk/gskrendernodeprivate.h>
+#include <gsk/gskrepeatnodeprivate.h>
+#include <gtk/gtksnapshotprivate.h>
 #include "../gdk/udmabuf.h"
 
 void
@@ -184,10 +186,11 @@ replay_repeat_node (GskRenderNode *node, GtkSnapshot *snapshot)
 {
   GskRenderNode *child = gsk_repeat_node_get_child (node);
   const graphene_rect_t *child_bounds = gsk_repeat_node_get_child_bounds (node);
+  GskRepeat repeat = gsk_repeat_node_get_repeat (node);
   graphene_rect_t bounds;
   gsk_render_node_get_bounds (node, &bounds);
 
-  gtk_snapshot_push_repeat (snapshot, &bounds, child_bounds);
+  gtk_snapshot_push_repeat2 (snapshot, &bounds, child_bounds, repeat);
   replay_node (child, snapshot);
   gtk_snapshot_pop (snapshot);
 }
@@ -440,6 +443,14 @@ replay_composite_node (GskRenderNode *node, GtkSnapshot *snapshot)
   gtk_snapshot_pop (snapshot);
 }
 
+static void
+replay_isolation_node (GskRenderNode *node, GtkSnapshot *snapshot)
+{
+  gtk_snapshot_push_isolation (snapshot, gsk_isolation_node_get_isolations (node));
+  replay_node (gsk_isolation_node_get_child (node), snapshot);
+  gtk_snapshot_pop (snapshot);
+}
+
 void
 replay_node (GskRenderNode *node, GtkSnapshot *snapshot)
 {
@@ -569,6 +580,10 @@ replay_node (GskRenderNode *node, GtkSnapshot *snapshot)
 
     case GSK_COMPOSITE_NODE:
       replay_composite_node (node, snapshot);
+      break;
+
+    case GSK_ISOLATION_NODE:
+      replay_isolation_node (node, snapshot);
       break;
 
     case GSK_SUBSURFACE_NODE:

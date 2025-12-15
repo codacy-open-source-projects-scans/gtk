@@ -48,8 +48,23 @@ struct _GskRenderNode
 typedef struct
 {
   cairo_region_t *region;
+  GSList *copies;
   GdkSurface *surface;
 } GskDiffData;
+
+typedef struct
+{
+  graphene_rect_t opaque;
+  GSList *copies;
+} GskOpacityData;
+
+#define GSK_OPACITY_DATA_INIT_EMPTY(copies) { GRAPHENE_RECT_INIT(0, 0, 0, 0), (copies) }
+#define GSK_OPACITY_DATA_INIT_COPY(data) (*(data))
+
+typedef struct
+{
+  GdkColorState *ccs;
+} GskCairoData;
 
 struct _GskRenderNodeClass
 {
@@ -60,16 +75,18 @@ struct _GskRenderNodeClass
   void          (* finalize)                            (GskRenderNode               *node);
   void          (* draw)                                (GskRenderNode               *node,
                                                          cairo_t                     *cr,
-                                                         GdkColorState               *ccs);
+                                                         GskCairoData                *data);
   gboolean      (* can_diff)                            (const GskRenderNode         *node1,
                                                          const GskRenderNode         *node2);
   void          (* diff)                                (GskRenderNode               *node1,
                                                          GskRenderNode               *node2,
                                                          GskDiffData                 *data);
+  GskRenderNode**(* get_children)                       (GskRenderNode               *node,
+                                                         gsize                       *n_children);
   GskRenderNode*(* replay)                              (GskRenderNode               *node,
                                                          GskRenderReplay             *replay);
-  gboolean      (* get_opaque_rect)                     (GskRenderNode               *node,
-                                                         graphene_rect_t             *out_opaque);
+  void          (* render_opacity)                      (GskRenderNode               *node,
+                                                         GskOpacityData              *data);
 };
 
 void            gsk_render_node_init_types              (void);
@@ -105,14 +122,19 @@ void            gsk_render_node_diff                    (GskRenderNode          
 void            gsk_render_node_diff_impossible         (GskRenderNode               *node1,
                                                          GskRenderNode               *node2,
                                                          GskDiffData                 *data);
-void            gsk_render_node_draw_ccs                (GskRenderNode               *node,
+void            gsk_render_node_draw_full               (GskRenderNode               *node,
                                                          cairo_t                     *cr,
-                                                         GdkColorState               *ccs);
+                                                         GskCairoData                *data);
 void            gsk_render_node_draw_with_color_state   (GskRenderNode               *node,
                                                          cairo_t                     *cr,
                                                          GdkColorState               *color_state);
 void            gsk_render_node_draw_fallback           (GskRenderNode               *node,
                                                          cairo_t                     *cr);
+void            gsk_render_node_render_opacity          (GskRenderNode               *self,
+                                                         GskOpacityData              *data);
+
+GskRenderNode **gsk_render_node_get_children            (GskRenderNode               *node,
+                                                         gsize                       *n_children);
 
 bool            gsk_border_node_get_uniform             (const GskRenderNode         *self) G_GNUC_PURE;
 bool            gsk_border_node_get_uniform_color       (const GskRenderNode         *self) G_GNUC_PURE;
@@ -123,9 +145,6 @@ void            gsk_text_node_serialize_glyphs          (GskRenderNode          
 cairo_hint_style_t
                 gsk_text_node_get_font_hint_style       (const GskRenderNode         *self) G_GNUC_PURE;
 
-void            gsk_transform_node_get_translate        (const GskRenderNode         *node,
-                                                         float                       *dx,
-                                                         float                       *dy);
 GdkMemoryDepth  gsk_render_node_get_preferred_depth     (const GskRenderNode         *node) G_GNUC_PURE;
 gboolean        gsk_render_node_is_hdr                  (const GskRenderNode         *node) G_GNUC_PURE;
 gboolean        gsk_render_node_is_fully_opaque         (const GskRenderNode         *node) G_GNUC_PURE;

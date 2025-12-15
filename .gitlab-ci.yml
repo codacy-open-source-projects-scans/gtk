@@ -35,7 +35,7 @@ stages:
 # Common variables
 variables:
   FDO_UPSTREAM_REPO: GNOME/gtk
-  COMMON_MESON_FLAGS: "-Dwerror=true -Dcairo:werror=false -Dgi-docgen:werror=false -Dgraphene:werror=false -Dlibepoxy:werror=false -Dlibsass:werror=false -Dpango:werror=false -Dsassc:werror=false -Dgdk-pixbuf:werror=false -Dglib:werror=false -Dlibcloudproviders:werror=false -Dlibpng:werror=false -Dlibtiff:werror=false -Dsysprof:werror=false -Dwayland:werror=false -Dwayland-protocols:werror=false -Dharfbuzz:werror=false -Dfreetype2:werror=false -Dfontconfig:werror=false -Dfribidi:werror=false -Dlibffi:werror=false -Dlibjpeg-turbo:werror=false -Dmutest:werror=false -Dpcre2:werror=false -Dpixman:werror=false -Dproxy-libintl:werror=false -Dgperf:werror=false"
+  COMMON_MESON_FLAGS: "-Dwerror=true -Dcairo:werror=false -Dgi-docgen:werror=false -Dgraphene:werror=false -Dlibepoxy:werror=false -Dlibsass:werror=false -Dpango:werror=false -Dsassc:werror=false -Dgdk-pixbuf:werror=false -Dglib:werror=false -Dlibcloudproviders:werror=false -Dlibpng:werror=false -Dlibtiff:werror=false -Dsysprof:werror=false -Dwayland:werror=false -Dwayland-protocols:werror=false -Dharfbuzz:werror=false -Dfreetype2:werror=false -Dfontconfig:werror=false -Dfribidi:werror=false -Dlibffi:werror=false -Dlibjpeg-turbo:werror=false -Dmutest:werror=false -Dpcre2:werror=false -Dpixman:werror=false -Dproxy-libintl:werror=false -Dgperf:werror=false -Dlibxml2:werror=false -Dlibrsvg:werror=false"
   BACKEND_FLAGS: "-Dx11-backend=true -Dwayland-backend=true -Dbroadway-backend=true"
   FEATURE_FLAGS: "-Dvulkan=enabled -Dcloudproviders=enabled -Dbuild-testsuite=true -Dintrospection=enabled"
   MESON_TEST_TIMEOUT_MULTIPLIER: 3
@@ -332,13 +332,27 @@ fedora-mingw64:
 
 msys2-ucrt64:
   extends: .mingw-defaults
+  when: manual
   needs: []
   variables:
     MSYSTEM: "UCRT64"
     CHERE_INVOKING: "yes"
   artifacts:
     when: always
-    expose_as: 'Windows_DLL_MSYS2_64_bit_toolchain'
+    expose_as: 'Windows_DLL_MSYS2_UCRT64_toolchain'
+    paths:
+      - "${CI_PROJECT_DIR}/_build/gtkdll.tar.gz"
+      - "${CI_PROJECT_DIR}/_build/gtk/GdkWin32-4.0.gir"
+
+msys2-clang64:
+  extends: .mingw-defaults
+  needs: []
+  variables:
+    MSYSTEM: "CLANG64"
+    CHERE_INVOKING: "yes"
+  artifacts:
+    when: always
+    expose_as: 'Windows_DLL_MSYS2_CLANG64_toolchain'
     paths:
       - "${CI_PROJECT_DIR}/_build/gtkdll.tar.gz"
       - "${CI_PROJECT_DIR}/_build/gtk/GdkWin32-4.0.gir"
@@ -425,6 +439,10 @@ vs2019-x64:
   variables:
   script:
     - .gitlab-ci/test-msvc.bat ${COMMON_MESON_FLAGS}
+  cache:
+    key: "$CI_JOB_NAME"
+    paths:
+      - _ccache/
   artifacts:
     when: always
     paths:
@@ -502,6 +520,11 @@ android:demo:
   variables:
     APPID: org.gtk.Demo4
 
+android:nodeeditor:
+  extends: '.android-defaults'
+  variables:
+    APPID: org.gtk.gtk4.NodeEditor
+
 android-signer:
   extends:
     - .distribution.android
@@ -510,7 +533,7 @@ android-signer:
     paths:
       - apks
     expire_in: 1 day
-  needs: [ 'android:demo' ]
+  needs: [ 'android:demo', 'android:nodeeditor' ]
   before_script:
     - |
       if [ -z ${ANDROID_KEYSTORE_ENC} ]; then

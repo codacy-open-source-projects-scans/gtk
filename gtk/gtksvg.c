@@ -24,6 +24,7 @@
 #include "gtksvgprivate.h"
 
 #include "gtkenums.h"
+#include "gtkmain.h"
 #include "gtksymbolicpaintable.h"
 #include "gtktypebuiltins.h"
 #include "gtk/css/gtkcssparserprivate.h"
@@ -75,14 +76,12 @@
  *
  * The paintable does not support text or images, only shapes and paths.
  *
- * In `<defs>`, only `<clipPath>`, `<mask>`, gradients and shapes are
- * supported, not `<filter>`, `<pattern>` or other things.
- *
  * Gradient templating is not implemented.
  *
  * The support for filters is limited to filter functions minus
  * `drop-shadow()` plus a custom `alpha-level()` function, which
- * implements one particular case of feComponentTransfer.
+ * implements one particular case of feComponentTransfer. `<filter>`
+ * is not supported.
  *
  * The `transform-origin` and `transform-box` attributes are not supported.
  *
@@ -92,7 +91,7 @@
  * In animation elements, the parsing of `begin` and `end` attributes
  * is limited, and the `by`, `min` and `max` attributes are not supported.
  *
- * Lastly, there is no CSS support, and no interactivity.
+ * Lastly, there is only minimal CSS support, and no interactivity.
  *
  *
  * ## SVG Extensions
@@ -177,10 +176,10 @@ typedef enum
   VISIBILITY_VISIBLE,
 } Visibility;
 
-#define ALIGN_XY(x,y) ((x) | ((y) << 3))
+#define ALIGN_XY(x,y) ((x) | ((y) << 2))
 
-#define ALIGN_GET_X(x) ((x) & 7)
-#define ALIGN_GET_Y(x) ((x) >> 3)
+#define ALIGN_GET_X(x) ((x) & 3)
+#define ALIGN_GET_Y(x) ((x) >> 2)
 
 typedef struct _Animation Animation;
 
@@ -235,7 +234,7 @@ gtk_svg_location_init (GtkSvgLocation      *location,
   g_markup_parse_context_get_position (context, &lines, &chars);
   location->lines = lines;
   location->line_chars = chars;
-#if GLIB_CHECK_VERSION (2, 87, 0)
+#if GLIB_CHECK_VERSION (2, 88, 0)
   location->bytes = g_markup_parse_context_get_offset (context);
 #else
   location->bytes = 0;
@@ -508,9 +507,9 @@ lcm (unsigned int a,
 }
 
 static double
-normalized_diagonal (const graphene_size_t *viewport)
+normalized_diagonal (const graphene_rect_t *viewport)
 {
-  return hypot (viewport->width, viewport->height) / M_SQRT2;
+  return hypot (viewport->size.width, viewport->size.height) / M_SQRT2;
 }
 
 static inline double
@@ -569,6 +568,50 @@ ease (double *params,
           +     3 * y1         ) * t;
 }
 
+static gboolean
+has_ancestor (GMarkupParseContext *context,
+              const char          *elt)
+{
+  const GSList *list;
+
+  for (list = g_markup_parse_context_get_element_stack (context);
+       list != NULL;
+       list = list->next)
+    {
+      const char *name = list->data;
+      if (strcmp (name, elt) == 0)
+        return TRUE;
+    }
+
+  return FALSE;
+}
+
+static gboolean
+check_ancestors (GMarkupParseContext *context,
+                 ...)
+{
+  const GSList *list;
+  va_list args;
+  const char *name;
+
+  list = g_markup_parse_context_get_element_stack (context);
+
+  va_start (args, context);
+  while ((name = va_arg (args, const char *)) != NULL)
+    {
+      list = list->next;
+
+      if (list == NULL)
+        return FALSE;
+
+      if (strcmp (name, (const char *) list->data) != 0)
+        return FALSE;
+    }
+  va_end (args);
+
+  return TRUE;
+}
+
 static void
 markup_filter_attributes (const char *element_name,
                           const char **attr_names,
@@ -586,10 +629,17 @@ markup_filter_attributes (const char *element_name,
 
       ptr = va_arg (ap, const char **);
 
-      *ptr = NULL;
+      if (ptr)
+        *ptr = NULL;
       for (unsigned int i = 0; attr_names[i]; i++)
         {
-          if (strcmp (attr_names[i], name) == 0)
+          if (g_str_has_suffix (name, "*") &&
+              strncmp (attr_names[i], name, strlen (name) - 1) == 0)
+            {
+              g_assert (ptr == NULL);
+              *handled |= G_GUINT64_CONSTANT(1) << i;
+            }
+          else if (strcmp (attr_names[i], name) == 0)
             {
               *ptr = attr_values[i];
               *handled |= G_GUINT64_CONSTANT(1) << i;
@@ -613,17 +663,89 @@ string_append_double (GString *s,
   g_string_append (s, buf);
 }
 
+static char **
+strsplit_set (const char *str,
+              const char *sep)
+{
+  const char *p, *p0;
+  GPtrArray *array = g_ptr_array_new ();
+
+  p = str;
+  while (*p)
+    {
+      while (*p == ' ')
+        p++;
+
+      if (!*p)
+        break;
+
+      while (strchr (sep, *p))
+        p++;
+
+      p0 = p;
+      while (!strchr (sep, *p))
+        p++;
+
+      g_ptr_array_add (array, g_strndup (p0, p - p0));
+    }
+
+  g_ptr_array_add (array, NULL);
+
+  return (char **) g_ptr_array_free (array, FALSE);
+}
+
+enum
+{
+  NUMBER     = 1 << 0,
+  PERCENTAGE = 1 << 1,
+  LENGTH     = 1 << 2,
+};
+
 static gboolean
-parse_number (const char  *value,
-              double       min,
-              double       max,
-              double      *f)
+parse_numeric (const char   *value,
+               double        min,
+               double        max,
+               unsigned int  flags,
+               double       *f,
+               SvgDimension *dim)
 {
   char *end = NULL;
 
   *f = g_ascii_strtod (value, &end);
   if (end && *end != '\0')
-    return FALSE;
+    {
+      if (*end == '%')
+        {
+          *dim = SVG_DIMENSION_PERCENTAGE;
+          return (flags & PERCENTAGE) != 0;
+        }
+
+      if ((flags & LENGTH) == 0)
+        return FALSE;
+
+      *dim = SVG_DIMENSION_LENGTH;
+
+      if (strcmp (end, "px") == 0)
+        ;
+      else if (strcmp (end, "pt") == 0)
+        *f *= 96./72.;
+      else if (strcmp (end, "in") == 0)
+        *f *= 96.;
+      else if (strcmp (end, "cm") == 0)
+        *f *= 96./2.54;
+      else if (strcmp (end, "mm") == 0)
+        *f *= 96./2.54 * 10;
+      else
+        return FALSE;
+    }
+  else
+    {
+      if (flags & NUMBER)
+        *dim = SVG_DIMENSION_NUMBER;
+      else
+        return FALSE;
+    }
+
   if (*f < min || *f > max)
     return FALSE;
 
@@ -639,7 +761,7 @@ parse_numbers2 (const char *value,
   GArray *array;
   GStrv strv;
 
-  strv = g_strsplit (value, sep, 0);
+  strv = strsplit_set (value, sep);
 
   array = g_array_new (FALSE, FALSE, sizeof (double));
 
@@ -647,11 +769,12 @@ parse_numbers2 (const char *value,
     {
       char *s = g_strstrip (strv[i]);
       double v;
+      SvgDimension dim;
 
       if (*s == '\0' && strv[i] == NULL)
         break;
 
-      if (!parse_number (s, min, max, &v))
+      if (!parse_numeric (s, min, max, NUMBER, &v, &dim))
         {
           g_array_unref (array);
           g_strfreev (strv);
@@ -682,6 +805,7 @@ parse_numbers (const char   *value,
   for (unsigned int i = 0; strv[i]; i++)
     {
       char *s = g_strstrip (strv[i]);
+      SvgDimension dim;
 
       if (*s == '\0' && strv[i] == NULL)
         {
@@ -695,7 +819,7 @@ parse_numbers (const char   *value,
           return FALSE;
         }
 
-      if (!parse_number (s, min, max, &values[i]))
+      if (!parse_numeric (s, min, max, NUMBER, &values[i], &dim))
         {
           g_strfreev (strv);
           return FALSE;
@@ -707,26 +831,25 @@ parse_numbers (const char   *value,
 }
 
 static gboolean
+parse_number (const char *value,
+              double      min,
+              double      max,
+              double     *f)
+{
+  SvgDimension dim;
+
+  return parse_numeric (value, min, max, NUMBER, f, &dim);
+}
+
+static gboolean
 parse_length (const char *value,
               double      min,
               double      max,
               double     *f)
 {
-  char *end = NULL;
+  SvgDimension dim;
 
-  *f = g_ascii_strtod (value, &end);
-  if (end && *end != '\0')
-    {
-      if (strcmp (end, "px") == 0)
-        ; /* only unit we support atm */
-      else
-        return FALSE;
-    }
-
- if (*f < min || *f > max)
-   return FALSE;
-
-  return TRUE;
+  return parse_numeric (value, min, max, NUMBER|LENGTH, f, &dim);
 }
 
 static gboolean
@@ -781,7 +904,7 @@ path_builder_add_ellipse (GskPathBuilder *builder,
   gsk_path_builder_conic_to (builder, cx + rx, cy + ry,
                                       cx,      cy + ry, M_SQRT1_2);
   gsk_path_builder_conic_to (builder, cx - rx, cy + ry,
-                                      cy - rx, cy,      M_SQRT1_2);
+                                      cx - rx, cy,      M_SQRT1_2);
   gsk_path_builder_conic_to (builder, cx - rx, cy - ry,
                                       cx,      cy - ry, M_SQRT1_2);
   gsk_path_builder_conic_to (builder, cx + rx, cy - ry,
@@ -789,60 +912,51 @@ path_builder_add_ellipse (GskPathBuilder *builder,
   gsk_path_builder_close    (builder);
 }
 
-static gboolean
-parse_align (const char   *value,
-             unsigned int *res)
-{
-  struct {
-    const char *name;
-    unsigned int value;
-  } values[] = {
-    { "none", 0 },
-    { "xMinYMin", ALIGN_XY (ALIGN_MIN, ALIGN_MIN) },
-    { "xMidYMin", ALIGN_XY (ALIGN_MID, ALIGN_MIN) },
-    { "xMaxYMin", ALIGN_XY (ALIGN_MAX, ALIGN_MIN) },
-    { "xMinYMid", ALIGN_XY (ALIGN_MIN, ALIGN_MID) },
-    { "xMidYMid", ALIGN_XY (ALIGN_MID, ALIGN_MID) },
-    { "xMaxYMid", ALIGN_XY (ALIGN_MAX, ALIGN_MID) },
-    { "xMinYMax", ALIGN_XY (ALIGN_MIN, ALIGN_MAX) },
-    { "xMidYMax", ALIGN_XY (ALIGN_MID, ALIGN_MAX) },
-    { "xMaxYMax", ALIGN_XY (ALIGN_MAX, ALIGN_MAX) },
-  };
-
-  for (unsigned int i = 0; i < G_N_ELEMENTS (values); i++)
-    {
-      if (strcmp (values[i].name, value) == 0)
-        {
-          *res = values[i].value;
-          return TRUE;
-        }
-    }
-
-  return FALSE;
-}
-
-static gboolean
-parse_meet (const char   *value,
-            unsigned int *res)
-{
-  if (strcmp (value, "meet") == 0)
-    {
-      *res = MEET;
-      return TRUE;
-    }
-  else if (strcmp (value, "slice") == 0)
-    {
-      *res = SLICE;
-      return TRUE;
-    }
-  return FALSE;
-}
-
 static inline gboolean
 g_strv_has (GStrv       strv,
             const char *s)
 {
   return g_strv_contains ((const char * const *) strv, s);
+}
+
+static void
+compute_viewport_transform (gboolean               none,
+                            Align                  align_x,
+                            Align                  align_y,
+                            MeetOrSlice            meet,
+                            const graphene_rect_t *vb,
+                            double e_x,          double e_y,
+                            double e_width,      double e_height,
+                            double *scale_x,     double *scale_y,
+                            double *translate_x, double *translate_y)
+{
+  double sx, sy, tx, ty;
+
+  sx = e_width / vb->size.width;
+  sy = e_height / vb->size.height;
+
+  if (!none && meet == MEET)
+    sx = sy = MIN (sx, sy);
+  else if (!none && meet == SLICE)
+    sx = sy = MAX (sx, sy);
+
+  tx = e_x - vb->origin.x * sx;
+  ty = e_y - vb->origin.y * sy;
+
+  if (align_x == ALIGN_MID)
+    tx += (e_width - vb->size.width * sx) / 2;
+  else if (align_x == ALIGN_MAX)
+    tx += (e_width - vb->size.width * sx);
+
+  if (align_y == ALIGN_MID)
+    ty += (e_height - vb->size.height * sy) / 2;
+  else if (align_y == ALIGN_MAX)
+    ty += (e_height - vb->size.height * sy);
+
+  *scale_x = sx;
+  *scale_y = sy;
+  *translate_x = tx;
+  *translate_y = ty;
 }
 
 /* }}} */
@@ -904,6 +1018,53 @@ transform_gradient_line (GskTransform *transform,
 
   *start_out = e2;
   *end_out = e;
+}
+
+/*  }}} */
+/* {{{ Text */
+
+static char *
+text_chomp (const char *in,
+            gboolean   *lastwasspace)
+{
+  size_t len = strlen (in);
+  GString *ret = g_string_sized_new (len);
+
+  for (size_t i = 0; i < len; i++)
+    {
+      if (in[i] == '\n')
+        continue;
+      if (in[i] == '\t' || in[i] == ' ')
+        {
+          if (*lastwasspace)
+            continue;
+          g_string_append_c (ret, ' ');
+          *lastwasspace = TRUE;
+          continue;
+        }
+      g_string_append_c (ret, in[i]);
+      *lastwasspace = FALSE;
+    }
+
+  return g_string_free_and_steal (ret);
+}
+
+
+static void
+text_node_clear (TextNode *self)
+{
+  switch (self->type)
+    {
+    case TEXT_NODE_SHAPE:
+      // shape node not owned
+      break;
+    case TEXT_NODE_CHARACTERS:
+      g_assert (self->characters.layout == NULL);
+      g_free (self->characters.text);
+      break;
+    default:
+      g_assert_not_reached ();
+    }
 }
 
 /* }}} */
@@ -1055,7 +1216,9 @@ svg_value_unref (SvgValue *value)
   value->class->free (value);
 }
 
-static gboolean
+G_DEFINE_BOXED_TYPE (SvgValue, svg_value, svg_value_ref, svg_value_unref)
+
+gboolean
 svg_value_equal (const SvgValue *value0,
                  const SvgValue *value1)
 {
@@ -1107,6 +1270,14 @@ svg_value_print (const SvgValue *value,
                  GString        *string)
 {
   value->class->print (value, string);
+}
+
+char *
+svg_value_to_string (const SvgValue *value)
+{
+  GString *s = g_string_new ("");
+  svg_value_print (value, s);
+  return g_string_free (s, FALSE);
 }
 
 /* }}} */
@@ -1161,6 +1332,7 @@ svg_keyword_print (const SvgValue *value,
                    GString        *string)
 {
   const SvgKeyword *k = (const SvgKeyword *) value;
+
   switch (k->keyword)
     {
     case SVG_INHERIT:
@@ -1187,6 +1359,7 @@ static SvgValue *
 svg_inherit_new (void)
 {
   static SvgKeyword inherit = { { &SVG_KEYWORD_CLASS, 1 }, SVG_INHERIT };
+
   return svg_value_ref ((SvgValue *) &inherit);
 }
 
@@ -1194,6 +1367,7 @@ static SvgValue *
 svg_initial_new (void)
 {
   static SvgKeyword initial = { { &SVG_KEYWORD_CLASS, 1 }, SVG_INITIAL };
+
   return svg_value_ref ((SvgValue *) &initial);
 }
 
@@ -1217,7 +1391,7 @@ svg_value_is_initial (const SvgValue *value)
 typedef struct
 {
   SvgValue base;
-  SvgUnit unit;
+  SvgDimension dim;
   double value;
 } SvgNumber;
 
@@ -1234,11 +1408,11 @@ svg_number_equal (const SvgValue *value0,
   const SvgNumber *n0 = (const SvgNumber *) value0;
   const SvgNumber *n1 = (const SvgNumber *) value1;
 
-  return n0->unit == n1->unit && n0->value == n1->value;
+  return n0->dim == n1->dim && n0->value == n1->value;
 }
 
-static SvgValue * svg_number_new_full (SvgUnit unit,
-                                       double  value);
+static SvgValue * svg_number_new_full (SvgDimension dim,
+                                       double       value);
 
 static SvgValue *
 svg_number_interpolate (const SvgValue *value0,
@@ -1248,10 +1422,10 @@ svg_number_interpolate (const SvgValue *value0,
   const SvgNumber *n0 = (const SvgNumber *) value0;
   const SvgNumber *n1 = (const SvgNumber *) value1;
 
-  if (n0->unit != n1->unit)
+  if (n0->dim != n1->dim)
     return NULL;
 
-  return svg_number_new_full (n0->unit, lerp (t, n0->value, n1->value));
+  return svg_number_new_full (n0->dim, lerp (t, n0->value, n1->value));
 }
 
 static SvgValue *
@@ -1262,10 +1436,10 @@ svg_number_accumulate (const SvgValue *value0,
   const SvgNumber *n0 = (const SvgNumber *) value0;
   const SvgNumber *n1 = (const SvgNumber *) value1;
 
-  if (n0->unit != n1->unit)
+  if (n0->dim != n1->dim)
     return NULL;
 
-  return svg_number_new_full (n0->unit, accumulate (n0->value, n1->value, n));
+  return svg_number_new_full (n0->dim, accumulate (n0->value, n1->value, n));
 }
 
 static void
@@ -1275,9 +1449,9 @@ svg_number_print (const SvgValue *value,
   const SvgNumber *n = (const SvgNumber *) value;
 
   string_append_double (string, n->value);
-  if (n->unit == SVG_UNIT_PERCENT)
+  if (n->dim == SVG_DIMENSION_PERCENTAGE)
     g_string_append_c (string, '%');
-  else if (n->unit == SVG_UNIT_LENGTH)
+  else if (n->dim == SVG_DIMENSION_LENGTH)
     g_string_append (string, "px");
 }
 
@@ -1294,8 +1468,8 @@ SvgValue *
 svg_number_new (double value)
 {
   static SvgNumber singletons[] = {
-    { { &SVG_NUMBER_CLASS, 1 }, .unit = SVG_UNIT_NONE, .value = 0 },
-    { { &SVG_NUMBER_CLASS, 1 }, .unit = SVG_UNIT_NONE, .value = 1 },
+    { { &SVG_NUMBER_CLASS, 1 }, .dim = SVG_DIMENSION_NUMBER, .value = 0 },
+    { { &SVG_NUMBER_CLASS, 1 }, .dim = SVG_DIMENSION_NUMBER, .value = 1 },
   };
   SvgNumber *result;
 
@@ -1303,7 +1477,7 @@ svg_number_new (double value)
     return svg_value_ref ((SvgValue *) &singletons[(int) value]);
 
   result = (SvgNumber *) svg_value_alloc (&SVG_NUMBER_CLASS, sizeof (SvgNumber));
-  result->unit = SVG_UNIT_NONE;
+  result->dim = SVG_DIMENSION_NUMBER;
   result->value = value;
 
   return (SvgValue *) result;
@@ -1313,9 +1487,9 @@ static SvgValue *
 svg_percentage_new (double value)
 {
   static SvgNumber singletons[] = {
-    { { &SVG_NUMBER_CLASS, 1 }, .unit = SVG_UNIT_PERCENT, .value = 0 },
-    { { &SVG_NUMBER_CLASS, 1 }, .unit = SVG_UNIT_PERCENT, .value = 50 },
-    { { &SVG_NUMBER_CLASS, 1 }, .unit = SVG_UNIT_PERCENT, .value = 100 },
+    { { &SVG_NUMBER_CLASS, 1 }, .dim = SVG_DIMENSION_PERCENTAGE, .value = 0 },
+    { { &SVG_NUMBER_CLASS, 1 }, .dim = SVG_DIMENSION_PERCENTAGE, .value = 50 },
+    { { &SVG_NUMBER_CLASS, 1 }, .dim = SVG_DIMENSION_PERCENTAGE, .value = 100 },
   };
   SvgNumber *result;
 
@@ -1328,34 +1502,34 @@ svg_percentage_new (double value)
 
   result = (SvgNumber *) svg_value_alloc (&SVG_NUMBER_CLASS, sizeof (SvgNumber));
   result->value = value;
-  result->unit = SVG_UNIT_PERCENT;
+  result->dim = SVG_DIMENSION_PERCENTAGE;
 
   return (SvgValue *) result;
 }
 
 static SvgValue *
-svg_number_new_full (SvgUnit unit,
-                     double  value)
+svg_number_new_full (SvgDimension dim,
+                     double       value)
 {
-  if (unit == SVG_UNIT_NONE)
-    return svg_number_new (value);
-  else if (unit == SVG_UNIT_PERCENT)
-    return svg_percentage_new (value);
+  if (dim == SVG_DIMENSION_NUMBER)
+    {
+      return svg_number_new (value);
+    }
+  else if (dim == SVG_DIMENSION_PERCENTAGE)
+    {
+      return svg_percentage_new (value);
+    }
   else
     {
       SvgNumber *result;
+
       result = (SvgNumber *) svg_value_alloc (&SVG_NUMBER_CLASS, sizeof (SvgNumber));
       result->value = value;
-      result->unit = SVG_UNIT_LENGTH;
+      result->dim = SVG_DIMENSION_LENGTH;
+
       return (SvgValue *) result;
     }
 }
-
-enum
-{
-  PERCENTAGE = 1 << 0,
-  LENGTH     = 1 << 1,
-};
 
 static SvgValue *
 svg_number_parse (const char   *value,
@@ -1363,32 +1537,13 @@ svg_number_parse (const char   *value,
                   double        max,
                   unsigned int  flags)
 {
-  char *end = NULL;
   double f;
-  SvgUnit unit = SVG_UNIT_NONE;
+  SvgDimension dim;
 
-  f = g_ascii_strtod (value, &end);
-  if (end && *end != '\0')
-    {
-      if (*end == '%' && (flags & PERCENTAGE))
-        unit = SVG_UNIT_PERCENT;
-      else if (strcmp (end, "px") == 0 && (flags & LENGTH))
-        unit = SVG_UNIT_NONE;
-      else
-        return NULL;
-    }
-  if (unit == SVG_UNIT_PERCENT)
-    {
-      if (f < -100 || f > 100)
-        return NULL;
-    }
-  else
-    {
-      if (f < min || f > max)
-        return NULL;
-    }
+  if (!parse_numeric (value, min, max, flags, &f, &dim))
+    return NULL;
 
-  return svg_number_new_full (unit, f);
+  return svg_number_new_full (dim, f);
 }
 
 static double
@@ -1396,10 +1551,93 @@ svg_number_get (const SvgValue *value,
                 double          one_hundred_percent)
 {
   const SvgNumber *n = (const SvgNumber *)value;
-  if (n->unit == SVG_UNIT_PERCENT)
+
+  g_assert (value->class == &SVG_NUMBER_CLASS);
+
+  if (n->dim == SVG_DIMENSION_PERCENTAGE)
     return n->value / 100 * one_hundred_percent;
   else
     return n->value;
+}
+
+/* }}} */
+/* {{{ Strings */
+
+typedef struct
+{
+  SvgValue base;
+  char *value;
+} SvgString;
+
+static void
+svg_string_free (SvgValue *value)
+{
+  SvgString *s = (SvgString *)value;
+  g_free (s->value);
+  g_free (s);
+}
+
+static gboolean
+svg_string_equal (const SvgValue *value0,
+                  const SvgValue *value1)
+{
+  const SvgString *s0 = (const SvgString *)value0;
+  const SvgString *s1 = (const SvgString *)value1;
+
+  return g_strcmp0 (s0->value, s1->value) == 0;
+}
+
+static SvgValue *
+svg_string_interpolate (const SvgValue *value0,
+                        const SvgValue *value1,
+                        double          t)
+{
+  if (t < 0.5)
+    return svg_value_ref ((SvgValue *) value0);
+  else
+    return svg_value_ref ((SvgValue *) value1);
+}
+
+static SvgValue *
+svg_string_accumulate (const SvgValue *value0,
+                       const SvgValue *value1,
+                       int             n)
+{
+  return svg_value_ref ((SvgValue *)value0);
+}
+
+static void
+svg_string_print (const SvgValue *value,
+                  GString        *string)
+{
+  const SvgString *s = (const SvgString *)value;
+  gchar *escaped = g_markup_escape_text (s->value, strlen (s->value));
+  g_string_append (string, escaped);
+  g_free (escaped);
+}
+
+static const char *
+svg_string_get (const SvgValue *value)
+{
+  const SvgString *s = (const SvgString *)value;
+  return s->value;
+}
+
+static const SvgValueClass SVG_STRING_CLASS = {
+  "SvgString",
+  svg_string_free,
+  svg_string_equal,
+  svg_string_interpolate,
+  svg_string_accumulate,
+  svg_string_print,
+};
+
+static SvgValue *
+svg_string_new (const char *str)
+{
+  SvgString *result = (SvgString *)svg_value_alloc (&SVG_STRING_CLASS, sizeof (SvgString));
+  result->value = g_strdup (str);
+  return (SvgValue *) result;
 }
 
 /* }}} */
@@ -1462,6 +1700,21 @@ svg_enum_get (const SvgValue *value)
   return e->value;
 }
 
+static SvgValue *
+svg_enum_parse (const SvgEnum  values[],
+                unsigned int   n_values,
+                const char    *string)
+{
+  for (unsigned int i = 0; i < n_values; i++)
+    {
+      if (values[i].name && strcmp (string, values[i].name) == 0)
+        return svg_value_ref ((SvgValue *) &values[i]);
+    }
+  return NULL;
+}
+
+/* {{{ Fill rule */ 
+
 static const SvgValueClass SVG_FILL_RULE_CLASS = {
   "SvgFillRule",
   svg_enum_free,
@@ -1479,19 +1732,18 @@ static SvgEnum fill_rule_values[] = {
 SvgValue *
 svg_fill_rule_new (GskFillRule value)
 {
+  g_assert (value < G_N_ELEMENTS (fill_rule_values));
   return svg_value_ref ((SvgValue *) &fill_rule_values[value]);
 }
 
 static SvgValue *
 svg_fill_rule_parse (const char *string)
 {
-  for (unsigned int i = 0; i < G_N_ELEMENTS (fill_rule_values); i++)
-    {
-      if (strcmp (string, fill_rule_values[i].name) == 0)
-        return svg_value_ref ((SvgValue *) &fill_rule_values[i]);
-    }
-  return NULL;
+  return svg_enum_parse (fill_rule_values, G_N_ELEMENTS (fill_rule_values), string);
 }
+
+/* }}} */
+/* {{{ Mask type */
 
 static const SvgValueClass SVG_MASK_TYPE_CLASS = {
   "SvgMaskType",
@@ -1521,13 +1773,11 @@ svg_mask_type_new (GskMaskMode value)
 static SvgValue *
 svg_mask_type_parse (const char *string)
 {
-  for (unsigned int i = 0; i < G_N_ELEMENTS (mask_type_values); i++)
-    {
-      if (strcmp (string, mask_type_values[i].name) == 0)
-        return svg_value_ref ((SvgValue *) &mask_type_values[i]);
-    }
-  return NULL;
+  return svg_enum_parse (mask_type_values, G_N_ELEMENTS (mask_type_values), string);
 }
+
+/* }}} */
+/* {{{ Line cap */
 
 static const SvgValueClass SVG_LINE_CAP_CLASS = {
   "SvgLineCap",
@@ -1547,19 +1797,18 @@ static SvgEnum line_cap_values[] = {
 SvgValue *
 svg_linecap_new (GskLineCap value)
 {
+  g_assert (value < G_N_ELEMENTS (line_cap_values));
   return svg_value_ref ((SvgValue *) &line_cap_values[value]);
 }
 
 static SvgValue *
 svg_linecap_parse (const char *string)
 {
-  for (unsigned int i = 0; i < G_N_ELEMENTS (line_cap_values); i++)
-    {
-      if (strcmp (string, line_cap_values[i].name) == 0)
-        return svg_value_ref ((SvgValue *) &line_cap_values[i]);
-    }
-  return NULL;
+  return svg_enum_parse (line_cap_values, G_N_ELEMENTS (line_cap_values), string);
 }
+
+/* }}} */
+/* {{{ Line join */
 
 static const SvgValueClass SVG_LINE_JOIN_CLASS = {
   "SvgLineJoin",
@@ -1579,19 +1828,18 @@ static SvgEnum line_join_values[] = {
 SvgValue *
 svg_linejoin_new (GskLineJoin value)
 {
+  g_assert (value < G_N_ELEMENTS (line_join_values));
   return svg_value_ref ((SvgValue *) &line_join_values[value]);
 }
 
 static SvgValue *
 svg_linejoin_parse (const char *string)
 {
-  for (unsigned int i = 0; i < G_N_ELEMENTS (line_join_values); i++)
-    {
-      if (strcmp (string, line_join_values[i].name) == 0)
-        return svg_value_ref ((SvgValue *) &line_join_values[i]);
-    }
-  return NULL;
+  return svg_enum_parse (line_join_values, G_N_ELEMENTS (line_join_values), string);
 }
+
+/* }}} */
+/* {{{ Visibility */
 
 static const SvgValueClass SVG_VISIBILITY_CLASS = {
   "SvgVisibility",
@@ -1610,19 +1858,18 @@ static SvgEnum visibility_values[] = {
 static SvgValue *
 svg_visibility_new (Visibility value)
 {
+  g_assert (value < G_N_ELEMENTS (visibility_values));
   return svg_value_ref ((SvgValue *) &visibility_values[value]);
 }
 
 static SvgValue *
 svg_visibility_parse (const char *string)
 {
-  for (unsigned int i = 0; i < G_N_ELEMENTS (visibility_values); i++)
-    {
-      if (strcmp (string, visibility_values[i].name) == 0)
-        return svg_value_ref ((SvgValue *) &visibility_values[i]);
-    }
-  return NULL;
+  return svg_enum_parse (visibility_values, G_N_ELEMENTS (visibility_values), string);
 }
+
+/* }}} */
+/* {{{ Spread method */
 
 static const SvgValueClass SVG_SPREAD_METHOD_CLASS = {
   "SvgSpreadMethod",
@@ -1642,19 +1889,18 @@ static SvgEnum spread_method_values[] = {
 static SvgValue *
 svg_spread_method_new (GskRepeat value)
 {
-  return svg_value_ref ((SvgValue *) &visibility_values[value]);
+  g_assert (value < G_N_ELEMENTS (spread_method_values));
+  return svg_value_ref ((SvgValue *) &spread_method_values[value]);
 }
 
 static SvgValue *
 svg_spread_method_parse (const char *string)
 {
-  for (unsigned int i = 0; i < G_N_ELEMENTS (spread_method_values); i++)
-    {
-      if (strcmp (string, spread_method_values[i].name) == 0)
-        return svg_value_ref ((SvgValue *) &spread_method_values[i]);
-    }
-  return NULL;
+  return svg_enum_parse (spread_method_values, G_N_ELEMENTS (spread_method_values), string);
 }
+
+/* }}} */
+/* {{{ Coord units */
 
 typedef enum
 {
@@ -1679,19 +1925,18 @@ static SvgEnum coord_units_values[] = {
 static SvgValue *
 svg_coord_units_new (CoordUnits value)
 {
+  g_assert (value < G_N_ELEMENTS (coord_units_values));
   return svg_value_ref ((SvgValue *) &coord_units_values[value]);
 }
 
 static SvgValue *
 svg_coord_units_parse (const char *string)
 {
-  for (unsigned int i = 0; i < G_N_ELEMENTS (coord_units_values); i++)
-    {
-      if (strcmp (string, coord_units_values[i].name) == 0)
-        return svg_value_ref ((SvgValue *) &coord_units_values[i]);
-    }
-  return NULL;
+  return svg_enum_parse (coord_units_values, G_N_ELEMENTS (coord_units_values), string);
 }
+
+/* }}} */
+/* {{{ Paint order */
 
 static const SvgValueClass SVG_PAINT_ORDER_CLASS = {
   "SvgPaintOrder",
@@ -1703,43 +1948,470 @@ static const SvgValueClass SVG_PAINT_ORDER_CLASS = {
 };
 
 static SvgEnum paint_order_values[] = {
-  { { &SVG_PAINT_ORDER_CLASS, 1 }, PAINT_ORDER_NORMAL, "normal" },
-  { { &SVG_PAINT_ORDER_CLASS, 1 }, PAINT_ORDER_REVERSE, "stroke fill" },
+  { { &SVG_PAINT_ORDER_CLASS, 1 }, PAINT_ORDER_FILL_STROKE_MARKERS, "normal" },
+  { { &SVG_PAINT_ORDER_CLASS, 1 }, PAINT_ORDER_FILL_MARKERS_STROKE, "fill markers stroke" },
+  { { &SVG_PAINT_ORDER_CLASS, 1 }, PAINT_ORDER_STROKE_FILL_MARKERS, "stroke fill markers" },
+  { { &SVG_PAINT_ORDER_CLASS, 1 }, PAINT_ORDER_STROKE_MARKERS_FILL, "stroke markers fill" },
+  { { &SVG_PAINT_ORDER_CLASS, 1 }, PAINT_ORDER_MARKERS_FILL_STROKE, "markers fill stroke" },
+  { { &SVG_PAINT_ORDER_CLASS, 1 }, PAINT_ORDER_MARKERS_STROKE_FILL, "markers stroke fill" },
 };
 
 SvgValue *
 svg_paint_order_new (PaintOrder value)
 {
+  g_assert (value < G_N_ELEMENTS (paint_order_values));
   return svg_value_ref ((SvgValue *) &paint_order_values[value]);
 }
 
 static SvgValue *
 svg_paint_order_parse (const char *string)
 {
-  if (strcmp (string, "normal") == 0 ||
-      strcmp (string, "fill") == 0 ||
-      strcmp (string, "fill stroke") == 0)
-    return svg_paint_order_new (PAINT_ORDER_NORMAL);
-  else if (strcmp (string, "stroke") == 0 ||
-           strcmp (string, "stroke fill") == 0)
-    return svg_paint_order_new (PAINT_ORDER_REVERSE);
-  else
-    return NULL;
+  GStrv strv;
+  char *key;
+
+  if (strcmp (string, "normal") == 0)
+    return svg_paint_order_new (PAINT_ORDER_FILL_STROKE_MARKERS);
+
+  strv = strsplit_set (string, " ");
+  key = g_strjoinv (" ", strv);
+
+  for (unsigned int i = 0; i < G_N_ELEMENTS (paint_order_values); i++)
+    {
+      if (g_str_has_prefix (paint_order_values[i].name, key))
+        {
+          g_strfreev (strv);
+          g_free (key);
+          return svg_paint_order_new (i);
+        }
+    }
+
+  g_strfreev (strv);
+  g_free (key);
+
+  return NULL;
 }
 
 /* }}} */
-/* {{{ Transforms */
+/* {{{ Blend mode */
+
+static const SvgValueClass SVG_BLEND_MODE_CLASS = {
+  "SvgBlendMode",
+  svg_enum_free,
+  svg_enum_equal,
+  svg_enum_interpolate,
+  svg_enum_accumulate,
+  svg_enum_print,
+};
+
+static SvgEnum blend_mode_values[] = {
+  { { &SVG_BLEND_MODE_CLASS, 1 }, GSK_BLEND_MODE_DEFAULT, "normal" },
+  { { &SVG_BLEND_MODE_CLASS, 1 }, GSK_BLEND_MODE_MULTIPLY, "multiply" },
+  { { &SVG_BLEND_MODE_CLASS, 1 }, GSK_BLEND_MODE_SCREEN, "screen" },
+  { { &SVG_BLEND_MODE_CLASS, 1 }, GSK_BLEND_MODE_OVERLAY, "overlay" },
+  { { &SVG_BLEND_MODE_CLASS, 1 }, GSK_BLEND_MODE_DARKEN, "darken" },
+  { { &SVG_BLEND_MODE_CLASS, 1 }, GSK_BLEND_MODE_LIGHTEN, "lighten" },
+  { { &SVG_BLEND_MODE_CLASS, 1 }, GSK_BLEND_MODE_COLOR_DODGE, "color-dodge" },
+  { { &SVG_BLEND_MODE_CLASS, 1 }, GSK_BLEND_MODE_COLOR_BURN, "color-burn" },
+  { { &SVG_BLEND_MODE_CLASS, 1 }, GSK_BLEND_MODE_HARD_LIGHT, "hard-light" },
+  { { &SVG_BLEND_MODE_CLASS, 1 }, GSK_BLEND_MODE_SOFT_LIGHT, "soft-light" },
+  { { &SVG_BLEND_MODE_CLASS, 1 }, GSK_BLEND_MODE_DIFFERENCE, "difference" },
+  { { &SVG_BLEND_MODE_CLASS, 1 }, GSK_BLEND_MODE_EXCLUSION, "exclusiohn" },
+  { { &SVG_BLEND_MODE_CLASS, 1 }, GSK_BLEND_MODE_COLOR, "color" },
+  { { &SVG_BLEND_MODE_CLASS, 1 }, GSK_BLEND_MODE_HUE, "hue" },
+  { { &SVG_BLEND_MODE_CLASS, 1 }, GSK_BLEND_MODE_SATURATION, "saturation" },
+  { { &SVG_BLEND_MODE_CLASS, 1 }, GSK_BLEND_MODE_LUMINOSITY, "luminosity" },
+};
+
+static SvgValue *
+svg_blend_mode_new (GskBlendMode value)
+{
+  g_assert (value < G_N_ELEMENTS (blend_mode_values));
+  return svg_value_ref ((SvgValue *) &blend_mode_values[value]);
+}
+
+static SvgValue *
+svg_blend_mode_parse (const char *string)
+{
+  return svg_enum_parse (blend_mode_values, G_N_ELEMENTS (blend_mode_values), string);
+}
+
+/* }}} */
+/* {{{ Text anchor */
+
+typedef enum {
+  TEXT_ANCHOR_START,
+  TEXT_ANCHOR_MIDDLE,
+  TEXT_ANCHOR_END
+} TextAnchor;
+
+static const SvgValueClass SVG_TEXT_ANCHOR_CLASS = {
+  "SvgTextAnchor",
+  svg_enum_free,
+  svg_enum_equal,
+  svg_enum_interpolate,
+  svg_enum_accumulate,
+  svg_enum_print,
+};
+
+static SvgEnum text_anchor_values[] = {
+  { { &SVG_TEXT_ANCHOR_CLASS, 1 }, TEXT_ANCHOR_START, "start" },
+  { { &SVG_TEXT_ANCHOR_CLASS, 1 }, TEXT_ANCHOR_MIDDLE, "middle" },
+  { { &SVG_TEXT_ANCHOR_CLASS, 1 }, TEXT_ANCHOR_END, "end" },
+};
+
+static SvgValue *
+svg_text_anchor_new (TextAnchor value)
+{
+  g_assert (value < G_N_ELEMENTS (text_anchor_values));
+  return svg_value_ref ((SvgValue *)&text_anchor_values[value]);
+}
+
+static SvgValue *
+svg_text_anchor_parse (const char *string)
+{
+  return svg_enum_parse (text_anchor_values, G_N_ELEMENTS (text_anchor_values), string);
+}
+
+/* }}} */
+/* {{{ Isolation */
+
+typedef enum {
+  ISOLATION_AUTO,
+  ISOLATION_ISOLATE,
+} Isolation;
+
+static const SvgValueClass SVG_ISOLATION_CLASS = {
+  "SvgIsolation",
+  svg_enum_free,
+  svg_enum_equal,
+  svg_enum_interpolate,
+  svg_enum_accumulate,
+  svg_enum_print,
+};
+
+static SvgEnum isolation_values[] = {
+  { { &SVG_ISOLATION_CLASS, 1 }, ISOLATION_AUTO, "auto" },
+  { { &SVG_ISOLATION_CLASS, 1 }, ISOLATION_ISOLATE, "isolate" },
+};
+
+static SvgValue *
+svg_isolation_new (Isolation value)
+{
+  g_assert (value < G_N_ELEMENTS (isolation_values));
+  return svg_value_ref ((SvgValue *) &isolation_values[value]);
+}
+
+static SvgValue *
+svg_isolation_parse (const char *string)
+{
+  return svg_enum_parse (isolation_values, G_N_ELEMENTS (isolation_values), string);
+}
+
+/* }}} */
+/* {{{ Marker units */
 
 typedef enum
 {
-  TRANSFORM_NONE,
-  TRANSFORM_TRANSLATE,
-  TRANSFORM_SCALE,
-  TRANSFORM_ROTATE,
-  TRANSFORM_SKEW_X,
-  TRANSFORM_SKEW_Y,
-  TRANSFORM_MATRIX,
-} TransformType;
+  MARKER_UNITS_STROKE_WIDTH,
+  MARKER_UNITS_USER_SPACE_ON_USE,
+} MarkerUnits;
+
+static const SvgValueClass SVG_MARKER_UNITS_CLASS = {
+  "SvgMarkerUnits",
+  svg_enum_free,
+  svg_enum_equal,
+  svg_enum_interpolate,
+  svg_enum_accumulate,
+  svg_enum_print,
+};
+
+static SvgEnum marker_units_values[] = {
+  { { &SVG_MARKER_UNITS_CLASS, 1 }, MARKER_UNITS_STROKE_WIDTH, "strokeWidth" },
+  { { &SVG_MARKER_UNITS_CLASS, 1 }, MARKER_UNITS_USER_SPACE_ON_USE, "userSpaceOnUse" },
+};
+
+static SvgValue *
+svg_marker_units_new (MarkerUnits value)
+{
+  g_assert (value < G_N_ELEMENTS (marker_units_values));
+  return svg_value_ref ((SvgValue *) &marker_units_values[value]);
+}
+
+static SvgValue *
+svg_marker_units_parse (const char *string)
+{
+  return svg_enum_parse (marker_units_values, G_N_ELEMENTS (marker_units_values), string);
+}
+
+/* }}} */
+/* {{{ Unicode bidi */
+
+typedef enum {
+  UNICODE_BIDI_NORMAL,
+  UNICODE_BIDI_EMBED,
+  UNICODE_BIDI_OVERRIDE
+} UnicodeBidi;
+
+static const SvgValueClass SVG_UNICODE_BIDI_CLASS = {
+  "SvgUnicodeBidi",
+  svg_enum_free,
+  svg_enum_equal,
+  svg_enum_interpolate,
+  svg_enum_accumulate,
+  svg_enum_print,
+};
+
+static SvgEnum unicode_bidi_values[] = {
+  { { &SVG_UNICODE_BIDI_CLASS, 1 }, UNICODE_BIDI_NORMAL, "normal" },
+  { { &SVG_UNICODE_BIDI_CLASS, 1 }, UNICODE_BIDI_EMBED, "embed" },
+  { { &SVG_UNICODE_BIDI_CLASS, 1 }, UNICODE_BIDI_OVERRIDE, "bidi-override" },
+};
+
+static SvgValue *
+svg_unicode_bidi_new (UnicodeBidi value)
+{
+  g_assert (value < G_N_ELEMENTS (unicode_bidi_values));
+  return svg_value_ref ((SvgValue *) &unicode_bidi_values[value]);
+}
+
+static SvgValue *
+svg_unicode_bidi_parse (const char *string)
+{
+  return svg_enum_parse (unicode_bidi_values, G_N_ELEMENTS (unicode_bidi_values), string);
+}
+
+/* }}} */
+/* {{{ Overflow */
+
+typedef enum
+{
+  OVERFLOW_VISIBLE,
+  OVERFLOW_HIDDEN,
+  OVERFLOW_AUTO,
+} SvgOverflow;
+
+static const SvgValueClass SVG_OVERFLOW_CLASS = {
+  "SvgOverflow",
+  svg_enum_free,
+  svg_enum_equal,
+  svg_enum_interpolate,
+  svg_enum_accumulate,
+  svg_enum_print,
+};
+
+static SvgEnum overflow_values[] = {
+  { { &SVG_OVERFLOW_CLASS, 1 }, OVERFLOW_VISIBLE, "visible" },
+  { { &SVG_OVERFLOW_CLASS, 1 }, OVERFLOW_HIDDEN, "hidden" },
+  { { &SVG_OVERFLOW_CLASS, 1 }, OVERFLOW_AUTO, "auto" },
+};
+
+static SvgValue *
+svg_overflow_new (SvgOverflow value)
+{
+  g_assert (value < G_N_ELEMENTS (overflow_values));
+  return svg_value_ref ((SvgValue *) &overflow_values[value]);
+}
+
+static SvgValue *
+svg_overflow_parse (const char *string)
+{
+  return svg_enum_parse (overflow_values, G_N_ELEMENTS (overflow_values), string);
+}
+
+/* }}} */
+/* {{{ Direction */
+
+static const SvgValueClass SVG_DIRECTION_CLASS = {
+  "SvgDirection",
+  svg_enum_free,
+  svg_enum_equal,
+  svg_enum_interpolate,
+  svg_enum_accumulate,
+  svg_enum_print,
+};
+
+static SvgEnum direction_values[] = {
+  { { &SVG_DIRECTION_CLASS, 1 }, PANGO_DIRECTION_LTR, "ltr" },
+  { { &SVG_DIRECTION_CLASS, 1 }, PANGO_DIRECTION_RTL, "rtl" },
+};
+
+static SvgValue *
+svg_direction_new (PangoDirection value)
+{
+  g_return_val_if_fail (value <= PANGO_DIRECTION_RTL, NULL);
+  return svg_value_ref ((SvgValue *)&direction_values[value]);
+}
+
+static SvgValue *
+svg_direction_parse (const char *string)
+{
+  return svg_enum_parse (direction_values, G_N_ELEMENTS (direction_values), string);
+}
+
+/* }}} */
+/* {{{ Writing mode */
+
+typedef enum {
+  WRITING_MODE_HORIZONTAL_TB,
+  WRITING_MODE_VERTICAL_RL,
+  WRITING_MODE_VERTICAL_LR,
+
+  /* SVG 1.1 legacy properties */
+  WRITING_MODE_LEGACY_LR,
+  WRITING_MODE_LEGACY_LR_TB,
+  WRITING_MODE_LEGACY_RL,
+  WRITING_MODE_LEGACY_RL_TB,
+  WRITING_MODE_LEGACY_TB,
+  WRITING_MODE_LEGACY_TB_RL,
+} WritingMode;
+
+static const gboolean is_vertical_writing_mode[] = {
+  FALSE, TRUE, TRUE,
+  FALSE, FALSE, FALSE, FALSE, TRUE, TRUE
+};
+
+static const SvgValueClass SVG_WRITING_MODE_CLASS = {
+  "SvgWritingMode",
+  svg_enum_free,
+  svg_enum_equal,
+  svg_enum_interpolate,
+  svg_enum_accumulate,
+  svg_enum_print,
+};
+
+static SvgEnum writing_mode_values[] = {
+  { { &SVG_WRITING_MODE_CLASS, 1 }, WRITING_MODE_HORIZONTAL_TB, "horizontal-tb" },
+  { { &SVG_WRITING_MODE_CLASS, 1 }, WRITING_MODE_VERTICAL_RL, "vertical-rl" },
+  { { &SVG_WRITING_MODE_CLASS, 1 }, WRITING_MODE_VERTICAL_LR, "vertical-lr" },
+
+  /* SVG 1.1 legacy properties */
+  { { &SVG_WRITING_MODE_CLASS, 1 }, WRITING_MODE_LEGACY_LR, "lr" },
+  { { &SVG_WRITING_MODE_CLASS, 1 }, WRITING_MODE_LEGACY_LR_TB, "lr-tb" },
+  { { &SVG_WRITING_MODE_CLASS, 1 }, WRITING_MODE_LEGACY_RL, "rl" },
+  { { &SVG_WRITING_MODE_CLASS, 1 }, WRITING_MODE_LEGACY_RL_TB, "rl-tb" },
+  { { &SVG_WRITING_MODE_CLASS, 1 }, WRITING_MODE_LEGACY_TB, "tb" },
+  { { &SVG_WRITING_MODE_CLASS, 1 }, WRITING_MODE_LEGACY_TB_RL, "tb-rl" },
+};
+
+static SvgValue *
+svg_writing_mode_new (WritingMode value)
+{
+  g_assert (value < G_N_ELEMENTS (writing_mode_values));
+  return svg_value_ref ((SvgValue *) &writing_mode_values[value]);
+}
+
+static SvgValue *
+svg_writing_mode_parse (const char *string)
+{
+  return svg_enum_parse (writing_mode_values, G_N_ELEMENTS (writing_mode_values), string);
+}
+
+/* }}} */
+/* {{{ Font style */
+
+static const SvgValueClass SVG_FONT_STYLE_CLASS = {
+  "SvgFontStyle",
+  svg_enum_free,
+  svg_enum_equal,
+  svg_enum_interpolate,
+  svg_enum_accumulate,
+  svg_enum_print,
+};
+
+static SvgEnum font_style_values[] = {
+  { { &SVG_FONT_STYLE_CLASS, 1 }, PANGO_STYLE_NORMAL, "normal" },
+  { { &SVG_FONT_STYLE_CLASS, 1 }, PANGO_STYLE_OBLIQUE, "oblique" },
+  { { &SVG_FONT_STYLE_CLASS, 1 }, PANGO_STYLE_ITALIC, "italic" },
+};
+
+static SvgValue *
+svg_font_style_new (PangoStyle value)
+{
+  g_assert (value < G_N_ELEMENTS (font_style_values));
+  return svg_value_ref ((SvgValue *) &font_style_values[value]);
+}
+
+static SvgValue *
+svg_font_style_parse (const char *string)
+{
+  return svg_enum_parse (font_style_values, G_N_ELEMENTS (font_style_values), string);
+}
+
+/* }}} */
+/* {{{ Font variant */
+
+static const SvgValueClass SVG_FONT_VARIANT_CLASS = {
+  "SvgFontVariant",
+  svg_enum_free,
+  svg_enum_equal,
+  svg_enum_interpolate,
+  svg_enum_accumulate,
+  svg_enum_print,
+};
+
+static SvgEnum font_variant_values[] = {
+  { { &SVG_FONT_VARIANT_CLASS, 1 }, PANGO_VARIANT_NORMAL, "normal" },
+  { { &SVG_FONT_VARIANT_CLASS, 1 }, PANGO_VARIANT_SMALL_CAPS, "small-caps" },
+  { { &SVG_FONT_VARIANT_CLASS, 1 }, PANGO_VARIANT_ALL_SMALL_CAPS, "all-small-caps" },
+  { { &SVG_FONT_VARIANT_CLASS, 1 }, PANGO_VARIANT_PETITE_CAPS, "petite-caps" },
+  { { &SVG_FONT_VARIANT_CLASS, 1 }, PANGO_VARIANT_ALL_PETITE_CAPS, "all-petite-caps" },
+  { { &SVG_FONT_VARIANT_CLASS, 1 }, PANGO_VARIANT_UNICASE, "unicase" },
+  { { &SVG_FONT_VARIANT_CLASS, 1 }, PANGO_VARIANT_TITLE_CAPS, "titling-caps" },
+};
+
+static SvgValue *
+svg_font_variant_new (PangoVariant value)
+{
+  g_assert (value < G_N_ELEMENTS (font_variant_values));
+  return svg_value_ref ((SvgValue *) &font_variant_values[value]);
+}
+
+static SvgValue *
+svg_font_variant_parse (const char *string)
+{
+  return svg_enum_parse (font_variant_values, G_N_ELEMENTS (font_variant_values), string);
+}
+
+/* }}} */
+/* {{{ Font stretch */
+
+static const SvgValueClass SVG_FONT_STRETCH_CLASS = {
+  "SvgFontStretch",
+  svg_enum_free,
+  svg_enum_equal,
+  svg_enum_interpolate,
+  svg_enum_accumulate,
+  svg_enum_print,
+};
+
+static SvgEnum font_stretch_values[] = {
+  { { &SVG_FONT_STRETCH_CLASS, 1 }, PANGO_STRETCH_ULTRA_CONDENSED, "ultra-condensed" },
+  { { &SVG_FONT_STRETCH_CLASS, 1 }, PANGO_STRETCH_EXTRA_CONDENSED, "extra-condensed" },
+  { { &SVG_FONT_STRETCH_CLASS, 1 }, PANGO_STRETCH_CONDENSED, "condensed" },
+  { { &SVG_FONT_STRETCH_CLASS, 1 }, PANGO_STRETCH_SEMI_CONDENSED, "semi-condensed" },
+  { { &SVG_FONT_STRETCH_CLASS, 1 }, PANGO_STRETCH_NORMAL, "normal" },
+  { { &SVG_FONT_STRETCH_CLASS, 1 }, PANGO_STRETCH_SEMI_EXPANDED, "semi-expanded" },
+  { { &SVG_FONT_STRETCH_CLASS, 1 }, PANGO_STRETCH_EXPANDED, "expanded" },
+  { { &SVG_FONT_STRETCH_CLASS, 1 }, PANGO_STRETCH_EXTRA_EXPANDED, "extra-expanded" },
+  { { &SVG_FONT_STRETCH_CLASS, 1 }, PANGO_STRETCH_ULTRA_EXPANDED, "ultra-expanded" },
+};
+
+static SvgValue *
+svg_font_stretch_new (PangoStretch value)
+{
+  g_assert (value < G_N_ELEMENTS (font_stretch_values));
+  return svg_value_ref ((SvgValue *) &font_stretch_values[value]);
+}
+
+static SvgValue *
+svg_font_stretch_parse (const char *string)
+{
+  return svg_enum_parse (font_stretch_values, G_N_ELEMENTS (font_stretch_values), string);
+}
+
+/* }}} */
+/* }}} */
+/* {{{ Transforms */
 
 typedef struct
 {
@@ -1868,14 +2540,14 @@ svg_transform_alloc (unsigned int n)
   return t;
 }
 
-static SvgValue *
+SvgValue *
 svg_transform_new_none (void)
 {
   static SvgTransform none = { { &SVG_TRANSFORM_CLASS, 1 }, 1, { { TRANSFORM_NONE, } }};
   return svg_value_ref ((SvgValue *) &none);
 }
 
-static SvgValue *
+SvgValue *
 svg_transform_new_translate (double x, double y)
 {
   SvgTransform *tf = svg_transform_alloc (1);
@@ -1885,7 +2557,7 @@ svg_transform_new_translate (double x, double y)
   return (SvgValue *) tf;
 }
 
-static SvgValue *
+SvgValue *
 svg_transform_new_scale (double x, double y)
 {
   SvgTransform *tf = svg_transform_alloc (1);
@@ -1895,7 +2567,7 @@ svg_transform_new_scale (double x, double y)
   return (SvgValue *) tf;
 }
 
-static SvgValue *
+SvgValue *
 svg_transform_new_rotate (double angle, double x, double y)
 {
   SvgTransform *tf = svg_transform_alloc (1);
@@ -1906,7 +2578,7 @@ svg_transform_new_rotate (double angle, double x, double y)
   return (SvgValue *) tf;
 }
 
-static SvgValue *
+SvgValue *
 svg_transform_new_skew_x (double angle)
 {
   SvgTransform *tf = svg_transform_alloc (1);
@@ -1915,12 +2587,21 @@ svg_transform_new_skew_x (double angle)
   return (SvgValue *) tf;
 }
 
-static SvgValue *
+SvgValue *
 svg_transform_new_skew_y (double angle)
 {
   SvgTransform *tf = svg_transform_alloc (1);
   tf->transforms[0].type = TRANSFORM_SKEW_Y;
   tf->transforms[0].skew_y.angle = angle;
+  return (SvgValue *) tf;
+}
+
+SvgValue *
+svg_transform_new_matrix (double params[6])
+{
+  SvgTransform *tf = svg_transform_alloc (1);
+  tf->transforms[0].type = TRANSFORM_MATRIX;
+  memcpy (tf->transforms[0].matrix.m, params, sizeof (double) * 6);
   return (SvgValue *) tf;
 }
 
@@ -2616,21 +3297,6 @@ svg_transform_get_gsk (SvgTransform *tf)
   return t;
 }
 
-SvgValue *
-svg_transform_drop_last (SvgValue *orig)
-{
-  SvgTransform *to = (SvgTransform *) orig;
-  SvgTransform *tf;
-
-  if (to->n_transforms == 1)
-    return svg_transform_new_none ();
-
-  tf = svg_transform_alloc (to->n_transforms - 1);
-  memcpy (tf->transforms, to->transforms, tf->n_transforms * sizeof (PrimitiveTransform));
-
-  return (SvgValue *) tf;
-}
-
 /* }}} */
 /* {{{ Paint */
 
@@ -2644,7 +3310,7 @@ typedef struct
     struct {
       char *ref;
       Shape *shape;
-    } gradient;
+    } server;
   };
 } SvgPaint;
 
@@ -2653,8 +3319,8 @@ svg_paint_free (SvgValue *value)
 {
   SvgPaint *paint = (SvgPaint *) value;
 
-  if (paint->kind == PAINT_GRADIENT)
-    g_free (paint->gradient.ref);
+  if (paint->kind == PAINT_SERVER)
+    g_free (paint->server.ref);
 
   g_free (value);
 }
@@ -2672,14 +3338,16 @@ svg_paint_equal (const SvgValue *value0,
   switch (paint0->kind)
     {
     case PAINT_NONE:
+    case PAINT_CONTEXT_FILL:
+    case PAINT_CONTEXT_STROKE:
       return TRUE;
     case PAINT_SYMBOLIC:
       return paint0->symbolic == paint1->symbolic;
     case PAINT_COLOR:
       return gdk_rgba_equal (&paint0->color, &paint1->color);
-    case PAINT_GRADIENT:
-      return paint0->gradient.shape == paint1->gradient.shape &&
-             g_strcmp0 (paint0->gradient.ref, paint1->gradient.ref) == 0;
+    case PAINT_SERVER:
+      return paint0->server.shape == paint1->server.shape &&
+             g_strcmp0 (paint0->server.ref, paint1->server.ref) == 0;
     default:
       g_assert_not_reached ();
     }
@@ -2719,12 +3387,24 @@ parse_symbolic_color (const char       *value,
   return TRUE;
 }
 
+static SvgValue *
+svg_paint_new_simple (PaintKind kind)
+{
+  static SvgPaint paint_values[] = {
+    { { &SVG_PAINT_CLASS, 1 }, .kind = PAINT_NONE },
+    { { &SVG_PAINT_CLASS, 1 }, .kind = PAINT_CONTEXT_FILL },
+    { { &SVG_PAINT_CLASS, 1 }, .kind = PAINT_CONTEXT_STROKE },
+  };
+
+  g_assert (kind < G_N_ELEMENTS (paint_values));
+
+  return svg_value_ref ((SvgValue *) &paint_values[kind]);
+}
+
 SvgValue *
 svg_paint_new_none (void)
 {
-  static SvgPaint none = { { &SVG_PAINT_CLASS, 1 }, .kind = PAINT_NONE };
-
-  return svg_value_ref ((SvgValue *) &none);
+  return svg_paint_new_simple (PAINT_NONE);
 }
 
 SvgValue *
@@ -2771,14 +3451,14 @@ svg_paint_new_black (void)
 }
 
 static SvgValue *
-svg_paint_new_gradient (Shape      *shape,
-                        const char *ref)
+svg_paint_new_server (Shape      *shape,
+                      const char *ref)
 {
   SvgPaint *paint = (SvgPaint *) svg_value_alloc (&SVG_PAINT_CLASS,
                                                   sizeof (SvgPaint));
-  paint->kind = PAINT_GRADIENT;
-  paint->gradient.shape = shape;
-  paint->gradient.ref = g_strdup (ref);
+  paint->kind = PAINT_SERVER;
+  paint->server.shape = shape;
+  paint->server.ref = g_strdup (ref);
 
   return (SvgValue *) paint;
 }
@@ -2790,7 +3470,15 @@ svg_paint_parse (const char *value)
 
   if (strcmp (value, "none") == 0)
     {
-      return svg_paint_new_none ();
+      return svg_paint_new_simple (PAINT_NONE);
+    }
+  else if (strcmp (value, "context-fill") == 0)
+    {
+      return svg_paint_new_simple (PAINT_CONTEXT_FILL);
+    }
+  else if (strcmp (value, "context-stroke") == 0)
+    {
+      return svg_paint_new_simple (PAINT_CONTEXT_STROKE);
     }
   else if (gdk_rgba_parse (&color, value))
     {
@@ -2814,9 +3502,9 @@ svg_paint_parse (const char *value)
               parse_symbolic_color (url + strlen ("#gpa:"), &symbolic))
             paint = svg_paint_new_symbolic (symbolic);
           else if (url[0] == '#')
-            paint = svg_paint_new_gradient (NULL, url + 1);
+            paint = svg_paint_new_server (NULL, url + 1);
           else
-            paint = svg_paint_new_gradient (NULL, url);
+            paint = svg_paint_new_server (NULL, url);
         }
 
       g_free (url);
@@ -2835,6 +3523,10 @@ svg_paint_parse_gpa (const char *value)
 
   if (strcmp (value, "none") == 0)
     return svg_paint_new_none ();
+  else if (strcmp (value, "context-fill") == 0)
+    return svg_paint_new_simple (PAINT_CONTEXT_FILL);
+  else if (strcmp (value, "context-stroke") == 0)
+    return svg_paint_new_simple (PAINT_CONTEXT_STROKE);
   else if (parse_symbolic_color (value, &symbolic))
     return svg_paint_new_symbolic (symbolic);
   else if (gdk_rgba_parse (&rgba, value))
@@ -2865,6 +3557,14 @@ svg_paint_print (const SvgValue *value,
       g_string_append (s, "none");
       break;
 
+    case PAINT_CONTEXT_FILL:
+      g_string_append (s, "context-fill");
+      break;
+
+    case PAINT_CONTEXT_STROKE:
+      g_string_append (s, "context-stroke");
+      break;
+
     case PAINT_COLOR:
       gdk_rgba_print (&paint->color, s);
       break;
@@ -2875,8 +3575,8 @@ svg_paint_print (const SvgValue *value,
                               colors[paint->symbolic].fallback);
       break;
 
-    case PAINT_GRADIENT:
-      g_string_append_printf (s, "url(#%s)", paint->gradient.ref);
+    case PAINT_SERVER:
+      g_string_append_printf (s, "url(#%s)", paint->server.ref);
       break;
 
     default:
@@ -2893,10 +3593,20 @@ svg_paint_print_gpa (const SvgValue *value,
     "foreground", "error", "warning", "success", "accent",
   };
 
+  g_assert (value->class == &SVG_PAINT_CLASS);
+
   switch (paint->kind)
     {
     case PAINT_NONE:
       g_string_append (s, "none");
+      break;
+
+    case PAINT_CONTEXT_FILL:
+      g_string_append (s, "context-fill");
+      break;
+
+    case PAINT_CONTEXT_STROKE:
+      g_string_append (s, "context-stroke");
       break;
 
     case PAINT_COLOR:
@@ -2907,8 +3617,8 @@ svg_paint_print_gpa (const SvgValue *value,
       g_string_append (s, symbolic[paint->symbolic]);
       break;
 
-    case PAINT_GRADIENT:
-      g_string_append_printf  (s, "url(#%s)", paint->gradient.ref);
+    case PAINT_SERVER:
+      g_string_append_printf  (s, "url(#%s)", paint->server.ref);
       break;
 
     default:
@@ -2922,6 +3632,8 @@ svg_paint_resolve (SvgValue      *value,
                    size_t         n_colors)
 {
   const SvgPaint *paint = (const SvgPaint *) value;
+
+  g_assert (value->class == &SVG_PAINT_CLASS);
 
   if (paint->kind == PAINT_SYMBOLIC)
     {
@@ -3363,16 +4075,22 @@ typedef enum
 
 typedef struct
 {
+  SvgDimension dim;
+  double value;
+} Number;
+
+typedef struct
+{
   SvgValue base;
   DashArrayKind kind;
   unsigned int n_dashes;
-  double dashes[2];
+  Number dashes[2];
 } SvgDashArray;
 
 static unsigned int
 svg_dash_array_size (unsigned int n)
 {
-  return sizeof (SvgDashArray) + (n - 2) * sizeof (double);
+  return sizeof (SvgDashArray) + MAX (n - 2, 0) * sizeof (Number);
 }
 
 static void
@@ -3382,39 +4100,41 @@ svg_dash_array_free (SvgValue *da)
 }
 
 static gboolean
-svg_dash_array_equal (const SvgValue *value1,
-                      const SvgValue *value2)
+svg_dash_array_equal (const SvgValue *value0,
+                      const SvgValue *value1)
 {
+  const SvgDashArray *da0 = (const SvgDashArray *) value0;
   const SvgDashArray *da1 = (const SvgDashArray *) value1;
-  const SvgDashArray *da2 = (const SvgDashArray *) value2;
 
-  if (da1->kind != da2->kind)
+  if (da0->kind != da1->kind)
     return FALSE;
 
-  if (da1->kind == DASH_ARRAY_NONE)
+  if (da0->kind == DASH_ARRAY_NONE)
     return TRUE;
 
-  if (da1->n_dashes != da2->n_dashes)
+  if (da0->n_dashes != da1->n_dashes)
     return FALSE;
 
-  for (unsigned int i = 0; i < da1->n_dashes; i++)
+  for (unsigned int i = 0; i < da0->n_dashes; i++)
     {
-      if (da1->dashes[i] != da2->dashes[i])
+      if (da0->dashes[i].dim != da1->dashes[i].dim)
+        return FALSE;
+      if (da0->dashes[i].value != da1->dashes[i].value)
         return FALSE;
     }
 
   return TRUE;
 }
 
-static SvgValue * svg_dash_array_interpolate (const SvgValue *value1,
-                                              const SvgValue *value2,
+static SvgValue * svg_dash_array_interpolate (const SvgValue *value0,
+                                              const SvgValue *value1,
                                               double          t);
 
 static void svg_dash_array_print (const SvgValue *value,
                                   GString        *s);
 
-static SvgValue * svg_dash_array_accumulate (const SvgValue *value1,
-                                             const SvgValue *value2,
+static SvgValue * svg_dash_array_accumulate (const SvgValue *value0,
+                                             const SvgValue *value1,
                                              int             n);
 
 static const SvgValueClass SVG_DASH_ARRAY_CLASS = {
@@ -3448,18 +4168,28 @@ static SvgValue *
 svg_dash_array_new (double       *values,
                     unsigned int  n)
 {
-  static SvgDashArray da01 = { { &SVG_DASH_ARRAY_CLASS, 1 }, DASH_ARRAY_DASHES, 2, { 0, 1 } };
-  static SvgDashArray da10 = { { &SVG_DASH_ARRAY_CLASS, 1 }, DASH_ARRAY_DASHES, 2, { 1, 0 } };
+  static SvgDashArray da01 = { { &SVG_DASH_ARRAY_CLASS, 1 }, DASH_ARRAY_DASHES, 2, { { SVG_DIMENSION_NUMBER, 0 }, { SVG_DIMENSION_NUMBER, 1 } } };
+  static SvgDashArray da10 = { { &SVG_DASH_ARRAY_CLASS, 1 }, DASH_ARRAY_DASHES, 2, { { SVG_DIMENSION_NUMBER, 1 }, { SVG_DIMENSION_NUMBER, 0 } } };
 
   if (n == 2 && values[0] == 0 && values[1] == 1)
-    return svg_value_ref ((SvgValue *) &da01);
+    {
+      return svg_value_ref ((SvgValue *) &da01);
+    }
   else if (n == 2 && values[0] == 1 && values[1] == 0)
-    return svg_value_ref ((SvgValue *) &da10);
+    {
+      return svg_value_ref ((SvgValue *) &da10);
+    }
   else
     {
       SvgDashArray *a = svg_dash_array_alloc (n);
-      memcpy (a->dashes, values, sizeof (double) * n);
+
       a->kind = DASH_ARRAY_DASHES;
+      for (unsigned int i = 0; i < n; i++)
+        {
+          a->dashes[i].dim = SVG_DIMENSION_NUMBER;
+          a->dashes[i].value = values[i];
+        }
+
       return (SvgValue *) a;
     }
 }
@@ -3477,7 +4207,7 @@ svg_dash_array_parse (const char *value)
       unsigned int n;
       SvgDashArray *dashes;
 
-      strv = g_strsplit (value, " ", 0);
+      strv = strsplit_set (value, ", ");
       n = g_strv_length (strv);
 
       dashes = svg_dash_array_alloc (n);
@@ -3485,17 +4215,19 @@ svg_dash_array_parse (const char *value)
 
       for (unsigned int i = 0; strv[i]; i++)
         {
-          if (!parse_number (strv[i], -DBL_MAX, DBL_MAX, &dashes->dashes[i]))
+          if (!parse_numeric (strv[i], -DBL_MAX, DBL_MAX, NUMBER|PERCENTAGE|LENGTH,
+                              &dashes->dashes[i].value, &dashes->dashes[i].dim))
+
             {
               svg_value_unref ((SvgValue *) dashes);
               dashes = NULL;
               break;
             }
        }
-     g_strfreev (strv);
+      g_strfreev (strv);
 
-     return (SvgValue *) dashes;
-   }
+      return (SvgValue *) dashes;
+    }
 }
 
 static void
@@ -3514,7 +4246,11 @@ svg_dash_array_print (const SvgValue *value,
         {
           if (i > 0)
             g_string_append_c (s, ' ');
-          string_append_double (s, dashes->dashes[i]);
+          string_append_double (s, dashes->dashes[i].value);
+          if (dashes->dashes[i].dim == SVG_DIMENSION_PERCENTAGE)
+            g_string_append (s, "%");
+          else if (dashes->dashes[i].dim == SVG_DIMENSION_LENGTH)
+            g_string_append (s, "px");
         }
     }
 }
@@ -3526,16 +4262,11 @@ svg_dash_array_interpolate (const SvgValue *value0,
 {
   const SvgDashArray *a0 = (const SvgDashArray *) value0;
   const SvgDashArray *a1 = (const SvgDashArray *) value1;
-  SvgDashArray *a;
+  SvgDashArray *a = NULL;
   unsigned int n_dashes;
 
   if (a0->kind != a1->kind)
-    {
-      if (t < 0.5)
-        return svg_value_ref ((SvgValue *) value0);
-      else
-        return svg_value_ref ((SvgValue *) value1);
-    }
+    goto out;
 
   if (a0->kind == DASH_ARRAY_NONE)
     return (SvgValue *) svg_dash_array_new_none ();
@@ -3546,10 +4277,26 @@ svg_dash_array_interpolate (const SvgValue *value0,
   a->kind = a0->kind;
 
   for (unsigned int i = 0; i < n_dashes; i++)
-    a->dashes[i] = lerp (t, a0->dashes[i % a0->n_dashes],
-                            a1->dashes[i % a1->n_dashes]);
+    {
+      if (a0->dashes[i % a0->n_dashes].dim != a1->dashes[i %a1->n_dashes].dim)
+        {
+          g_clear_pointer ((SvgValue **)&a, svg_value_unref);
+          break;
+        }
 
-  return (SvgValue *) a;
+      a->dashes[i].dim = a0->dashes[i % a0->n_dashes].dim;
+      a->dashes[i].value = lerp (t, a0->dashes[i % a0->n_dashes].value,
+                                    a1->dashes[i % a1->n_dashes].value);
+    }
+
+out:
+  if (a)
+    return (SvgValue *) a;
+
+  if (t < 0.5)
+    return svg_value_ref ((SvgValue *) value0);
+  else
+    return svg_value_ref ((SvgValue *) value1);
 }
 
 static SvgValue *
@@ -3558,6 +4305,35 @@ svg_dash_array_accumulate (const SvgValue *value0,
                            int             n)
 {
   return NULL;
+}
+
+static SvgValue *
+svg_dash_array_resolve (const SvgValue        *value,
+                        const graphene_rect_t *viewport)
+{
+  SvgDashArray *orig = (SvgDashArray *) value;
+  SvgDashArray *a;
+  double size;
+
+  g_assert (value->class == &SVG_DASH_ARRAY_CLASS);
+
+  if (orig->kind == DASH_ARRAY_NONE)
+    return svg_value_ref ((SvgValue *) orig);
+
+  a = svg_dash_array_alloc (orig->n_dashes);
+  a->kind = orig->kind;
+
+  size = normalized_diagonal (viewport);
+  for (unsigned int i = 0; i < orig->n_dashes; i++)
+    {
+      a->dashes[i].dim = SVG_DIMENSION_NUMBER;
+      if (orig->dashes[i].dim == SVG_DIMENSION_PERCENTAGE)
+        a->dashes[i].value = orig->dashes[i].value / 100 * size;
+      else
+        a->dashes[i].value = orig->dashes[i].value;
+    }
+
+  return (SvgValue *) a;
 }
 
 /* }}} */
@@ -3630,6 +4406,7 @@ static SvgValue *
 svg_path_new_none (void)
 {
   static SvgPath none = { { &SVG_PATH_CLASS, 1 }, NULL };
+
   return svg_value_ref ((SvgValue *) &none);
 }
 
@@ -3667,6 +4444,8 @@ static GskPath *
 svg_path_get (const SvgValue *value)
 {
   const SvgPath *p = (const SvgPath *) value;
+
+  g_assert (value->class == &SVG_PATH_CLASS);
 
   return p->path;
 }
@@ -3827,13 +4606,13 @@ typedef struct
 {
   SvgValue base;
   unsigned int n_values;
-  double values[1];
+  Number values[1];
 } SvgPoints;
 
 static unsigned int
 svg_points_size (unsigned int n)
 {
-  return sizeof (SvgPoints) + (n - 1) * sizeof (double);
+  return sizeof (SvgPoints) + MAX (n - 1, 0) * sizeof (Number);
 }
 
 static void
@@ -3854,7 +4633,9 @@ svg_points_equal (const SvgValue *value0,
 
   for (unsigned int i = 0; i < p0->n_values; i++)
     {
-      if (p0->values[i] != p1->values[i])
+      if (p0->values[i].dim != p1->values[i].dim)
+        return FALSE;
+      if (p0->values[i].value != p1->values[i].value)
         return FALSE;
     }
 
@@ -3879,7 +4660,11 @@ svg_points_print (const SvgValue *value,
     {
       if (i > 0)
         g_string_append_c (string, ' ');
-      string_append_double (string, p->values[i]);
+      string_append_double (string, p->values[i].value);
+      if (p->values[i].dim == SVG_DIMENSION_PERCENTAGE)
+        g_string_append (string, "%");
+      else if (p->values[i].dim == SVG_DIMENSION_LENGTH)
+        g_string_append (string, "px");
     }
 }
 
@@ -3916,7 +4701,11 @@ svg_points_new (double       *values,
   result = (SvgPoints *) svg_value_alloc (&SVG_POINTS_CLASS, svg_points_size (n_values));
   result->n_values = n_values;
 
-  memcpy (result->values, values, sizeof (double) * n_values);
+  for (unsigned int i = 0; i < n_values; i++)
+    {
+      result->values[i].dim = SVG_DIMENSION_NUMBER;
+      result->values[i].value = values[i];
+    }
 
   return (SvgValue *) result;
 }
@@ -3924,20 +4713,40 @@ svg_points_new (double       *values,
 static SvgValue *
 svg_points_parse (const char *value)
 {
-  SvgValue *result;
-  GArray *values;
-
   if (strcmp (value, "none") == 0)
-    return svg_path_new_none ();
+    {
+      return svg_path_new_none ();
+    }
+  else
+    {
+      GStrv strv;
+      unsigned int n;
+      SvgPoints *p;
 
-  values = parse_numbers2 (value, " ", -DBL_MAX, DBL_MAX);
-  if (values->len % 2 != 0)
-    g_array_remove_index (values, values->len - 1);
+      strv = strsplit_set (value, ", ");
+      n = g_strv_length (strv);
 
-  result = svg_points_new ((double *) values->data, values->len);
-  g_array_unref (values);
+      if (n % 2 == 1)
+        n--;
 
-  return result;
+      p = (SvgPoints *) svg_value_alloc (&SVG_POINTS_CLASS, svg_points_size (n));
+      p->n_values = n;
+
+      for (unsigned int i = 0; i < n; i++)
+        {
+          if (!parse_numeric (strv[i], -DBL_MAX, DBL_MAX, NUMBER|PERCENTAGE|LENGTH,
+                              &p->values[i].value, &p->values[i].dim))
+
+            {
+              svg_value_unref ((SvgValue *) p);
+              p = NULL;
+              break;
+            }
+       }
+      g_strfreev (strv);
+
+      return (SvgValue *) p;
+    }
 }
 
 static SvgValue *
@@ -3961,7 +4770,40 @@ svg_points_interpolate (const SvgValue *value0,
   p->n_values = p0->n_values;
 
   for (unsigned int i = 0; i < p0->n_values; i++)
-    p->values[i] = lerp (t, p0->values[i], p1->values[i]);
+    {
+      g_assert (p0->values[i].dim != SVG_DIMENSION_PERCENTAGE);
+      p->values[i].dim = SVG_DIMENSION_NUMBER;
+      p->values[i].value = lerp (t, p0->values[i].value, p1->values[i].value);
+    }
+
+  return (SvgValue *) p;
+}
+
+static SvgValue *
+svg_points_resolve (const SvgValue        *value,
+                    const graphene_rect_t *viewport)
+{
+  SvgPoints *orig = (SvgPoints *) value;
+  SvgPoints *p;
+  double size;
+
+  g_assert (value->class == &SVG_POINTS_CLASS);
+
+  if (orig->n_values == 0)
+    return svg_value_ref ((SvgValue *) orig);
+
+  p = (SvgPoints *) svg_value_alloc (&SVG_POINTS_CLASS, svg_points_size (orig->n_values));
+  p->n_values = orig->n_values;
+
+  size = normalized_diagonal (viewport);
+  for (unsigned int i = 0; i < orig->n_values; i++)
+    {
+      p->values[i].dim = SVG_DIMENSION_NUMBER;
+      if (orig->values[i].dim == SVG_DIMENSION_PERCENTAGE)
+        p->values[i].value = orig->values[i].value / 100 * size;
+      else
+        p->values[i].value = orig->values[i].value;
+    }
 
   return (SvgValue *) p;
 }
@@ -4355,12 +5197,694 @@ svg_mask_parse (const char *value)
 }
 
 /* }}} */
+/* {{{ Viewbox */
+
+typedef struct
+{
+  SvgValue base;
+  gboolean unset;
+  graphene_rect_t view_box;
+} SvgViewBox;
+
+static void
+svg_view_box_free (SvgValue *value)
+{
+  g_free (value);
+}
+
+static gboolean
+svg_view_box_equal (const SvgValue *value0,
+                    const SvgValue *value1)
+{
+  const SvgViewBox *v0 = (const SvgViewBox *) value0;
+  const SvgViewBox *v1 = (const SvgViewBox *) value1;
+
+  if (v0->unset != v1->unset)
+    return FALSE;
+
+  if (v0->unset)
+    return TRUE;
+
+  return graphene_rect_equal (&v0->view_box, &v1->view_box);
+}
+
+static SvgValue * svg_view_box_new (const graphene_rect_t *view_box);
+
+static SvgValue *
+svg_view_box_interpolate (const SvgValue *value0,
+                          const SvgValue *value1,
+                          double          t)
+{
+  const SvgViewBox *v0 = (const SvgViewBox *) value0;
+  const SvgViewBox *v1 = (const SvgViewBox *) value1;
+  graphene_rect_t b;
+
+  if (v0->unset || v1->unset)
+    {
+      if (t < 0.5)
+        return svg_value_ref ((SvgValue *) value0);
+      else
+        return svg_value_ref ((SvgValue *) value1);
+    }
+
+  graphene_rect_interpolate (&v0->view_box, &v1->view_box, t, &b);
+
+  return svg_view_box_new (&b);
+}
+
+static SvgValue *
+svg_view_box_accumulate (const SvgValue *value0,
+                         const SvgValue *value1,
+                         int             n)
+{
+  return NULL;
+}
+
+static void
+svg_view_box_print (const SvgValue *value,
+                    GString        *string)
+{
+  const SvgViewBox *v = (const SvgViewBox *) value;
+
+  if (v->unset)
+    return;
+
+  string_append_double (string, v->view_box.origin.x);
+  g_string_append_c (string, ' ');
+  string_append_double (string, v->view_box.origin.y);
+  g_string_append_c (string, ' ');
+  string_append_double (string, v->view_box.size.width);
+  g_string_append_c (string, ' ');
+  string_append_double (string, v->view_box.size.height);
+}
+
+static const SvgValueClass SVG_VIEW_BOX_CLASS = {
+  "SvgViewBox",
+  svg_view_box_free,
+  svg_view_box_equal,
+  svg_view_box_interpolate,
+  svg_view_box_accumulate,
+  svg_view_box_print,
+};
+
+static SvgValue *
+svg_view_box_new_unset (void)
+{
+  static SvgViewBox unset = { { &SVG_VIEW_BOX_CLASS, 1 }, TRUE, { { 0, 0 }, { 0, 0 } } };
+
+  return svg_value_ref ((SvgValue *) &unset);
+}
+
+static SvgValue *
+svg_view_box_new (const graphene_rect_t *box)
+{
+  SvgViewBox *result;
+
+  result = (SvgViewBox *) svg_value_alloc (&SVG_VIEW_BOX_CLASS, sizeof (SvgViewBox));
+  result->unset = FALSE;
+  graphene_rect_init_from_rect (&result->view_box, box);
+
+  return (SvgValue *) result;
+}
+
+static SvgValue *
+svg_view_box_parse (const char *value)
+{
+  GStrv strv;
+  unsigned int n;
+  double x, y, w, h;
+  SvgValue *res = NULL;
+
+  strv = strsplit_set (value, ", ");
+  n = g_strv_length (strv);
+  if (n == 4 &&
+      parse_length (strv[0], -DBL_MAX, DBL_MAX, &x) &&
+      parse_length (strv[1], -DBL_MAX, DBL_MAX, &y) &&
+      parse_length (strv[2], 0, DBL_MAX, &w) &&
+      parse_length (strv[3], 0, DBL_MAX, &h))
+    {
+      res = (SvgValue *) svg_view_box_new (&GRAPHENE_RECT_INIT (x, y, w, h));
+    }
+
+  g_strfreev (strv);
+
+  return res;
+}
+
+/* }}} */
+/* {{{ ContentFit */
+
+typedef struct
+{
+  SvgValue base;
+  gboolean is_none;
+  Align align_x;
+  Align align_y;
+  MeetOrSlice meet;
+} SvgContentFit;
+
+static void
+svg_content_fit_free (SvgValue *value)
+{
+  g_free (value);
+}
+
+static gboolean
+svg_content_fit_equal (const SvgValue *value0,
+                       const SvgValue *value1)
+{
+  const SvgContentFit *v0 = (const SvgContentFit *) value0;
+  const SvgContentFit *v1 = (const SvgContentFit *) value1;
+
+  if (v0->is_none || v1->is_none)
+    return v0->is_none == v1->is_none;
+
+  return v0->align_x == v1->align_x &&
+         v0->align_y == v1->align_y &&
+         v0->meet == v1->meet;
+}
+
+static SvgValue *
+svg_content_fit_interpolate (const SvgValue *value0,
+                             const SvgValue *value1,
+                             double          t)
+{
+  if (t < 0.5)
+    return svg_value_ref ((SvgValue *) value0);
+  else
+    return svg_value_ref ((SvgValue *) value1);
+}
+
+static SvgValue *
+svg_content_fit_accumulate (const SvgValue *value0,
+                            const SvgValue *value1,
+                            int             n)
+{
+  return NULL;
+}
+
+static void
+svg_content_fit_print (const SvgValue *value,
+                       GString        *string)
+{
+  const SvgContentFit *v = (const SvgContentFit *) value;
+
+  if (v->is_none)
+    {
+      g_string_append (string, "none");
+    }
+  else
+    {
+      const char *align[] = { "Min", "Mid", "Max" };
+
+      g_string_append_c (string, 'x');
+      g_string_append (string, align[v->align_x]);
+      g_string_append_c (string, 'Y');
+      g_string_append (string, align[v->align_y]);
+    }
+
+  if (v->meet != MEET)
+    {
+      const char *meet[] = { "meet", "slice" };
+
+      g_string_append_c (string, ' ');
+      g_string_append (string, meet[v->meet]);
+    }
+}
+
+static const SvgValueClass SVG_CONTENT_FIT_CLASS = {
+  "SvgContentFit",
+  svg_content_fit_free,
+  svg_content_fit_equal,
+  svg_content_fit_interpolate,
+  svg_content_fit_accumulate,
+  svg_content_fit_print,
+};
+
+static SvgValue *
+svg_content_fit_new_none (void)
+{
+  SvgContentFit *v;
+
+  v = (SvgContentFit *) svg_value_alloc (&SVG_CONTENT_FIT_CLASS, sizeof (SvgContentFit));
+
+  v->is_none = TRUE;
+
+  return (SvgValue *) v;
+}
+
+static SvgValue *
+svg_content_fit_new (Align       align_x,
+                     Align       align_y,
+                     MeetOrSlice meet)
+{
+  SvgContentFit *v;
+
+  v = (SvgContentFit *) svg_value_alloc (&SVG_CONTENT_FIT_CLASS, sizeof (SvgContentFit));
+
+  v->is_none = FALSE;
+  v->align_x = align_x;
+  v->align_y = align_y;
+  v->meet = meet;
+
+  return (SvgValue *) v;
+}
+
+static gboolean
+parse_coord_align (const char *value,
+                   Align      *align)
+{
+  if (strncmp (value, "Min", 3) == 0)
+    *align = ALIGN_MIN;
+  else if (strncmp (value, "Mid", 3) == 0)
+    *align = ALIGN_MID;
+  else if (strncmp (value, "Max", 3) == 0)
+    *align = ALIGN_MAX;
+  else
+    return FALSE;
+
+  return TRUE;
+}
+
+static gboolean
+parse_align (const char *value,
+             Align      *align_x,
+             Align      *align_y)
+{
+  if (strlen (value) != 8)
+    return FALSE;
+
+  if (value[0] != 'x' || value[4] != 'Y')
+    return FALSE;
+
+  if (!parse_coord_align (value + 1, align_x) ||
+      !parse_coord_align (value + 5, align_y))
+    return FALSE;
+
+  return TRUE;
+}
+
+static gboolean
+parse_meet (const char  *value,
+            MeetOrSlice *meet)
+{
+  if (strcmp (value, "meet") == 0)
+    *meet = MEET;
+  else if (strcmp (value, "slice") == 0)
+    *meet = SLICE;
+  else
+    return FALSE;
+
+  return TRUE;
+}
+
+static SvgValue *
+svg_content_fit_parse (const char *value)
+{
+  GStrv strv;
+  Align align_x;
+  Align align_y;
+  MeetOrSlice meet;
+
+  if (strcmp (value, "none") == 0)
+    return svg_content_fit_new_none ();
+
+  strv = g_strsplit (value, " ", 0);
+  if (g_strv_length (strv) > 2)
+    {
+      g_strfreev (strv);
+      return NULL;
+    }
+
+  if (!parse_align (strv[0], &align_x, &align_y))
+    {
+      g_strfreev (strv);
+      return NULL;
+    }
+
+  if (strv[1])
+    {
+      if (!parse_meet (strv[1], &meet))
+        {
+          g_strfreev (strv);
+          return NULL;
+        }
+    }
+  else
+    {
+      meet = MEET;
+    }
+
+  g_strfreev (strv);
+
+  return svg_content_fit_new (align_x, align_y, meet);
+}
+
+/* }}} */
+/* {{{ Orient */
+
+typedef enum {
+  ORIENT_AUTO,
+  ORIENT_ANGLE,
+} OrientKind;
+
+typedef struct
+{
+  SvgValue base;
+  OrientKind kind;
+  gboolean start_reverse;
+  double angle;
+} SvgOrient;
+
+static void
+svg_orient_free (SvgValue *value)
+{
+  g_free (value);
+}
+
+static gboolean
+svg_orient_equal (const SvgValue *value0,
+                  const SvgValue *value1)
+{
+  const SvgOrient *v0 = (const SvgOrient *) value0;
+  const SvgOrient *v1 = (const SvgOrient *) value1;
+
+  if (v0->kind != v1->kind)
+    return FALSE;
+
+  if (v0->kind == ORIENT_AUTO)
+    return v0->start_reverse == v1->start_reverse;
+  else
+    return v0->angle == v1->angle;
+}
+
+static SvgValue *svg_orient_new_angle (double angle);
+
+static SvgValue *
+svg_orient_interpolate (const SvgValue *value0,
+                        const SvgValue *value1,
+                        double          t)
+{
+  const SvgOrient *v0 = (const SvgOrient *) value0;
+  const SvgOrient *v1 = (const SvgOrient *) value1;
+
+  if (v0->kind == v1->kind && v0->kind == ORIENT_ANGLE)
+    return svg_orient_new_angle (lerp (v0->angle, v1->angle, t));
+
+  if (t < 0.5)
+    return svg_value_ref ((SvgValue *) value0);
+  else
+    return svg_value_ref ((SvgValue *) value1);
+}
+
+static SvgValue *
+svg_orient_accumulate (const SvgValue *value0,
+                       const SvgValue *value1,
+                       int             n)
+{
+  return NULL;
+}
+
+static void
+svg_orient_print (const SvgValue *value,
+                  GString        *string)
+{
+  const SvgOrient *v = (const SvgOrient *) value;
+
+  if (v->kind == ORIENT_ANGLE)
+    string_append_double (string, v->angle);
+  else if (v->start_reverse)
+    g_string_append (string, "auto-start-reverse");
+  else
+    g_string_append (string, "auto");
+}
+
+static const SvgValueClass SVG_ORIENT_CLASS = {
+  "SvgOrient",
+  svg_orient_free,
+  svg_orient_equal,
+  svg_orient_interpolate,
+  svg_orient_accumulate,
+  svg_orient_print,
+};
+
+static SvgValue *
+svg_orient_new_angle (double angle)
+{
+  SvgOrient *v;
+
+  v = (SvgOrient *) svg_value_alloc (&SVG_ORIENT_CLASS, sizeof (SvgOrient));
+
+  v->kind = ORIENT_ANGLE;
+  v->angle = angle;
+
+  return (SvgValue *) v;
+}
+
+static SvgValue *
+svg_orient_new_auto (gboolean start_reverse)
+{
+  SvgOrient *v;
+
+  v = (SvgOrient *) svg_value_alloc (&SVG_ORIENT_CLASS, sizeof (SvgOrient));
+
+  v->kind = ORIENT_AUTO;
+  v->start_reverse = start_reverse;
+
+  return (SvgValue *) v;
+}
+
+static SvgValue *
+svg_orient_parse (const char *value)
+{
+  if (strcmp (value, "auto") == 0)
+    return svg_orient_new_auto (FALSE);
+  else if (strcmp (value, "auto-start-reverse") == 0)
+    return svg_orient_new_auto (TRUE);
+  else
+    {
+      double f;
+      SvgDimension dim;
+
+      if (!parse_numeric (value, -DBL_MAX, DBL_MAX, NUMBER, &f, &dim))
+        return NULL;
+
+      return svg_orient_new_angle (f);
+    }
+}
+
+/* }}} */
+/* {{{ Language */
+
+typedef struct
+{
+  SvgValue base;
+  PangoLanguage *value;
+} SvgLanguage;
+
+static void
+svg_language_free (SvgValue *value)
+{
+  g_free (value);
+}
+
+static gboolean
+svg_language_equal (const SvgValue *value0,
+                    const SvgValue *value1)
+{
+  const SvgLanguage *l0 = (const SvgLanguage *)value0;
+  const SvgLanguage *l1 = (const SvgLanguage *)value1;
+
+  return l0->value == l1->value;
+}
+
+static SvgValue *
+svg_language_interpolate (const SvgValue *value0,
+                          const SvgValue *value1,
+                          double          t)
+{
+  if (t < 0.5)
+    return svg_value_ref ((SvgValue *) value0);
+  else
+    return svg_value_ref ((SvgValue *) value1);
+}
+
+
+
+static SvgValue *
+svg_language_accumulate (const SvgValue *value0,
+                         const SvgValue *value1,
+                         int             n)
+{
+  return svg_value_ref ((SvgValue *)value0);
+}
+
+static void
+svg_language_print (const SvgValue *value,
+                    GString        *string)
+{
+  const SvgLanguage *l = (const SvgLanguage *)value;
+  g_string_append (string, pango_language_to_string (l->value));
+}
+
+static PangoLanguage *
+svg_language_get (const SvgValue *value)
+{
+  const SvgLanguage *l = (const SvgLanguage *)value;
+  return l->value;
+}
+
+static const SvgValueClass SVG_LANGUAGE_CLASS = {
+  "SvgLanguage",
+  svg_language_free,
+  svg_language_equal,
+  svg_language_interpolate,
+  svg_language_accumulate,
+  svg_language_print,
+};
+
+static SvgValue *
+svg_language_new (PangoLanguage *language)
+{
+  SvgLanguage *result = (SvgLanguage *)svg_value_alloc (&SVG_LANGUAGE_CLASS, sizeof (SvgLanguage));
+  result->value = language;
+  return (SvgValue *) result;
+}
+
+/* }}} */
+/* {{{ Text decoration */
+
+typedef enum {
+  TEXT_DECORATION_NONE        = 0,
+  TEXT_DECORATION_UNDERLINE   = 1 << 0,
+  TEXT_DECORATION_OVERLINE    = 1 << 1,
+  TEXT_DECORATION_LINE_TROUGH = 1 << 2,
+} TextDecoration;
+
+static const struct {
+  const char *name;
+  TextDecoration value;
+} text_decorations[] = {
+  { .name = "underline", .value = TEXT_DECORATION_UNDERLINE },
+  { .name = "overline", .value = TEXT_DECORATION_OVERLINE },
+  { .name = "line-through", .value = TEXT_DECORATION_LINE_TROUGH },
+};
+
+typedef struct
+{
+  SvgValue base;
+  TextDecoration value;
+} SvgTextDecoration;
+
+static void
+svg_text_decoration_free (SvgValue *value)
+{
+  g_free (value);
+}
+
+static gboolean
+svg_text_decoration_equal (const SvgValue *value0,
+                           const SvgValue *value1)
+{
+  const SvgTextDecoration *d0 = (const SvgTextDecoration *)value0;
+  const SvgTextDecoration *d1 = (const SvgTextDecoration *)value1;
+
+  return d0->value == d1->value;
+}
+
+static SvgValue *
+svg_text_decoration_interpolate (const SvgValue *value0,
+                                 const SvgValue *value1,
+                                 double          t)
+{
+  if (t < 0.5)
+    return svg_value_ref ((SvgValue *) value0);
+  else
+    return svg_value_ref ((SvgValue *) value1);
+}
+
+static SvgValue *
+svg_text_decoration_accumulate (const SvgValue *value0,
+                                const SvgValue *value1,
+                                int             n)
+{
+  return svg_value_ref ((SvgValue *)value0);
+}
+
+static void
+svg_text_decoration_print (const SvgValue *value,
+                           GString        *string)
+{
+  const SvgTextDecoration *d = (const SvgTextDecoration *)value;
+  gboolean has_value = FALSE;
+  for (size_t i = 0; i < G_N_ELEMENTS (text_decorations); i++)
+    if (d->value & text_decorations[i].value)
+      {
+        if (has_value)
+          g_string_append_c (string, ' ');
+        g_string_append (string, text_decorations[i].name);
+        has_value = TRUE;
+      }
+}
+
+static TextDecoration
+svg_text_decoration_get (const SvgValue *value)
+{
+  const SvgTextDecoration *d = (const SvgTextDecoration *)value;
+  return d->value;
+}
+
+static const SvgValueClass SVG_TEXT_DECORATION_CLASS = {
+  "SvgTextDecoration",
+  svg_text_decoration_free,
+  svg_text_decoration_equal,
+  svg_text_decoration_interpolate,
+  svg_text_decoration_accumulate,
+  svg_text_decoration_print,
+};
+
+static SvgValue *
+svg_text_decoration_new (TextDecoration decoration)
+{
+  SvgTextDecoration *result = (SvgTextDecoration *)svg_value_alloc (&SVG_TEXT_DECORATION_CLASS, sizeof (SvgTextDecoration));
+  result->value = decoration;
+  return (SvgValue *) result;
+}
+
+static SvgValue *
+svg_text_decoration_parse (const char *text)
+{
+  TextDecoration val = TEXT_DECORATION_NONE;
+  char **decorations = g_strsplit (text, " ", 0);
+  for (size_t i = 0; decorations[i]; i++)
+    for (size_t j = 0; j < G_N_ELEMENTS (text_decorations); j++)
+      if (g_strcmp0 (decorations[i], text_decorations[j].name) == 0)
+        val |= text_decorations[j].value;
+  g_strfreev (decorations);
+  return svg_text_decoration_new (val);
+}
+
+
+static SvgValue *
+svg_text_decoration_resolve (const SvgValue *value, const SvgValue *parent)
+{
+  TextDecoration ret;
+  if (!parent)
+    return svg_value_ref ((SvgValue *)value);
+
+  ret = svg_text_decoration_get (parent);
+  ret |= svg_text_decoration_get (value);
+  return svg_text_decoration_new (ret);
+}
+
+/* }}} */
 /* {{{ References */
 
 typedef enum
 {
   HREF_NONE,
   HREF_REF,
+  HREF_URL,
 } HrefKind;
 
 typedef struct
@@ -4377,7 +5901,7 @@ svg_href_free (SvgValue *value)
 {
   const SvgHref *r = (const SvgHref *) value;
 
-  if (r->kind == HREF_REF)
+  if (r->kind != HREF_NONE)
     g_free (r->ref);
 
   g_free (value);
@@ -4395,9 +5919,10 @@ svg_href_equal (const SvgValue *value1,
 
   switch (r1->kind)
     {
-    case MASK_NONE:
+    case HREF_NONE:
       return TRUE;
-    case MASK_REF:
+    case HREF_REF:
+    case HREF_URL:
       return r1->shape == r2->shape &&
              g_strcmp0 (r1->ref, r2->ref) == 0;
     default:
@@ -4423,6 +5948,7 @@ svg_href_accumulate (const SvgValue *value1,
 {
   return NULL;
 }
+
 static void
 svg_href_print (const SvgValue *value,
                 GString        *string)
@@ -4436,6 +5962,9 @@ svg_href_print (const SvgValue *value,
       break;
     case HREF_REF:
       g_string_append_printf (string, "#%s", r->ref);
+      break;
+    case HREF_URL:
+      g_string_append_printf (string, "url(#%s)", r->ref);
       break;
     default:
       g_assert_not_reached ();
@@ -4472,6 +6001,19 @@ svg_href_new_ref (const char *ref)
 }
 
 static SvgValue *
+svg_href_new_url (const char *ref)
+{
+  SvgHref *result;
+
+  result = (SvgHref *) svg_value_alloc (&SVG_HREF_CLASS, sizeof (SvgHref));
+  result->kind = HREF_URL;
+  result->ref = g_strdup (ref);
+  result->shape = NULL;
+
+  return (SvgValue *) result;
+}
+
+static SvgValue *
 svg_href_parse (const char *value)
 {
   if (strcmp (value, "none") == 0)
@@ -4482,17 +6024,44 @@ svg_href_parse (const char *value)
     return svg_href_new_ref (value);
 }
 
+static SvgValue *
+svg_href_parse_url (const char *value)
+{
+  if (strcmp (value, "none") == 0)
+    {
+      return svg_href_new_none ();
+    }
+  else
+    {
+      GtkCssParser *parser;
+      GBytes *bytes;
+      char *url;
+      SvgValue *res = NULL;
+
+      bytes = g_bytes_new_static (value, strlen (value));
+      parser = gtk_css_parser_new_for_bytes (bytes, NULL, NULL, NULL, NULL);
+
+      url = gtk_css_parser_consume_url (parser);
+      if (url)
+        {
+          if (url[0] == '#')
+            res = svg_href_new_url (url + 1);
+          else
+            res = svg_href_new_url (url);
+        }
+
+      g_free (url);
+      gtk_css_parser_unref (parser);
+      g_bytes_unref (bytes);
+
+      return res;
+    }
+}
+
 /* }}} */
 /* {{{ Color stops */
 
-typedef enum
-{
-  COLOR_STOP_OFFSET,
-  COLOR_STOP_COLOR,
-  COLOR_STOP_OPACITY,
-} StopProperties;
-
-#define N_STOP_PROPS (COLOR_STOP_OPACITY + 1)
+#define N_STOP_PROPS N_STOP_ATTRS
 
 typedef struct
 {
@@ -4513,67 +6082,129 @@ color_stop_free (gpointer v)
   g_free (stop);
 }
 
+static inline unsigned int
+color_stop_attr_idx (ShapeAttr attr)
+{
+  g_assert (attr >= FIRST_STOP_ATTR && attr <= LAST_STOP_ATTR);
+  return attr - FIRST_STOP_ATTR;
+}
+
 /* }}} */
 /* {{{ Attributes */
 
 static SvgValue *
+parse_language (const char *value)
+{
+  PangoLanguage *lang = pango_language_from_string (value);
+  if (!lang)
+    return NULL;
+  return svg_language_new (lang);
+}
+
+static SvgValue *
 parse_opacity (const char *value)
 {
-  return svg_number_parse (value, 0, 1, PERCENTAGE);
+  return svg_number_parse (value, 0, 1, NUMBER|PERCENTAGE);
 }
 
 static SvgValue *
 parse_stroke_width (const char *value)
 {
-  return svg_number_parse (value, 0, DBL_MAX, LENGTH);
+  return svg_number_parse (value, 0, DBL_MAX, NUMBER|LENGTH);
 }
 
 static SvgValue *
 parse_miterlimit (const char *value)
 {
-  return svg_number_parse (value, 0, DBL_MAX, 0);
-}
-
-static SvgValue *
-parse_dash_offset (const char *value)
-{
-  return svg_number_parse (value, -DBL_MAX, DBL_MAX, PERCENTAGE);
+  return svg_number_parse (value, 0, DBL_MAX, NUMBER);
 }
 
 static SvgValue *
 parse_any_length (const char *value)
 {
-  return svg_number_parse (value, -DBL_MAX, DBL_MAX, LENGTH);
+  return svg_number_parse (value, -DBL_MAX, DBL_MAX, NUMBER|LENGTH);
 }
 
 static SvgValue *
 parse_positive_length (const char *value)
 {
-  return svg_number_parse (value, 0, DBL_MAX, LENGTH);
+  return svg_number_parse (value, 0, DBL_MAX, NUMBER|LENGTH);
 }
 
 static SvgValue *
 parse_length_percentage (const char *value)
 {
-  return svg_number_parse (value, -DBL_MAX, DBL_MAX, PERCENTAGE | LENGTH);
+  return svg_number_parse (value, -DBL_MAX, DBL_MAX, NUMBER|PERCENTAGE|LENGTH);
 }
 
 static SvgValue *
 parse_positive_length_percentage (const char *value)
 {
-  return svg_number_parse (value, 0, DBL_MAX, PERCENTAGE | LENGTH);
+  return svg_number_parse (value, 0, DBL_MAX, NUMBER|PERCENTAGE|LENGTH);
+}
+
+static const struct {
+  const char *name;
+  int value;
+} named_font_weights[] = {
+  { .name ="normal", .value = PANGO_WEIGHT_NORMAL },
+  { .name ="bold",   .value = PANGO_WEIGHT_BOLD },
+
+  /*
+   * The relative weights lighter/bolder *should* be
+   * relative to their parent element. For now we'll
+   * just hard-code them like legacy rsvg did.
+   */
+  { .name = "lighter", .value = PANGO_WEIGHT_LIGHT },
+  { .name = "bolder", .value = PANGO_WEIGHT_ULTRABOLD },
+};
+static SvgValue *
+parse_font_weight (const char *value)
+{
+  for (guint i = 0; i < G_N_ELEMENTS(named_font_weights); i++)
+    if (g_strcmp0 (named_font_weights[i].name, value) == 0)
+      return svg_number_new (named_font_weights[i].value);
+  return svg_number_parse (value, 0, DBL_MAX, NUMBER|LENGTH);
 }
 
 static SvgValue *
-parse_gradient_pos (const char *value)
+parse_letter_spacing (const char *value)
 {
-  return svg_number_parse (value, 0, DBL_MAX, PERCENTAGE);
+  if (g_strcmp0 (value, "normal") == 0)
+    return svg_number_new (0.);
+  return svg_number_parse (value, -DBL_MAX, DBL_MAX, NUMBER|LENGTH);
 }
 
 static SvgValue *
 parse_offset (const char *value)
 {
-  return svg_number_parse (value, 0, 1, PERCENTAGE);
+  return svg_number_parse (value, 0, 1, NUMBER|PERCENTAGE);
+}
+
+static SvgValue *
+parse_ref_x (const char *value)
+{
+  if (strcmp (value, "left") == 0)
+    return svg_percentage_new (0);
+  else if (strcmp (value, "center") == 0)
+    return svg_percentage_new (50);
+  else if (strcmp (value, "right") == 0)
+    return svg_percentage_new (100);
+  else
+    return svg_number_parse (value, -DBL_MAX, DBL_MAX, NUMBER|PERCENTAGE|LENGTH);
+}
+
+static SvgValue *
+parse_ref_y (const char *value)
+{
+  if (strcmp (value, "top") == 0)
+    return svg_percentage_new (0);
+  else if (strcmp (value, "center") == 0)
+    return svg_percentage_new (50);
+  else if (strcmp (value, "bottom") == 0)
+    return svg_percentage_new (100);
+  else
+    return svg_number_parse (value, -DBL_MAX, DBL_MAX, NUMBER|PERCENTAGE|LENGTH);
 }
 
 typedef struct
@@ -4582,18 +6213,26 @@ typedef struct
   ShapeAttr id;
   unsigned int inherited : 1;
   unsigned int discrete  : 1;
-  unsigned int presentation : 1;
+  unsigned int presentation : 1; /* whether to accept initial/inherit as values */
+  unsigned int only_css : 1;     /* whether this can be set outside of style */
   SvgValue * (* parse_value)      (const char *value);
   SvgValue * (* parse_for_values) (const char *value);
   SvgValue *initial_value;
 } ShapeAttribute;
 
 static ShapeAttribute shape_attrs[] = {
+  { .id = SHAPE_ATTR_LANG,
+    .name = "lang",
+    .inherited = 1,
+    .discrete = 0,
+    .parse_value = parse_language,
+  },
   { .id = SHAPE_ATTR_VISIBILITY,
     .name = "visibility",
     .inherited = 1,
     .discrete = 1,
     .presentation = 0,
+    .only_css = 0,
     .parse_value = svg_visibility_parse,
   },
   { .id = SHAPE_ATTR_TRANSFORM,
@@ -4601,6 +6240,7 @@ static ShapeAttribute shape_attrs[] = {
     .inherited = 0,
     .discrete = 0,
     .presentation = 1,
+    .only_css = 0,
     .parse_value = svg_transform_parse,
   },
   { .id = SHAPE_ATTR_OPACITY,
@@ -4608,13 +6248,23 @@ static ShapeAttribute shape_attrs[] = {
     .inherited = 0,
     .discrete = 0,
     .presentation = 0,
+    .only_css = 0,
     .parse_value = parse_opacity,
+  },
+  { .id = SHAPE_ATTR_OVERFLOW,
+    .name = "overflow",
+    .inherited = 0,
+    .discrete = 1,
+    .presentation = 1,
+    .only_css = 0,
+    .parse_value = svg_overflow_parse,
   },
   { .id = SHAPE_ATTR_FILTER,
     .name = "filter",
     .inherited = 0,
     .discrete = 0,
     .presentation = 0,
+    .only_css = 0,
     .parse_value = svg_filter_parse,
   },
   { .id = SHAPE_ATTR_CLIP_PATH,
@@ -4622,6 +6272,7 @@ static ShapeAttribute shape_attrs[] = {
     .inherited = 0,
     .discrete = 1,
     .presentation = 1,
+    .only_css = 0,
     .parse_value = svg_clip_parse,
   },
   { .id = SHAPE_ATTR_CLIP_RULE,
@@ -4629,6 +6280,7 @@ static ShapeAttribute shape_attrs[] = {
     .inherited = 1,
     .discrete = 1,
     .presentation = 1,
+    .only_css = 0,
     .parse_value = svg_fill_rule_parse,
   },
   { .id = SHAPE_ATTR_MASK,
@@ -4636,13 +6288,15 @@ static ShapeAttribute shape_attrs[] = {
     .inherited = 0,
     .discrete = 1,
     .presentation = 1,
+    .only_css = 0,
     .parse_value = svg_mask_parse,
   },
   { .id = SHAPE_ATTR_MASK_TYPE,
     .name = "mask-type",
     .inherited = 0,
     .discrete = 1,
-    .presentation = 0,
+    .presentation = 1,
+    .only_css = 0,
     .parse_value = svg_mask_type_parse,
   },
   { .id = SHAPE_ATTR_FILL,
@@ -4650,6 +6304,7 @@ static ShapeAttribute shape_attrs[] = {
     .inherited = 1,
     .discrete = 0,
     .presentation = 1,
+    .only_css = 0,
     .parse_value = svg_paint_parse,
   },
   { .id = SHAPE_ATTR_FILL_OPACITY,
@@ -4657,6 +6312,7 @@ static ShapeAttribute shape_attrs[] = {
     .inherited = 1,
     .discrete = 0,
     .presentation = 1,
+    .only_css = 0,
     .parse_value = parse_opacity,
   },
   { .id = SHAPE_ATTR_FILL_RULE,
@@ -4664,6 +6320,7 @@ static ShapeAttribute shape_attrs[] = {
     .inherited = 1,
     .discrete = 1,
     .presentation = 1,
+    .only_css = 0,
     .parse_value = svg_fill_rule_parse,
   },
   { .id = SHAPE_ATTR_STROKE,
@@ -4671,6 +6328,7 @@ static ShapeAttribute shape_attrs[] = {
     .inherited = 1,
     .discrete = 0,
     .presentation = 1,
+    .only_css = 0,
     .parse_value = svg_paint_parse,
   },
   { .id = SHAPE_ATTR_STROKE_OPACITY,
@@ -4678,6 +6336,7 @@ static ShapeAttribute shape_attrs[] = {
     .inherited = 1,
     .discrete = 0,
     .presentation = 1,
+    .only_css = 0,
     .parse_value = parse_opacity,
   },
   { .id = SHAPE_ATTR_STROKE_WIDTH,
@@ -4685,6 +6344,7 @@ static ShapeAttribute shape_attrs[] = {
     .inherited = 1,
     .discrete = 0,
     .presentation = 1,
+    .only_css = 0,
     .parse_value = parse_stroke_width,
   },
   { .id = SHAPE_ATTR_STROKE_LINECAP,
@@ -4692,6 +6352,7 @@ static ShapeAttribute shape_attrs[] = {
     .inherited = 1,
     .discrete = 1,
     .presentation = 1,
+    .only_css = 0,
     .parse_value = svg_linecap_parse,
   },
   { .id = SHAPE_ATTR_STROKE_LINEJOIN,
@@ -4699,6 +6360,7 @@ static ShapeAttribute shape_attrs[] = {
     .inherited = 1,
     .discrete = 1,
     .presentation = 1,
+    .only_css = 0,
     .parse_value = svg_linejoin_parse,
   },
   { .id = SHAPE_ATTR_STROKE_MITERLIMIT,
@@ -4706,6 +6368,7 @@ static ShapeAttribute shape_attrs[] = {
     .inherited = 1,
     .discrete = 0,
     .presentation = 1,
+    .only_css = 0,
     .parse_value = parse_miterlimit,
   },
   { .id = SHAPE_ATTR_STROKE_DASHARRAY,
@@ -4713,6 +6376,7 @@ static ShapeAttribute shape_attrs[] = {
     .inherited = 1,
     .discrete = 0,
     .presentation = 1,
+    .only_css = 0,
     .parse_value = svg_dash_array_parse,
   },
   { .id = SHAPE_ATTR_STROKE_DASHOFFSET,
@@ -4720,20 +6384,39 @@ static ShapeAttribute shape_attrs[] = {
     .inherited = 1,
     .discrete = 0,
     .presentation = 1,
-    .parse_value = parse_dash_offset,
+    .only_css = 0,
+    .parse_value = parse_length_percentage,
   },
   { .id = SHAPE_ATTR_PAINT_ORDER,
     .name = "paint-order",
     .inherited = 1,
     .discrete = 1,
     .presentation = 1,
+    .only_css = 0,
     .parse_value = svg_paint_order_parse,
+  },
+  { .id = SHAPE_ATTR_BLEND_MODE,
+    .name = "mix-blend-mode",
+    .inherited = 0,
+    .discrete = 1,
+    .presentation = 1,
+    .only_css = 1,
+    .parse_value = svg_blend_mode_parse,
+  },
+  { .id = SHAPE_ATTR_ISOLATION,
+    .name = "isolation",
+    .inherited = 0,
+    .discrete = 1,
+    .presentation = 1,
+    .only_css = 1,
+    .parse_value = svg_isolation_parse,
   },
   { .id = SHAPE_ATTR_HREF,
     .name = "href",
     .inherited = 0,
     .discrete = 1,
     .presentation = 0,
+    .only_css = 0,
     .parse_value = svg_href_parse,
   },
   { .id = SHAPE_ATTR_PATH_LENGTH,
@@ -4741,6 +6424,7 @@ static ShapeAttribute shape_attrs[] = {
     .inherited = 0,
     .discrete = 0,
     .presentation = 0,
+    .only_css = 0,
     .parse_value = parse_positive_length,
     .parse_for_values = parse_any_length,
   },
@@ -4749,6 +6433,7 @@ static ShapeAttribute shape_attrs[] = {
     .inherited = 0,
     .discrete = 0,
     .presentation = 1,
+    .only_css = 0,
     .parse_value = svg_path_parse,
   },
   { .id = SHAPE_ATTR_CX,
@@ -4756,6 +6441,7 @@ static ShapeAttribute shape_attrs[] = {
     .inherited = 0,
     .discrete = 0,
     .presentation = 1,
+    .only_css = 0,
     .parse_value = parse_length_percentage,
   },
   { .id = SHAPE_ATTR_CY,
@@ -4763,6 +6449,7 @@ static ShapeAttribute shape_attrs[] = {
     .inherited = 0,
     .discrete = 0,
     .presentation = 1,
+    .only_css = 0,
     .parse_value = parse_length_percentage,
   },
   { .id = SHAPE_ATTR_R,
@@ -4770,6 +6457,7 @@ static ShapeAttribute shape_attrs[] = {
     .inherited = 0,
     .discrete = 0,
     .presentation = 0,
+    .only_css = 0,
     .parse_value = parse_positive_length_percentage,
     .parse_for_values = parse_length_percentage,
   },
@@ -4778,6 +6466,7 @@ static ShapeAttribute shape_attrs[] = {
     .inherited = 0,
     .discrete = 0,
     .presentation = 1,
+    .only_css = 0,
     .parse_value = parse_length_percentage,
   },
   { .id = SHAPE_ATTR_Y,
@@ -4785,6 +6474,7 @@ static ShapeAttribute shape_attrs[] = {
     .inherited = 0,
     .discrete = 0,
     .presentation = 1,
+    .only_css = 0,
     .parse_value = parse_length_percentage,
   },
   { .id = SHAPE_ATTR_WIDTH,
@@ -4792,6 +6482,7 @@ static ShapeAttribute shape_attrs[] = {
     .inherited = 0,
     .discrete = 0,
     .presentation = 1,
+    .only_css = 0,
     .parse_value = parse_positive_length_percentage,
     .parse_for_values = parse_length_percentage,
   },
@@ -4800,6 +6491,7 @@ static ShapeAttribute shape_attrs[] = {
     .inherited = 0,
     .discrete = 0,
     .presentation = 1,
+    .only_css = 0,
     .parse_value = parse_positive_length_percentage,
     .parse_for_values = parse_length_percentage,
   },
@@ -4808,6 +6500,7 @@ static ShapeAttribute shape_attrs[] = {
     .inherited = 0,
     .discrete = 0,
     .presentation = 1,
+    .only_css = 0,
     .parse_value = parse_positive_length_percentage,
     .parse_for_values = parse_length_percentage,
   },
@@ -4816,6 +6509,7 @@ static ShapeAttribute shape_attrs[] = {
     .inherited = 0,
     .discrete = 0,
     .presentation = 1,
+    .only_css = 0,
     .parse_value = parse_positive_length_percentage,
     .parse_for_values = parse_length_percentage,
   },
@@ -4824,34 +6518,39 @@ static ShapeAttribute shape_attrs[] = {
     .inherited = 0,
     .discrete = 0,
     .presentation = 0,
-    .parse_value = parse_gradient_pos,
+    .only_css = 0,
+    .parse_value = parse_length_percentage,
   },
   { .id = SHAPE_ATTR_Y1,
     .name = "y1",
     .inherited = 0,
     .discrete = 0,
     .presentation = 0,
-    .parse_value = parse_gradient_pos,
+    .only_css = 0,
+    .parse_value = parse_length_percentage,
   },
   { .id = SHAPE_ATTR_X2,
     .name = "x2",
     .inherited = 0,
     .discrete = 0,
     .presentation = 0,
-    .parse_value = parse_gradient_pos,
+    .only_css = 0,
+    .parse_value = parse_length_percentage,
   },
   { .id = SHAPE_ATTR_Y2,
     .name = "y2",
     .inherited = 0,
     .discrete = 0,
     .presentation = 0,
-    .parse_value = parse_gradient_pos,
+    .only_css = 0,
+    .parse_value = parse_length_percentage,
   },
   { .id = SHAPE_ATTR_POINTS,
     .name = "points",
     .inherited = 0,
     .discrete = 0,
     .presentation = 0,
+    .only_css = 0,
     .parse_value = svg_points_parse,
   },
   { .id = SHAPE_ATTR_SPREAD_METHOD,
@@ -4859,39 +6558,221 @@ static ShapeAttribute shape_attrs[] = {
     .inherited = 0,
     .discrete = 1,
     .presentation = 0,
+    .only_css = 0,
     .parse_value = svg_spread_method_parse,
   },
-  { .id = SHAPE_ATTR_GRADIENT_UNITS,
+  { .id = SHAPE_ATTR_CONTENT_UNITS,
     .name = "gradientUnits",
     .inherited = 0,
     .discrete = 1,
     .presentation = 0,
+    .only_css = 0,
+    .parse_value = svg_coord_units_parse,
+  },
+  { .id = SHAPE_ATTR_BOUND_UNITS,
+    .name = "maskUnits",
+    .inherited = 0,
+    .discrete = 1,
+    .presentation = 0,
+    .only_css = 0,
     .parse_value = svg_coord_units_parse,
   },
   { .id = SHAPE_ATTR_FX,
     .name = "fx",
     .inherited = 0,
     .discrete = 0,
+    .presentation = 0,
+    .only_css = 0,
     .parse_value = parse_length_percentage,
   },
   { .id = SHAPE_ATTR_FY,
     .name = "fy",
     .inherited = 0,
     .discrete = 0,
+    .presentation = 0,
+    .only_css = 0,
     .parse_value = parse_length_percentage,
   },
   { .id = SHAPE_ATTR_FR,
     .name = "fr",
     .inherited = 0,
     .discrete = 0,
+    .presentation = 0,
+    .only_css = 0,
     .parse_value = parse_positive_length_percentage,
     .parse_for_values = parse_length_percentage,
+  },
+  { .id = SHAPE_ATTR_VIEW_BOX,
+    .name = "viewBox",
+    .inherited = 0,
+    .discrete = 0,
+    .presentation = 0,
+    .only_css = 0,
+    .parse_value = svg_view_box_parse,
+  },
+  { .id = SHAPE_ATTR_CONTENT_FIT,
+    .name = "preserveAspectRatio",
+    .inherited = 0,
+    .discrete = 0,
+    .presentation = 0,
+    .only_css = 0,
+    .parse_value = svg_content_fit_parse,
+  },
+  { .id = SHAPE_ATTR_REF_X,
+    .name = "refX",
+    .inherited = 0,
+    .discrete = 0,
+    .presentation = 0,
+    .only_css = 0,
+    .parse_value = parse_ref_x,
+  },
+  { .id = SHAPE_ATTR_REF_Y,
+    .name = "refY",
+    .inherited = 0,
+    .discrete = 0,
+    .presentation = 0,
+    .only_css = 0,
+    .parse_value = parse_ref_y,
+  },
+  { .id = SHAPE_ATTR_MARKER_UNITS,
+    .name = "markerUnits",
+    .inherited = 0,
+    .discrete = 0,
+    .presentation = 0,
+    .only_css = 0,
+    .parse_value = svg_marker_units_parse,
+  },
+  { .id = SHAPE_ATTR_MARKER_ORIENT,
+    .name = "orient",
+    .inherited = 0,
+    .discrete = 0,
+    .presentation = 0,
+    .only_css = 0,
+    .parse_value = svg_orient_parse,
+  },
+  { .id = SHAPE_ATTR_MARKER_START,
+    .name = "marker-start",
+    .inherited = 1,
+    .discrete = 0,
+    .presentation = 0,
+    .only_css = 0,
+    .parse_value = svg_href_parse_url,
+  },
+  { .id = SHAPE_ATTR_MARKER_MID,
+    .name = "marker-mid",
+    .inherited = 1,
+    .discrete = 0,
+    .presentation = 0,
+    .only_css = 0,
+    .parse_value = svg_href_parse_url,
+  },
+  { .id = SHAPE_ATTR_MARKER_END,
+    .name = "marker-end",
+    .inherited = 1,
+    .discrete = 0,
+    .presentation = 0,
+    .only_css = 0,
+    .parse_value = svg_href_parse_url,
+  },
+  { .id = SHAPE_ATTR_TEXT_ANCHOR,
+    .name = "text-anchor",
+    .inherited = 1,
+    .discrete = 1,
+    .parse_value = svg_text_anchor_parse,
+  },
+  { .id = SHAPE_ATTR_DX,
+    .name = "dx",
+    .inherited = 0,
+    .discrete = 0,
+    .parse_value = parse_length_percentage,
+  },
+  { .id = SHAPE_ATTR_DY,
+    .name = "dy",
+    .inherited = 0,
+    .discrete = 0,
+    .parse_value = parse_length_percentage,
+  },
+  { .id = SHAPE_ATTR_UNICODE_BIDI,
+    .name = "unicode-bidi",
+    .inherited = 1,
+    .discrete = 0,
+    .presentation = 1,
+    .parse_value = svg_unicode_bidi_parse,
+  },
+  { .id = SHAPE_ATTR_DIRECTION,
+    .name = "direction",
+    .inherited = 1,
+    .discrete = 0,
+    .presentation = 1,
+    .parse_value = svg_direction_parse,
+  },
+  { .id = SHAPE_ATTR_WRITING_MODE,
+    .name = "writing-mode",
+    .inherited = 1,
+    .discrete = 0,
+    .presentation = 1,
+    .parse_value = svg_writing_mode_parse,
+  },
+  { .id = SHAPE_ATTR_FONT_FAMILY,
+    .name = "font-family",
+    .inherited = 1,
+    .discrete = 0,
+    .parse_value = svg_string_new,
+  },
+  { .id = SHAPE_ATTR_FONT_STYLE,
+    .name = "font-style",
+    .inherited = 1,
+    .discrete = 0,
+    .presentation = 1,
+    .parse_value = svg_font_style_parse,
+  },
+  { .id = SHAPE_ATTR_FONT_VARIANT,
+    .name = "font-variant",
+    .inherited = 1,
+    .discrete = 0,
+    .presentation = 1,
+    .parse_value = svg_font_variant_parse,
+  },
+  { .id = SHAPE_ATTR_FONT_WEIGHT,
+    .name = "font-weight",
+    .inherited = 1,
+    .discrete = 0,
+    .presentation = 1,
+    .parse_value = parse_font_weight,
+  },
+  { .id = SHAPE_ATTR_FONT_STRECH,
+    .name = "font-stretch",
+    .inherited = 1,
+    .discrete = 0,
+    .presentation = 1,
+    .parse_value = svg_font_stretch_parse,
+  },
+  { .id = SHAPE_ATTR_FONT_SIZE,
+    .name = "font-size",
+    .inherited = 1,
+    .discrete = 0,
+    .parse_value = parse_length_percentage, // TODO: more units & string sizes
+  },
+  { .id = SHAPE_ATTR_LETTER_SPACING,
+    .name = "letter-spacing",
+    .inherited = 1,
+    .discrete = 0,
+    .presentation = 1,
+    .parse_value = parse_letter_spacing, // TODO: more units & string sizes
+  },
+  { .id = SHAPE_ATTR_TEXT_DECORATION,
+    .name = "text-decoration",
+    .inherited = 1, // rsvg doesn't inherit, firefox does
+    .discrete = 0,
+    .presentation = 1,
+    .parse_value = svg_text_decoration_parse,
   },
   { .id = SHAPE_ATTR_STROKE_MINWIDTH,
     .name = "gpa:stroke-minwidth",
     .inherited = 1,
     .discrete = 0,
     .presentation = 0,
+    .only_css = 0,
     .parse_value = parse_stroke_width,
   },
   { .id = SHAPE_ATTR_STROKE_MAXWIDTH,
@@ -4899,6 +6780,7 @@ static ShapeAttribute shape_attrs[] = {
     .inherited = 1,
     .discrete = 0,
     .presentation = 0,
+    .only_css = 0,
     .parse_value = parse_stroke_width,
   },
   { .id = SHAPE_ATTR_STOP_OFFSET,
@@ -4906,6 +6788,7 @@ static ShapeAttribute shape_attrs[] = {
     .inherited = 0,
     .discrete = 0,
     .presentation = 0,
+    .only_css = 0,
     .parse_value = parse_offset,
   },
   { .id = SHAPE_ATTR_STOP_COLOR,
@@ -4913,6 +6796,7 @@ static ShapeAttribute shape_attrs[] = {
     .inherited = 0,
     .discrete = 0,
     .presentation = 0,
+    .only_css = 0,
     .parse_value = svg_paint_parse,
   },
   { .id = SHAPE_ATTR_STOP_OPACITY,
@@ -4920,6 +6804,7 @@ static ShapeAttribute shape_attrs[] = {
     .inherited = 0,
     .discrete = 0,
     .presentation = 0,
+    .only_css = 0,
     .parse_value = parse_opacity,
   },
 };
@@ -4927,9 +6812,11 @@ static ShapeAttribute shape_attrs[] = {
 static void
 shape_attr_init_default_values (void)
 {
+  shape_attrs[SHAPE_ATTR_LANG].initial_value = svg_language_new (gtk_get_default_language ());
   shape_attrs[SHAPE_ATTR_VISIBILITY].initial_value = svg_visibility_new (VISIBILITY_VISIBLE);
   shape_attrs[SHAPE_ATTR_TRANSFORM].initial_value = svg_transform_new_none ();
   shape_attrs[SHAPE_ATTR_OPACITY].initial_value = svg_number_new (1);
+  shape_attrs[SHAPE_ATTR_OVERFLOW].initial_value = svg_overflow_new (OVERFLOW_VISIBLE);
   shape_attrs[SHAPE_ATTR_FILTER].initial_value = svg_filter_new_none ();
   shape_attrs[SHAPE_ATTR_CLIP_PATH].initial_value = svg_clip_new_none ();
   shape_attrs[SHAPE_ATTR_CLIP_RULE].initial_value = svg_fill_rule_new (GSK_FILL_RULE_WINDING);
@@ -4946,7 +6833,9 @@ shape_attr_init_default_values (void)
   shape_attrs[SHAPE_ATTR_STROKE_MITERLIMIT].initial_value = svg_number_new (4);
   shape_attrs[SHAPE_ATTR_STROKE_DASHARRAY].initial_value = svg_dash_array_new_none ();
   shape_attrs[SHAPE_ATTR_STROKE_DASHOFFSET].initial_value = svg_number_new (0);
-  shape_attrs[SHAPE_ATTR_PAINT_ORDER].initial_value = svg_paint_order_new (PAINT_ORDER_NORMAL);
+  shape_attrs[SHAPE_ATTR_PAINT_ORDER].initial_value = svg_paint_order_new (PAINT_ORDER_FILL_STROKE_MARKERS);
+  shape_attrs[SHAPE_ATTR_BLEND_MODE].initial_value = svg_blend_mode_new (GSK_BLEND_MODE_DEFAULT);
+  shape_attrs[SHAPE_ATTR_ISOLATION].initial_value = svg_isolation_new (ISOLATION_AUTO);
   shape_attrs[SHAPE_ATTR_HREF].initial_value = svg_href_new_none ();
   shape_attrs[SHAPE_ATTR_PATH_LENGTH].initial_value = svg_number_new (-1);
   shape_attrs[SHAPE_ATTR_PATH].initial_value = svg_path_new_none ();
@@ -4966,9 +6855,34 @@ shape_attr_init_default_values (void)
   shape_attrs[SHAPE_ATTR_FX].initial_value = svg_number_new (0);
   shape_attrs[SHAPE_ATTR_FY].initial_value = svg_number_new (0);
   shape_attrs[SHAPE_ATTR_FR].initial_value = svg_percentage_new (0);
+  shape_attrs[SHAPE_ATTR_TEXT_ANCHOR].initial_value = svg_text_anchor_new (TEXT_ANCHOR_START);
+  shape_attrs[SHAPE_ATTR_DX].initial_value = svg_number_new (0.);
+  shape_attrs[SHAPE_ATTR_DY].initial_value = svg_number_new (0.);
+  shape_attrs[SHAPE_ATTR_UNICODE_BIDI].initial_value = svg_unicode_bidi_new (UNICODE_BIDI_NORMAL);
+  shape_attrs[SHAPE_ATTR_DIRECTION].initial_value = svg_direction_new (PANGO_DIRECTION_LTR);
+  shape_attrs[SHAPE_ATTR_WRITING_MODE].initial_value = svg_writing_mode_new (WRITING_MODE_HORIZONTAL_TB);
+  shape_attrs[SHAPE_ATTR_FONT_FAMILY].initial_value = svg_string_new (NULL);
+  shape_attrs[SHAPE_ATTR_FONT_STYLE].initial_value = svg_font_style_new (PANGO_STYLE_NORMAL);
+  shape_attrs[SHAPE_ATTR_FONT_VARIANT].initial_value = svg_font_variant_new (PANGO_VARIANT_NORMAL);
+  shape_attrs[SHAPE_ATTR_FONT_WEIGHT].initial_value = svg_number_new (PANGO_WEIGHT_NORMAL);
+  shape_attrs[SHAPE_ATTR_FONT_STRECH].initial_value = svg_font_stretch_new (PANGO_STRETCH_NORMAL);
+  // rsvg has a default font size of 12, where as firefox has 16
+  shape_attrs[SHAPE_ATTR_FONT_SIZE].initial_value = svg_number_new (16.);
+  shape_attrs[SHAPE_ATTR_LETTER_SPACING].initial_value = svg_number_new (0.);
+  shape_attrs[SHAPE_ATTR_TEXT_DECORATION].initial_value = svg_text_decoration_new (TEXT_DECORATION_NONE);
   shape_attrs[SHAPE_ATTR_POINTS].initial_value = svg_points_new_none ();
   shape_attrs[SHAPE_ATTR_SPREAD_METHOD].initial_value = svg_spread_method_new (GSK_REPEAT_PAD);
-  shape_attrs[SHAPE_ATTR_GRADIENT_UNITS].initial_value = svg_coord_units_new (COORD_UNITS_OBJECT_BOUNDING_BOX);
+  shape_attrs[SHAPE_ATTR_CONTENT_UNITS].initial_value = svg_coord_units_new (COORD_UNITS_OBJECT_BOUNDING_BOX);
+  shape_attrs[SHAPE_ATTR_BOUND_UNITS].initial_value = svg_coord_units_new (COORD_UNITS_OBJECT_BOUNDING_BOX);
+  shape_attrs[SHAPE_ATTR_VIEW_BOX].initial_value = svg_view_box_new_unset ();
+  shape_attrs[SHAPE_ATTR_CONTENT_FIT].initial_value = svg_content_fit_new (ALIGN_MID, ALIGN_MID, MEET);
+  shape_attrs[SHAPE_ATTR_REF_X].initial_value = svg_number_new (0);
+  shape_attrs[SHAPE_ATTR_REF_Y].initial_value = svg_number_new (0);
+  shape_attrs[SHAPE_ATTR_MARKER_UNITS].initial_value = svg_marker_units_new (MARKER_UNITS_STROKE_WIDTH);
+  shape_attrs[SHAPE_ATTR_MARKER_ORIENT].initial_value = svg_orient_new_angle (0);
+  shape_attrs[SHAPE_ATTR_MARKER_START].initial_value = svg_href_new_none ();
+  shape_attrs[SHAPE_ATTR_MARKER_MID].initial_value = svg_href_new_none ();
+  shape_attrs[SHAPE_ATTR_MARKER_END].initial_value = svg_href_new_none ();
   shape_attrs[SHAPE_ATTR_STROKE_MINWIDTH].initial_value = svg_number_new (0.25);
   shape_attrs[SHAPE_ATTR_STROKE_MAXWIDTH].initial_value = svg_number_new (1.5);
   shape_attrs[SHAPE_ATTR_STOP_OFFSET].initial_value = svg_number_new (0);
@@ -4976,14 +6890,92 @@ shape_attr_init_default_values (void)
   shape_attrs[SHAPE_ATTR_STOP_OPACITY].initial_value = svg_number_new (1);
 }
 
+/* Some attributes use different names for different shapes:
+ * SHAPE_ATTR_TRANSFORM: transform vs gradientTransform vs patternTransform
+ * SHAPE_ATTR_CONTENT_UNITS: gradientUnits vs clipPathUnits vs maskContentUnits vs patternContentUnits
+ * SHAPE_ATTR_BOUND_UNITS: maskUnits vs patternUnits
+ */
 static gboolean
 shape_attr_lookup (const char *name,
                    ShapeAttr  *attr,
                    ShapeType   type)
 {
-  if ((type == SHAPE_LINEAR_GRADIENT || type == SHAPE_RADIAL_GRADIENT) &&
-      strcmp (name, "gradientTransform") == 0)
-    name = "transform";
+  if (type == SHAPE_LINEAR_GRADIENT || type == SHAPE_RADIAL_GRADIENT)
+    {
+      if (strcmp (name, "gradientTransform") == 0)
+        {
+          *attr = SHAPE_ATTR_TRANSFORM;
+          return TRUE;
+        }
+    }
+
+  if (type == SHAPE_CLIP_PATH)
+    {
+      if (strcmp (name, "clipPathUnits") == 0)
+        {
+          *attr = SHAPE_ATTR_CONTENT_UNITS;
+          return TRUE;
+        }
+    }
+
+  if (type == SHAPE_MASK)
+    {
+      if (strcmp (name, "maskContentUnits") == 0)
+        {
+          *attr = SHAPE_ATTR_CONTENT_UNITS;
+          return TRUE;
+        }
+      if (strcmp (name, "maskUnits") == 0)
+        {
+          *attr = SHAPE_ATTR_BOUND_UNITS;
+          return TRUE;
+        }
+    }
+
+  if (type == SHAPE_PATTERN)
+    {
+      if (strcmp (name, "patternTransform") == 0)
+        {
+          *attr = SHAPE_ATTR_TRANSFORM;
+          return TRUE;
+        }
+      if (strcmp (name, "patternContentUnits") == 0)
+        {
+          *attr = SHAPE_ATTR_CONTENT_UNITS;
+          return TRUE;
+        }
+      if (strcmp (name, "patternUnits") == 0)
+        {
+        *attr = SHAPE_ATTR_BOUND_UNITS;
+        return TRUE;
+        }
+    }
+
+  if (type == SHAPE_MARKER)
+    {
+      if (strcmp (name, "markerWidth") == 0)
+        {
+          *attr = SHAPE_ATTR_WIDTH;
+          return TRUE;
+        }
+      if (strcmp (name, "markerHeight") == 0)
+        {
+          *attr = SHAPE_ATTR_HEIGHT;
+          return TRUE;
+        }
+    }
+
+  /*
+   * In theory, lang & xml:lang are different attributes and if
+   * both are set, lang should be preferred. In an effort of not
+   * polluting the attr array anymore than it already is, we treat
+   * xml:lang as an alias to lang.
+   */
+  if (strcmp (name, "xml:lang") == 0)
+    {
+      *attr = SHAPE_ATTR_LANG;
+      return TRUE;
+    }
 
   for (unsigned int i = 0; i < G_N_ELEMENTS (shape_attrs); i++)
     {
@@ -4993,6 +6985,7 @@ shape_attr_lookup (const char *name,
           return TRUE;
         }
     }
+
   return FALSE;
 }
 
@@ -5003,6 +6996,27 @@ shape_attr_get_presentation (ShapeAttr attr,
   if ((type == SHAPE_LINEAR_GRADIENT || type == SHAPE_RADIAL_GRADIENT) &&
       attr == SHAPE_ATTR_TRANSFORM)
     return "gradientTransform";
+
+  if (type == SHAPE_CLIP_PATH && attr == SHAPE_ATTR_CONTENT_UNITS)
+    return "clipPathUnits";
+
+  if (type == SHAPE_MASK && attr == SHAPE_ATTR_CONTENT_UNITS)
+    return "maskContentUnits";
+
+  if (type == SHAPE_PATTERN && attr == SHAPE_ATTR_CONTENT_UNITS)
+    return "patternContentUnits";
+
+  if (type == SHAPE_PATTERN && attr == SHAPE_ATTR_BOUND_UNITS)
+    return "patternUnits";
+
+  if (type == SHAPE_PATTERN && attr == SHAPE_ATTR_TRANSFORM)
+    return "patternTransform";
+
+  if (type == SHAPE_MARKER && attr == SHAPE_ATTR_WIDTH)
+    return "markerWidth";
+
+  if (type == SHAPE_MARKER && attr == SHAPE_ATTR_HEIGHT)
+    return "markerHeight";
 
   return shape_attrs[attr].name;
 }
@@ -5069,40 +7083,6 @@ shape_attr_parse_values (ShapeAttr      attr,
 
   g_strfreev (strv);
   return array;
-}
-
-/* Animations can apply either to shape attributes or to color
- * stop attributes. Since there can be an arbitrary number of
- * color stops, we encode the attr and the color stop index in
- * an unsigned int.
- *
- * Attributes < SHAPE_ATTR_STOP_OFFSET are stored in the Shape,
- * attr values above that refer to values stored in color stops.
- */
-
-typedef struct
-{
-  unsigned int idx;
-  unsigned int attr;
-} StopRef;
-
-static StopRef
-stop_ref (unsigned int attr)
-{
-  return (StopRef) { (attr - SHAPE_ATTR_STOP_OFFSET) / N_STOP_PROPS,
-                     (attr - SHAPE_ATTR_STOP_OFFSET) % N_STOP_PROPS };
-}
-
-static ShapeAttr
-shape_attr_ref (unsigned int attr)
-{
-  StopRef s;
-
-  if (attr < SHAPE_ATTR_STOP_OFFSET)
-    return attr;
-
-  s = stop_ref (attr);
-  return SHAPE_ATTR_STOP_OFFSET + s.attr;
 }
 
 /*  }}} */
@@ -5199,6 +7179,36 @@ struct {
     .has_gpa_attrs = 0,
     .has_color_stops = 1,
   },
+  { .name = "pattern",
+    .has_shapes = 1,
+    .never_rendered = 1,
+    .has_gpa_attrs = 0,
+    .has_color_stops = 0,
+  },
+  { .name = "marker",
+    .has_shapes = 1,
+    .never_rendered = 1,
+    .has_gpa_attrs = 0,
+    .has_color_stops = 0,
+  },
+  { .name = "text",
+    .has_shapes = 1,
+    .never_rendered = 0,
+    .has_gpa_attrs = 0,
+    .has_color_stops = 0,
+  },
+  { .name = "tspan",
+    .has_shapes = 1,
+    .never_rendered = 1,
+    .has_gpa_attrs = 0,
+    .has_color_stops = 0,
+  },
+  { .name = "svg",
+    .has_shapes = 1,
+    .never_rendered = 0,
+    .has_gpa_attrs = 0,
+    .has_color_stops = 0,
+  },
 };
 
 static gboolean
@@ -5223,7 +7233,7 @@ shape_free (gpointer data)
 
   g_clear_pointer (&shape->id, g_free);
 
-  for (unsigned int i = 0; i < G_N_ELEMENTS (shape_attrs); i++)
+  for (unsigned int i = 0; i < N_SHAPE_ATTRS; i++)
     {
       g_clear_pointer (&shape->base[i], svg_value_unref);
       g_clear_pointer (&shape->current[i], svg_value_unref);
@@ -5237,10 +7247,14 @@ shape_free (gpointer data)
   g_clear_pointer (&shape->path, gsk_path_unref);
   g_clear_pointer (&shape->measure, gsk_path_measure_unref);
 
+  g_clear_pointer (&shape->text, g_array_unref);
+
   if (shape->type == SHAPE_POLYLINE || shape->type == SHAPE_POLYGON)
     g_clear_pointer (&shape->path_for.polyline.points, svg_value_unref);
 
   g_free (shape->gpa.attach.ref);
+
+  _gtk_bitmask_free (shape->attrs);
 
   g_free (data);
 }
@@ -5248,19 +7262,18 @@ shape_free (gpointer data)
 static void animation_free (gpointer data);
 
 static SvgValue *
-shape_attr_get_initial_value (ShapeAttr attr,
-                              ShapeType type)
+shape_attr_get_initial_value (ShapeAttr  attr,
+                              Shape     *shape)
 {
-  static SvgValue *default_radial_value;
-  static SvgValue *default_line_value;
-
-  if (type == SHAPE_RADIAL_GRADIENT)
+  if (shape->type == SHAPE_RADIAL_GRADIENT)
     {
       /* Radial gradients have conflicting initial values. Yay */
       if (attr == SHAPE_ATTR_CX ||
           attr == SHAPE_ATTR_CY ||
           attr == SHAPE_ATTR_R)
         {
+          static SvgValue *default_radial_value = NULL;
+
           if (!default_radial_value)
             default_radial_value = svg_percentage_new (50);
 
@@ -5268,18 +7281,96 @@ shape_attr_get_initial_value (ShapeAttr attr,
         }
     }
 
-  if (type == SHAPE_LINE)
+  if (shape->type == SHAPE_LINE)
     {
       if (attr == SHAPE_ATTR_X1 ||
           attr == SHAPE_ATTR_Y1 ||
           attr == SHAPE_ATTR_X2 ||
           attr == SHAPE_ATTR_Y2)
         {
+          static SvgValue *default_line_value = NULL;
+
           if (!default_line_value)
             default_line_value = svg_number_new (0);
 
           return default_line_value;
 
+        }
+    }
+
+  if (shape->type == SHAPE_CLIP_PATH ||
+      shape->type == SHAPE_MASK ||
+      shape->type == SHAPE_PATTERN)
+    {
+      if (attr == SHAPE_ATTR_CONTENT_UNITS)
+        {
+          static SvgValue *default_content_units_value = NULL;
+
+          if (!default_content_units_value)
+            default_content_units_value = svg_coord_units_new (COORD_UNITS_USER_SPACE_ON_USE);
+
+          return default_content_units_value;
+        }
+    }
+
+  if (shape->type == SHAPE_MASK)
+    {
+      if (attr == SHAPE_ATTR_X || attr == SHAPE_ATTR_Y)
+        {
+          static SvgValue *default_mask_pos_value = NULL;
+
+          if (!default_mask_pos_value)
+            default_mask_pos_value = svg_percentage_new (-10);
+
+          return default_mask_pos_value;
+        }
+      else if (attr == SHAPE_ATTR_WIDTH || attr == SHAPE_ATTR_HEIGHT)
+        {
+          static SvgValue *default_mask_size_value = NULL;
+
+          if (!default_mask_size_value)
+            default_mask_size_value = svg_percentage_new (120);
+
+          return default_mask_size_value;
+        }
+    }
+
+  if (shape->type == SHAPE_MARKER ||
+      shape->type == SHAPE_PATTERN)
+    {
+      if (attr == SHAPE_ATTR_OVERFLOW)
+        {
+          static SvgValue *default_overflow = NULL;
+
+          if (!default_overflow)
+            default_overflow = svg_overflow_new (OVERFLOW_HIDDEN);
+
+          return default_overflow;
+        }
+    }
+
+  if (shape->type == SHAPE_SVG)
+    {
+      if (attr == SHAPE_ATTR_WIDTH || attr == SHAPE_ATTR_HEIGHT)
+        {
+          static SvgValue *default_size = NULL;
+
+          if (!default_size)
+            default_size = svg_percentage_new (100);
+
+          return default_size;
+        }
+
+      if (attr == SHAPE_ATTR_OVERFLOW)
+        {
+          SvgValue *value;
+
+          if (shape->parent != NULL)
+            value = svg_overflow_new (OVERFLOW_HIDDEN);
+          else
+            value = svg_overflow_new (OVERFLOW_VISIBLE);
+          svg_value_unref (value);
+          return value;
         }
     }
 
@@ -5296,13 +7387,14 @@ shape_new (Shape     *parent,
 
   shape->parent = parent;
   shape->type = type;
-  shape->attrs = 0;
   shape->display = TRUE;
+
+  shape->attrs = _gtk_bitmask_new ();
 
   for (ShapeAttr attr = 0; attr < SHAPE_ATTR_STOP_OFFSET; attr++)
     {
-      shape->base[attr] = svg_value_ref (shape_attr_get_initial_value (attr, type));
-      shape->current[attr] = svg_value_ref (shape_attr_get_initial_value (attr, type));
+      shape->base[attr] = svg_value_ref (shape_attr_get_initial_value (attr, shape));
+      shape->current[attr] = svg_value_ref (shape_attr_get_initial_value (attr, shape));
     }
 
   shape->animations = g_ptr_array_new_with_free_func (animation_free);
@@ -5313,6 +7405,12 @@ shape_new (Shape     *parent,
   if (shape_types[type].has_color_stops)
     shape->color_stops = g_ptr_array_new_with_free_func (color_stop_free);
 
+  if (type == SHAPE_TEXT || type == SHAPE_TSPAN)
+    {
+      shape->text = g_array_new (FALSE, FALSE, sizeof(TextNode));
+      g_array_set_clear_func (shape->text, (GDestroyNotify)text_node_clear);
+    }
+
   return shape;
 }
 
@@ -5322,6 +7420,8 @@ shape_has_attr (ShapeType type,
 {
   switch ((unsigned int) attr)
     {
+    case SHAPE_ATTR_LANG:
+      return TRUE;
     case SHAPE_ATTR_HREF:
       return type == SHAPE_USE;
     case SHAPE_ATTR_CX:
@@ -5331,9 +7431,14 @@ shape_has_attr (ShapeType type,
       return type == SHAPE_CIRCLE || type == SHAPE_RADIAL_GRADIENT;
     case SHAPE_ATTR_X:
     case SHAPE_ATTR_Y:
+      return type == SHAPE_RECT || type == SHAPE_USE ||
+             type == SHAPE_MASK || type == SHAPE_PATTERN ||
+             type == SHAPE_TEXT || type == SHAPE_TSPAN ||
+             type == SHAPE_SVG;
     case SHAPE_ATTR_WIDTH:
     case SHAPE_ATTR_HEIGHT:
-      return type == SHAPE_RECT || type == SHAPE_USE;
+      return type == SHAPE_SVG || type == SHAPE_RECT || type == SHAPE_USE || type == SHAPE_MASK ||
+             type == SHAPE_PATTERN || type == SHAPE_MARKER;
     case SHAPE_ATTR_RX:
     case SHAPE_ATTR_RY:
       return type == SHAPE_RECT || type == SHAPE_ELLIPSE;
@@ -5354,8 +7459,11 @@ shape_has_attr (ShapeType type,
     case SHAPE_ATTR_POINTS:
       return type == SHAPE_POLYLINE || type == SHAPE_POLYGON;
     case SHAPE_ATTR_SPREAD_METHOD:
-    case SHAPE_ATTR_GRADIENT_UNITS:
-      return type == SHAPE_LINEAR_GRADIENT || type == SHAPE_RADIAL_GRADIENT;
+    case SHAPE_ATTR_CONTENT_UNITS:
+      return type == SHAPE_LINEAR_GRADIENT || type == SHAPE_RADIAL_GRADIENT ||
+             type == SHAPE_CLIP_PATH || type == SHAPE_MASK || type == SHAPE_PATTERN;
+    case SHAPE_ATTR_BOUND_UNITS:
+      return type == SHAPE_MASK || type == SHAPE_PATTERN;
     case SHAPE_ATTR_STOP_OFFSET:
     case SHAPE_ATTR_STOP_COLOR:
     case SHAPE_ATTR_STOP_OPACITY:
@@ -5366,14 +7474,62 @@ shape_has_attr (ShapeType type,
     case SHAPE_ATTR_FY:
     case SHAPE_ATTR_FR:
       return type == SHAPE_RADIAL_GRADIENT;
+    case SHAPE_ATTR_VIEW_BOX:
+    case SHAPE_ATTR_CONTENT_FIT:
+      return type == SHAPE_SVG || type == SHAPE_PATTERN;
+    case SHAPE_ATTR_REF_X:
+    case SHAPE_ATTR_REF_Y:
+    case SHAPE_ATTR_MARKER_UNITS:
+    case SHAPE_ATTR_MARKER_ORIENT:
+      return type == SHAPE_MARKER;
+    case SHAPE_ATTR_MARKER_START:
+    case SHAPE_ATTR_MARKER_MID:
+    case SHAPE_ATTR_MARKER_END:
+      return type == SHAPE_RECT || type == SHAPE_CIRCLE || type == SHAPE_ELLIPSE ||
+             type == SHAPE_PATH || type == SHAPE_POLYLINE ||
+             type == SHAPE_POLYGON || type == SHAPE_LINE;
+    case SHAPE_ATTR_OVERFLOW:
+      return type == SHAPE_SVG || type == SHAPE_PATTERN || type == SHAPE_MARKER;
+    case SHAPE_ATTR_TEXT_ANCHOR:
+      /* text-anchor behaviour on <tspan> is *wierd*,
+       * so we'll follow rsvg and only support it for
+       * <text> nodes.
+       */
+      return type == SHAPE_TEXT;
+    case SHAPE_ATTR_DX:
+    case SHAPE_ATTR_DY:
+    case SHAPE_ATTR_UNICODE_BIDI:
+    case SHAPE_ATTR_DIRECTION:
+    case SHAPE_ATTR_WRITING_MODE:
+    case SHAPE_ATTR_LETTER_SPACING:
+    case SHAPE_ATTR_TEXT_DECORATION:
+      return type == SHAPE_TEXT || type == SHAPE_TSPAN;
+    case SHAPE_ATTR_FONT_FAMILY:
+    case SHAPE_ATTR_FONT_STYLE:
+    case SHAPE_ATTR_FONT_VARIANT:
+    case SHAPE_ATTR_FONT_WEIGHT:
+    case SHAPE_ATTR_FONT_STRECH:
+    case SHAPE_ATTR_FONT_SIZE:
+      return TRUE;
     default:
       return type != SHAPE_LINEAR_GRADIENT && type != SHAPE_RADIAL_GRADIENT;
     }
 }
 
+static gboolean
+shape_can_set_attr (ShapeType type,
+                    ShapeAttr attr,
+                    gboolean  in_css)
+{
+  if (!shape_has_attr (type, attr))
+    return FALSE;
+
+  return in_css || (shape_attrs[attr].only_css == 0);
+}
+
 static GskPath *
 shape_get_path (Shape                 *shape,
-                const graphene_size_t *viewport,
+                const graphene_rect_t *viewport,
                 gboolean               current)
 {
   GskPathBuilder *builder;
@@ -5391,10 +7547,10 @@ shape_get_path (Shape                 *shape,
       if (values[SHAPE_ATTR_X1] && values[SHAPE_ATTR_Y1] &&
           values[SHAPE_ATTR_X2] && values[SHAPE_ATTR_Y2])
         {
-          double x1 = svg_number_get (values[SHAPE_ATTR_X1], viewport->width);
-          double y1 = svg_number_get (values[SHAPE_ATTR_Y1], viewport->height);
-          double x2 = svg_number_get (values[SHAPE_ATTR_X2], viewport->width);
-          double y2 = svg_number_get (values[SHAPE_ATTR_Y2], viewport->height);
+          double x1 = svg_number_get (values[SHAPE_ATTR_X1], viewport->size.width);
+          double y1 = svg_number_get (values[SHAPE_ATTR_Y1], viewport->size.height);
+          double x2 = svg_number_get (values[SHAPE_ATTR_X2], viewport->size.width);
+          double y2 = svg_number_get (values[SHAPE_ATTR_Y2], viewport->size.height);
           gsk_path_builder_move_to (builder, x1, y1);
           gsk_path_builder_line_to (builder, x2, y2);
         }
@@ -5408,12 +7564,16 @@ shape_get_path (Shape                 *shape,
           SvgPoints *points = (SvgPoints *) values[SHAPE_ATTR_POINTS];
           if (points->n_values > 0)
             {
+              g_assert (points->values[0].dim != SVG_DIMENSION_PERCENTAGE);
+              g_assert (points->values[1].dim != SVG_DIMENSION_PERCENTAGE);
               gsk_path_builder_move_to (builder,
-                                        points->values[0], points->values[1]);
+                                        points->values[0].value, points->values[1].value);
               for (unsigned int i = 2; i < points->n_values; i += 2)
                 {
+                  g_assert (points->values[i].dim != SVG_DIMENSION_PERCENTAGE);
+                  g_assert (points->values[i+1].dim != SVG_DIMENSION_PERCENTAGE);
                   gsk_path_builder_line_to (builder,
-                                            points->values[i], points->values[i + 1]);
+                                            points->values[i].value, points->values[i + 1].value);
                 }
               if (shape->type == SHAPE_POLYGON)
                 gsk_path_builder_close (builder);
@@ -5425,8 +7585,8 @@ shape_get_path (Shape                 *shape,
       builder = gsk_path_builder_new ();
       if (values[SHAPE_ATTR_CX] && values[SHAPE_ATTR_CY] && values[SHAPE_ATTR_R])
         {
-          double cx = svg_number_get (values[SHAPE_ATTR_CX], viewport->width);
-          double cy = svg_number_get (values[SHAPE_ATTR_CY], viewport->height);
+          double cx = svg_number_get (values[SHAPE_ATTR_CX], viewport->size.width);
+          double cy = svg_number_get (values[SHAPE_ATTR_CY], viewport->size.height);
           double r = svg_number_get (values[SHAPE_ATTR_R], normalized_diagonal (viewport));
           gsk_path_builder_add_circle (builder, &GRAPHENE_POINT_INIT (cx, cy), r);
         }
@@ -5437,10 +7597,10 @@ shape_get_path (Shape                 *shape,
       if (values[SHAPE_ATTR_CX] && values[SHAPE_ATTR_CY] &&
           values[SHAPE_ATTR_RX] && values[SHAPE_ATTR_RY])
         {
-          double cx = svg_number_get (values[SHAPE_ATTR_CX], viewport->width);
-          double cy = svg_number_get (values[SHAPE_ATTR_CY], viewport->height);
-          double rx = svg_number_get (values[SHAPE_ATTR_RX], viewport->width);
-          double ry = svg_number_get (values[SHAPE_ATTR_RY], viewport->height);
+          double cx = svg_number_get (values[SHAPE_ATTR_CX], viewport->size.width);
+          double cy = svg_number_get (values[SHAPE_ATTR_CY], viewport->size.height);
+          double rx = svg_number_get (values[SHAPE_ATTR_RX], viewport->size.width);
+          double ry = svg_number_get (values[SHAPE_ATTR_RY], viewport->size.height);
           path_builder_add_ellipse (builder, cx, cy, rx, ry);
         }
       return gsk_path_builder_free_to_path (builder);
@@ -5451,12 +7611,12 @@ shape_get_path (Shape                 *shape,
           values[SHAPE_ATTR_WIDTH] && values[SHAPE_ATTR_HEIGHT] &&
           values[SHAPE_ATTR_RX] && values[SHAPE_ATTR_RY])
         {
-          double x = svg_number_get (values[SHAPE_ATTR_X], viewport->width);
-          double y = svg_number_get (values[SHAPE_ATTR_Y], viewport->height);
-          double width = svg_number_get (values[SHAPE_ATTR_WIDTH], viewport->width);
-          double height = svg_number_get (values[SHAPE_ATTR_HEIGHT],viewport->height);
-          double rx = svg_number_get (values[SHAPE_ATTR_RX], viewport->width);
-          double ry = svg_number_get (values[SHAPE_ATTR_RY], viewport->height);
+          double x = svg_number_get (values[SHAPE_ATTR_X], viewport->size.width);
+          double y = svg_number_get (values[SHAPE_ATTR_Y], viewport->size.height);
+          double width = svg_number_get (values[SHAPE_ATTR_WIDTH], viewport->size.width);
+          double height = svg_number_get (values[SHAPE_ATTR_HEIGHT],viewport->size.height);
+          double rx = svg_number_get (values[SHAPE_ATTR_RX], viewport->size.width);
+          double ry = svg_number_get (values[SHAPE_ATTR_RY], viewport->size.height);
           if (rx == 0 || ry == 0)
             gsk_path_builder_add_rect (builder, &GRAPHENE_RECT_INIT (x, y, width, height));
           else
@@ -5493,6 +7653,13 @@ shape_get_path (Shape                 *shape,
     case SHAPE_USE:
     case SHAPE_LINEAR_GRADIENT:
     case SHAPE_RADIAL_GRADIENT:
+    case SHAPE_PATTERN:
+    case SHAPE_MARKER:
+    case SHAPE_TEXT:
+    case SHAPE_TSPAN:
+    case SHAPE_SVG:
+      g_error ("Attempt to get the path of a %s", shape_types[shape->type].name);
+      break;
     default:
       g_assert_not_reached ();
     }
@@ -5500,17 +7667,17 @@ shape_get_path (Shape                 *shape,
 
 static GskPath *
 shape_get_current_path (Shape                 *shape,
-                        const graphene_size_t *viewport)
+                        const graphene_rect_t *viewport)
 {
   if (shape->path)
     {
       switch (shape->type)
         {
         case SHAPE_LINE:
-          if (shape->path_for.line.x1 != svg_number_get (shape->current[SHAPE_ATTR_X1], viewport->width) ||
-              shape->path_for.line.y1 != svg_number_get (shape->current[SHAPE_ATTR_Y1], viewport->height) ||
-              shape->path_for.line.x2 != svg_number_get (shape->current[SHAPE_ATTR_X2], viewport->height) ||
-              shape->path_for.line.y2 != svg_number_get (shape->current[SHAPE_ATTR_Y2], viewport->height))
+          if (shape->path_for.line.x1 != svg_number_get (shape->current[SHAPE_ATTR_X1], viewport->size.width) ||
+              shape->path_for.line.y1 != svg_number_get (shape->current[SHAPE_ATTR_Y1], viewport->size.height) ||
+              shape->path_for.line.x2 != svg_number_get (shape->current[SHAPE_ATTR_X2], viewport->size.height) ||
+              shape->path_for.line.y2 != svg_number_get (shape->current[SHAPE_ATTR_Y2], viewport->size.height))
             {
               g_clear_pointer (&shape->path, gsk_path_unref);
               g_clear_pointer (&shape->measure, gsk_path_measure_unref);
@@ -5527,8 +7694,8 @@ shape_get_current_path (Shape                 *shape,
           break;
 
         case SHAPE_CIRCLE:
-          if (shape->path_for.circle.cx != svg_number_get (shape->current[SHAPE_ATTR_CX], viewport->width) ||
-              shape->path_for.circle.cy != svg_number_get (shape->current[SHAPE_ATTR_CY], viewport->height) ||
+          if (shape->path_for.circle.cx != svg_number_get (shape->current[SHAPE_ATTR_CX], viewport->size.width) ||
+              shape->path_for.circle.cy != svg_number_get (shape->current[SHAPE_ATTR_CY], viewport->size.height) ||
               shape->path_for.circle.r != svg_number_get (shape->current[SHAPE_ATTR_R], normalized_diagonal (viewport)))
             {
               g_clear_pointer (&shape->path, gsk_path_unref);
@@ -5537,10 +7704,10 @@ shape_get_current_path (Shape                 *shape,
           break;
 
         case SHAPE_ELLIPSE:
-          if (shape->path_for.ellipse.cx != svg_number_get (shape->current[SHAPE_ATTR_CX], viewport->width) ||
-              shape->path_for.ellipse.cy != svg_number_get (shape->current[SHAPE_ATTR_CY], viewport->height) ||
-              shape->path_for.ellipse.rx != svg_number_get (shape->current[SHAPE_ATTR_RX], viewport->width) ||
-              shape->path_for.ellipse.ry != svg_number_get (shape->current[SHAPE_ATTR_RY], viewport->height))
+          if (shape->path_for.ellipse.cx != svg_number_get (shape->current[SHAPE_ATTR_CX], viewport->size.width) ||
+              shape->path_for.ellipse.cy != svg_number_get (shape->current[SHAPE_ATTR_CY], viewport->size.height) ||
+              shape->path_for.ellipse.rx != svg_number_get (shape->current[SHAPE_ATTR_RX], viewport->size.width) ||
+              shape->path_for.ellipse.ry != svg_number_get (shape->current[SHAPE_ATTR_RY], viewport->size.height))
             {
               g_clear_pointer (&shape->path, gsk_path_unref);
               g_clear_pointer (&shape->measure, gsk_path_measure_unref);
@@ -5548,12 +7715,12 @@ shape_get_current_path (Shape                 *shape,
           break;
 
         case SHAPE_RECT:
-          if (shape->path_for.rect.x != svg_number_get (shape->current[SHAPE_ATTR_X], viewport->width) ||
-              shape->path_for.rect.y != svg_number_get (shape->current[SHAPE_ATTR_Y], viewport->height) ||
-              shape->path_for.rect.w != svg_number_get (shape->current[SHAPE_ATTR_WIDTH], viewport->width) ||
-              shape->path_for.rect.h != svg_number_get (shape->current[SHAPE_ATTR_HEIGHT], viewport->height) ||
-              shape->path_for.rect.rx != svg_number_get (shape->current[SHAPE_ATTR_RX], viewport->width) ||
-              shape->path_for.rect.ry != svg_number_get (shape->current[SHAPE_ATTR_RY], viewport->height))
+          if (shape->path_for.rect.x != svg_number_get (shape->current[SHAPE_ATTR_X], viewport->size.width) ||
+              shape->path_for.rect.y != svg_number_get (shape->current[SHAPE_ATTR_Y], viewport->size.height) ||
+              shape->path_for.rect.w != svg_number_get (shape->current[SHAPE_ATTR_WIDTH], viewport->size.width) ||
+              shape->path_for.rect.h != svg_number_get (shape->current[SHAPE_ATTR_HEIGHT], viewport->size.height) ||
+              shape->path_for.rect.rx != svg_number_get (shape->current[SHAPE_ATTR_RX], viewport->size.width) ||
+              shape->path_for.rect.ry != svg_number_get (shape->current[SHAPE_ATTR_RY], viewport->size.height))
             {
               g_clear_pointer (&shape->path, gsk_path_unref);
               g_clear_pointer (&shape->measure, gsk_path_measure_unref);
@@ -5575,6 +7742,13 @@ shape_get_current_path (Shape                 *shape,
         case SHAPE_USE:
         case SHAPE_LINEAR_GRADIENT:
         case SHAPE_RADIAL_GRADIENT:
+        case SHAPE_PATTERN:
+        case SHAPE_MARKER:
+	case SHAPE_TEXT:
+        case SHAPE_TSPAN:
+        case SHAPE_SVG:
+          g_error ("Attempt to get the path of a %s", shape_types[shape->type].name);
+          break;
         default:
           g_assert_not_reached ();
         }
@@ -5587,10 +7761,10 @@ shape_get_current_path (Shape                 *shape,
       switch (shape->type)
         {
         case SHAPE_LINE:
-          shape->path_for.line.x1 = svg_number_get (shape->current[SHAPE_ATTR_X1], viewport->width);
-          shape->path_for.line.y1 = svg_number_get (shape->current[SHAPE_ATTR_Y1], viewport->height);
-          shape->path_for.line.x2 = svg_number_get (shape->current[SHAPE_ATTR_X2], viewport->width);
-          shape->path_for.line.y2 = svg_number_get (shape->current[SHAPE_ATTR_Y2], viewport->height);
+          shape->path_for.line.x1 = svg_number_get (shape->current[SHAPE_ATTR_X1], viewport->size.width);
+          shape->path_for.line.y1 = svg_number_get (shape->current[SHAPE_ATTR_Y1], viewport->size.height);
+          shape->path_for.line.x2 = svg_number_get (shape->current[SHAPE_ATTR_X2], viewport->size.width);
+          shape->path_for.line.y2 = svg_number_get (shape->current[SHAPE_ATTR_Y2], viewport->size.height);
           break;
 
         case SHAPE_POLYLINE:
@@ -5600,25 +7774,25 @@ shape_get_current_path (Shape                 *shape,
           break;
 
         case SHAPE_CIRCLE:
-          shape->path_for.circle.cx = svg_number_get (shape->current[SHAPE_ATTR_CX], viewport->width);
-          shape->path_for.circle.cy = svg_number_get (shape->current[SHAPE_ATTR_CY], viewport->height);
+          shape->path_for.circle.cx = svg_number_get (shape->current[SHAPE_ATTR_CX], viewport->size.width);
+          shape->path_for.circle.cy = svg_number_get (shape->current[SHAPE_ATTR_CY], viewport->size.height);
           shape->path_for.circle.r = svg_number_get (shape->current[SHAPE_ATTR_R], normalized_diagonal (viewport));
           break;
 
         case SHAPE_ELLIPSE:
-          shape->path_for.ellipse.cx = svg_number_get (shape->current[SHAPE_ATTR_CX], viewport->width);
-          shape->path_for.ellipse.cy = svg_number_get (shape->current[SHAPE_ATTR_CY], viewport->height);
-          shape->path_for.ellipse.rx = svg_number_get (shape->current[SHAPE_ATTR_RX], viewport->width);
-          shape->path_for.ellipse.ry = svg_number_get (shape->current[SHAPE_ATTR_RY], viewport->height);
+          shape->path_for.ellipse.cx = svg_number_get (shape->current[SHAPE_ATTR_CX], viewport->size.width);
+          shape->path_for.ellipse.cy = svg_number_get (shape->current[SHAPE_ATTR_CY], viewport->size.height);
+          shape->path_for.ellipse.rx = svg_number_get (shape->current[SHAPE_ATTR_RX], viewport->size.width);
+          shape->path_for.ellipse.ry = svg_number_get (shape->current[SHAPE_ATTR_RY], viewport->size.height);
           break;
 
         case SHAPE_RECT:
-          shape->path_for.rect.x = svg_number_get (shape->current[SHAPE_ATTR_X], viewport->width);
-          shape->path_for.rect.y = svg_number_get (shape->current[SHAPE_ATTR_Y], viewport->height);
-          shape->path_for.rect.w = svg_number_get (shape->current[SHAPE_ATTR_WIDTH], viewport->width);
-          shape->path_for.rect.h = svg_number_get (shape->current[SHAPE_ATTR_HEIGHT], viewport->height);
-          shape->path_for.rect.rx = svg_number_get (shape->current[SHAPE_ATTR_RX], viewport->width);
-          shape->path_for.rect.ry = svg_number_get (shape->current[SHAPE_ATTR_RY], viewport->height);
+          shape->path_for.rect.x = svg_number_get (shape->current[SHAPE_ATTR_X], viewport->size.width);
+          shape->path_for.rect.y = svg_number_get (shape->current[SHAPE_ATTR_Y], viewport->size.height);
+          shape->path_for.rect.w = svg_number_get (shape->current[SHAPE_ATTR_WIDTH], viewport->size.width);
+          shape->path_for.rect.h = svg_number_get (shape->current[SHAPE_ATTR_HEIGHT], viewport->size.height);
+          shape->path_for.rect.rx = svg_number_get (shape->current[SHAPE_ATTR_RX], viewport->size.width);
+          shape->path_for.rect.ry = svg_number_get (shape->current[SHAPE_ATTR_RY], viewport->size.height);
           break;
 
         case SHAPE_PATH:
@@ -5631,6 +7805,11 @@ shape_get_current_path (Shape                 *shape,
         case SHAPE_USE:
         case SHAPE_LINEAR_GRADIENT:
         case SHAPE_RADIAL_GRADIENT:
+        case SHAPE_PATTERN:
+        case SHAPE_MARKER:
+        case SHAPE_TEXT:
+        case SHAPE_TSPAN:
+        case SHAPE_SVG:
         default:
           g_assert_not_reached ();
         }
@@ -5641,7 +7820,7 @@ shape_get_current_path (Shape                 *shape,
 
 static GskPathMeasure *
 shape_get_current_measure (Shape                 *shape,
-                           const graphene_size_t *viewport)
+                           const graphene_rect_t *viewport)
 {
   if (!shape->measure)
     {
@@ -5653,6 +7832,80 @@ shape_get_current_measure (Shape                 *shape,
   return gsk_path_measure_ref (shape->measure);
 }
 
+static gboolean
+shape_get_current_bounds (Shape                 *shape,
+                          const graphene_rect_t *viewport,
+                          graphene_rect_t       *bounds)
+{
+  gboolean ret = FALSE;
+
+  graphene_rect_init_from_rect (bounds, graphene_rect_zero ());
+
+  switch (shape->type)
+    {
+    case SHAPE_LINE:
+    case SHAPE_POLYLINE:
+    case SHAPE_POLYGON:
+    case SHAPE_RECT:
+    case SHAPE_CIRCLE:
+    case SHAPE_ELLIPSE:
+    case SHAPE_PATH:
+      {
+        GskPath *path = shape_get_current_path (shape, viewport);
+        ret = gsk_path_get_tight_bounds (path, bounds);
+        gsk_path_unref (path);
+      }
+      break;
+    case SHAPE_USE:
+      {
+        Shape *use_shape = ((SvgHref *) shape->current[SHAPE_ATTR_HREF])->shape;
+        if (use_shape)
+          ret = shape_get_current_bounds (use_shape, viewport, bounds);
+      }
+      break;
+    case SHAPE_GROUP:
+    case SHAPE_CLIP_PATH:
+    case SHAPE_MASK:
+    case SHAPE_PATTERN:
+    case SHAPE_MARKER:
+    case SHAPE_SVG:
+      {
+        for (unsigned int i = 0; i < shape->shapes->len; i++)
+          {
+            Shape *sh = g_ptr_array_index (shape->shapes, i);
+            GskTransform *transform;
+            graphene_rect_t b;
+
+            if (shape_get_current_bounds (sh, viewport, &b))
+              {
+                transform = svg_transform_get_gsk ((SvgTransform *) shape->current[SHAPE_ATTR_TRANSFORM]);
+                gsk_transform_transform_bounds (transform, &b, &b);
+                if (i == 0)
+                  graphene_rect_init_from_rect (bounds, &b);
+                else
+                  graphene_rect_union (bounds, &b, bounds);
+                gsk_transform_unref (transform);
+              }
+          }
+        ret = TRUE;
+      }
+      break;
+    case SHAPE_DEFS:
+    case SHAPE_LINEAR_GRADIENT:
+    case SHAPE_RADIAL_GRADIENT:
+      g_error ("Attempt to get the bounds of a %s", shape_types[shape->type].name);
+      break;
+    case SHAPE_TEXT:
+    case SHAPE_TSPAN:
+      g_critical ("TODO");
+      break;
+    default:
+      g_assert_not_reached ();
+    }
+
+  return ret;
+}
+
 static unsigned int
 shape_add_color_stop (Shape *shape)
 {
@@ -5660,12 +7913,8 @@ shape_add_color_stop (Shape *shape)
 
   g_assert (shape_types[shape->type].has_color_stops);
 
-  stop->base[COLOR_STOP_OFFSET] =
-    svg_value_ref (shape_attr_get_initial_value (SHAPE_ATTR_STOP_OFFSET, shape->type));
-  stop->base[COLOR_STOP_COLOR] =
-    svg_value_ref (shape_attr_get_initial_value (SHAPE_ATTR_STOP_COLOR, shape->type));
-  stop->base[COLOR_STOP_OPACITY] =
-    svg_value_ref (shape_attr_get_initial_value (SHAPE_ATTR_STOP_OPACITY, shape->type));
+  for (ShapeAttr attr = FIRST_STOP_ATTR; attr <= LAST_STOP_ATTR; attr++)
+    stop->base[color_stop_attr_idx (attr)] = svg_value_ref (shape_attr_get_initial_value (attr, shape));
 
   g_ptr_array_add (shape->color_stops, stop);
 
@@ -6034,7 +8283,7 @@ time_spec_get_state_change_delay (TimeSpec *spec)
 {
   if (spec->type == TIME_SPEC_TYPE_STATES &&
       spec->states.side == TIME_SPEC_SIDE_END)
-    return labs (spec->offset);
+    return ABS (spec->offset);
 
   return 0;
 }
@@ -6240,8 +8489,14 @@ struct _Animation
   AnimationStatus status;
   char *id;
   char *href;
+  /* shape, attr, and idx together identify the attribute
+   * that this animation modifies. idx is only relevant
+   * for gradients and filters, where it identifies the
+   * index of the color stop or filter primitive.
+   */
   Shape *shape;
   unsigned int attr;
+  unsigned int idx;
 
   unsigned int has_simple_duration : 1;
   unsigned int has_repeat_count    : 1;
@@ -6469,7 +8724,7 @@ fill_from_values (Animation     *a,
 
 static GskPath *
 animation_motion_get_path (Animation             *a,
-                           const graphene_size_t *viewport,
+                           const graphene_rect_t *viewport,
                            gboolean               current)
 {
   g_assert (a->type == ANIMATION_TYPE_MOTION);
@@ -6484,21 +8739,21 @@ animation_motion_get_path (Animation             *a,
 
 static GskPath *
 animation_motion_get_base_path (Animation             *a,
-                                const graphene_size_t *viewport)
+                                const graphene_rect_t *viewport)
 {
   return animation_motion_get_path (a, viewport, FALSE);
 }
 
 static GskPath *
 animation_motion_get_current_path (Animation             *a,
-                                   const graphene_size_t *viewport)
+                                   const graphene_rect_t *viewport)
 {
   return animation_motion_get_path (a, viewport, TRUE);
 }
 
 static GskPathMeasure *
 animation_motion_get_current_measure (Animation             *a,
-                                      const graphene_size_t *viewport)
+                                      const graphene_rect_t *viewport)
 {
   g_assert (a->type == ANIMATION_TYPE_MOTION);
 
@@ -6528,118 +8783,124 @@ animation_motion_get_current_measure (Animation             *a,
 
 static SvgValue *
 shape_get_current_value (Shape        *shape,
-                         unsigned int  attr)
+                         unsigned int  attr,
+                         unsigned int  idx)
 {
-  if (attr < SHAPE_ATTR_STOP_OFFSET)
+  if (FIRST_SHAPE_ATTR <= attr && attr <= LAST_SHAPE_ATTR)
     {
       return shape->current[attr];
     }
-  else
+  else if (FIRST_STOP_ATTR <= attr && attr <= LAST_STOP_ATTR)
     {
-      StopRef s;
       ColorStop *stop;
 
       g_assert (shape_types[shape->type].has_color_stops);
 
-      s = stop_ref (attr);
-      stop = g_ptr_array_index (shape->color_stops, s.idx);
+      stop = g_ptr_array_index (shape->color_stops, idx);
 
-      return stop->current[s.attr];
+      return stop->current[color_stop_attr_idx (attr)];
     }
+  else
+    g_assert_not_reached ();
 }
 
 static SvgValue *
 shape_get_base_value (Shape        *shape,
                       Shape        *parent,
-                      unsigned int  attr)
+                      ShapeAttr     attr,
+                      unsigned int  idx)
 {
-  if (attr < SHAPE_ATTR_STOP_OFFSET)
+  if (FIRST_SHAPE_ATTR <= attr && attr <= LAST_SHAPE_ATTR)
     {
-      if ((shape->attrs & BIT (attr)) == 0)
+      if (!_gtk_bitmask_get (shape->attrs, attr))
         {
           if (parent && shape_attrs[attr].inherited)
             return parent->current[attr];
           else
-            return shape_attr_get_initial_value (attr, shape->type);
+            return shape_attr_get_initial_value (attr, shape);
         }
       else if (svg_value_is_inherit (shape->base[attr]))
         {
           if (parent)
             return parent->current[attr];
           else
-            return shape_attr_get_initial_value (attr, shape->type);
+            return shape_attr_get_initial_value (attr, shape);
         }
       else if (svg_value_is_initial (shape->base[attr]))
         {
-          return shape_attr_get_initial_value (attr, shape->type);
+          return shape_attr_get_initial_value (attr, shape);
         }
 
       return shape->base[attr];
     }
-  else
+  else if (FIRST_STOP_ATTR <= attr && attr <= LAST_STOP_ATTR)
     {
-      StopRef s;
       ColorStop *stop;
 
       g_assert (shape_types[shape->type].has_color_stops);
 
-      s = stop_ref (attr);
-      stop = g_ptr_array_index (shape->color_stops, s.idx);
+      stop = g_ptr_array_index (shape->color_stops, idx);
 
-      return stop->base[s.attr];
+      return stop->base[color_stop_attr_idx (attr)];
     }
+  else
+    g_assert_not_reached ();
 }
 
 static void
 shape_set_base_value (Shape        *shape,
-                      unsigned int  attr,
+                      ShapeAttr     attr,
+                      unsigned int  idx,
                       SvgValue     *value)
 {
-  if (attr < SHAPE_ATTR_STOP_OFFSET)
+  if (FIRST_SHAPE_ATTR <= attr && attr <= LAST_SHAPE_ATTR)
     {
       g_clear_pointer (&shape->base[attr], svg_value_unref);
       shape->base[attr] = svg_value_ref (value);
-      shape->attrs |= BIT (attr);
+      shape->attrs = _gtk_bitmask_set (shape->attrs, attr, TRUE);
     }
-  else
+  else if (FIRST_STOP_ATTR <= attr && attr <= LAST_STOP_ATTR)
     {
       ColorStop *stop;
 
       g_assert (shape_types[shape->type].has_color_stops);
-      /* set the values of the last color stop */
-      attr -= SHAPE_ATTR_STOP_OFFSET;
-      stop = g_ptr_array_index (shape->color_stops, shape->color_stops->len - 1);
-      g_clear_pointer (&stop->base[attr], svg_value_unref);
-      stop->base[attr] = svg_value_ref (value);
+
+      stop = g_ptr_array_index (shape->color_stops, idx);
+      g_clear_pointer (&stop->base[color_stop_attr_idx (attr)], svg_value_unref);
+      stop->base[color_stop_attr_idx (attr)] = svg_value_ref (value);
     }
+  else
+    g_assert_not_reached ();
 }
 
 static void
 shape_set_current_value (Shape        *shape,
-                         unsigned int  attr,
+                         ShapeAttr     attr,
+                         unsigned int  idx,
                          SvgValue     *value)
 {
-  if (attr < SHAPE_ATTR_STOP_OFFSET)
+  if (FIRST_SHAPE_ATTR <= attr && attr <= LAST_SHAPE_ATTR)
     {
       if (value)
         svg_value_ref (value);
       g_clear_pointer (&shape->current[attr], svg_value_unref);
       shape->current[attr] = value;
     }
-  else
+  else if (FIRST_STOP_ATTR <= attr && attr <= LAST_STOP_ATTR)
     {
-      StopRef s;
       ColorStop *stop;
 
       g_assert (shape_types[shape->type].has_color_stops);
-      s = stop_ref (attr);
-      stop = g_ptr_array_index (shape->color_stops, s.idx);
+
+      stop = g_ptr_array_index (shape->color_stops, idx);
 
       if (value)
         svg_value_ref (value);
-      g_clear_pointer (&stop->current[s.attr], svg_value_unref);
-      stop->current[s.attr] = value;
+      g_clear_pointer (&stop->current[color_stop_attr_idx (attr)], svg_value_unref);
+      stop->current[color_stop_attr_idx (attr)] = value;
     }
+  else
+    g_assert_not_reached ();
 }
 
 /* }}} */
@@ -6778,7 +9039,7 @@ animation_update_run_mode (Animation *a,
           a->run_mode = GTK_SVG_RUN_MODE_DISCRETE;
           a->next_invalidate = frame_end;
         }
-      else if (shape_attrs[shape_attr_ref (a->attr)].discrete)
+      else if (shape_attrs[a->attr].discrete)
         {
           a->run_mode = GTK_SVG_RUN_MODE_DISCRETE;
           if (frame_t < 0.5)
@@ -7180,7 +9441,7 @@ get_transform_data_for_motion (GskPathMeasure   *measure,
 
 typedef struct {
   GtkSvg *svg;
-  const graphene_size_t *viewport;
+  const graphene_rect_t *viewport;
   Shape *parent; /* Can be different from the actual parent, for <use> */
   int64_t current_time;
   const GdkRGBA *colors;
@@ -7195,18 +9456,33 @@ resolve_value (Shape           *shape,
 {
   if (svg_value_is_initial (value))
     {
-      return svg_value_ref (shape_attr_get_initial_value (attr, shape->type));
+      return svg_value_ref (shape_attr_get_initial_value (attr, shape));
     }
   else if (svg_value_is_inherit (value))
     {
       if (context->parent)
         return svg_value_ref (context->parent->current[attr]);
       else
-        return svg_value_ref (shape_attr_get_initial_value (attr, shape->type));
+        return svg_value_ref (shape_attr_get_initial_value (attr, shape));
     }
   else if (attr == SHAPE_ATTR_STROKE || attr == SHAPE_ATTR_FILL)
     {
       return svg_paint_resolve (value, context->colors, context->n_colors);
+    }
+  else if (attr == SHAPE_ATTR_STROKE_DASHARRAY)
+    {
+      return svg_dash_array_resolve (value, context->viewport);
+    }
+  else if (attr == SHAPE_ATTR_POINTS)
+    {
+      return svg_points_resolve (value, context->viewport);
+    }
+  else if (attr == SHAPE_ATTR_TEXT_DECORATION)
+    {
+      if (context->parent)
+        return svg_text_decoration_resolve (value, context->parent->current[attr]);
+      else
+        return svg_value_ref (value);
     }
   else
    {
@@ -7283,7 +9559,7 @@ compute_value_at_time (Animation      *a,
   if (a->calc_mode == CALC_MODE_DISCRETE)
     return resolve_value (a->shape, context, a->attr, a->frames[frame].value);
 
-  if (shape_attrs[shape_attr_ref (a->attr)].discrete)
+  if (shape_attrs[a->attr].discrete)
     return resolve_value (a->shape, context, a->attr,
                           frame_t < 0.5 ? a->frames[frame].value
                                         : a->frames[frame + 1].value);
@@ -7448,30 +9724,40 @@ shape_init_current_values (Shape          *shape,
           SvgValue *value;
 
           value = resolve_value (shape, context, attr,
-                                 shape_get_base_value (shape, context->parent, attr));
-          shape_set_current_value (shape, attr, value);
+                                 shape_get_base_value (shape, context->parent, attr, 0));
+          shape_set_current_value (shape, attr, 0, value);
           svg_value_unref (value);
         }
     }
 
   if (shape_types[shape->type].has_color_stops)
     {
-      unsigned int attr = SHAPE_ATTR_STOP_OFFSET;
       for (unsigned int idx = 0; idx < shape->color_stops->len; idx++)
         {
-          for (StopProperties prop = 0; prop < N_STOP_PROPS; prop++)
+          for (ShapeAttr attr = SHAPE_ATTR_STOP_OFFSET; attr <= SHAPE_ATTR_STOP_OPACITY; attr++)
             {
               SvgValue *value;
 
               value = resolve_value (shape, context, attr,
-                                     shape_get_base_value (shape, NULL, attr));
-              shape_set_current_value (shape, attr, value);
+                                     shape_get_base_value (shape, NULL, attr, idx));
+              shape_set_current_value (shape, attr, idx, value);
               svg_value_unref (value);
-              attr++;
             }
         }
     }
+}
 
+static void
+mark_as_computed_for_use (Shape    *shape,
+                          gboolean  computed_for_use)
+{
+  shape->computed_for_use = computed_for_use;
+
+  if (shape_types[shape->type].has_shapes)
+    {
+      for (Shape *sh = shape->first; sh; sh = sh->next)
+        mark_as_computed_for_use (sh, computed_for_use);
+    }
 }
 
 static void
@@ -7488,7 +9774,6 @@ compute_current_values_for_shape (Shape          *shape,
   for (unsigned int i = 0; i < shape->animations->len; i++)
     {
       Animation *a = g_ptr_array_index (shape->animations, i);
-      ShapeAttr attr = a->attr;
       SvgValue *val;
 
       if (a->status == ANIMATION_STATUS_INACTIVE)
@@ -7501,14 +9786,14 @@ compute_current_values_for_shape (Shape          *shape,
             {
               SvgValue *end_val;
 
-              end_val = svg_value_accumulate (val, shape_get_current_value (shape, attr), 1);
-              shape_set_current_value (shape, attr, end_val);
+              end_val = svg_value_accumulate (val, shape_get_current_value (shape, a->attr, a->idx), 1);
+              shape_set_current_value (shape, a->attr, a->idx, end_val);
 
               svg_value_unref (end_val);
             }
           else
             {
-              shape_set_current_value (shape, attr, val);
+              shape_set_current_value (shape, a->attr, a->idx, val);
             }
 
           svg_value_unref (val);
@@ -8418,6 +10703,8 @@ typedef struct
     GtkSvgLocation start;
     char *reason;
   } skip;
+  gboolean collect_text;
+  GString *text;
 } ParserData;
 
 /* {{{ Animation attribute */
@@ -8642,6 +10929,7 @@ parse_base_animation_attrs (Animation            *a,
     {
       const char *expected;
 
+      /* FIXME: if href is set, current_shape might be the wrong shape */
       expected = shape_attr_get_presentation (SHAPE_ATTR_TRANSFORM, data->current_shape->type);
       if (attr_name_attr && strcmp (attr_name_attr, expected) != 0)
         gtk_svg_invalid_attribute (data->svg, context, "attributeName",
@@ -8653,6 +10941,7 @@ parse_base_animation_attrs (Animation            *a,
       gtk_svg_missing_attribute (data->svg, context, "attributeName", NULL);
       return FALSE;
     }
+  /* FIXME: if href is set, current_shape might be the wrong shape */
   else if (!shape_attr_lookup (attr_name_attr, &attr, data->current_shape->type))
     {
       gtk_svg_missing_attribute (data->svg, context, "attributeName", "can't animate '%s'", attr_name_attr);
@@ -8661,6 +10950,9 @@ parse_base_animation_attrs (Animation            *a,
   else
     {
       a->attr = attr;
+      /* FIXME: if href is set, current_shape might be the wrong shape */
+      if (check_ancestors (context, "stop", NULL))
+        a->idx = data->current_shape->color_stops->len - 1;
     }
 
   return TRUE;
@@ -9053,6 +11345,7 @@ consume_to_semicolon (const char **p)
 
 static void
 parse_style_attr (Shape               *shape,
+                  gboolean             for_stop,
                   const char          *style_attr,
                   ParserData          *data,
                   GMarkupParseContext *context)
@@ -9062,6 +11355,13 @@ parse_style_attr (Shape               *shape,
   char *name;
   char *prop_val;
   SvgValue *value;
+  unsigned int idx = 0;
+
+  if (for_stop)
+    {
+      g_assert (shape->color_stops->len > 0);
+      idx = shape->color_stops->len - 1;
+    }
 
   while (*p)
     {
@@ -9112,9 +11412,19 @@ parse_style_attr (Shape               *shape,
                                      shape_attr_get_presentation (attr, shape->type),
                                      prop_val);
         }
+      else if (shape_can_set_attr (shape->type, attr, TRUE) ||
+               (for_stop && attr >= SHAPE_ATTR_STOP_OFFSET &&
+                            attr <= SHAPE_ATTR_STOP_OPACITY))
+        {
+          shape_set_base_value (shape, attr, idx, value);
+          svg_value_unref (value);
+        }
       else
         {
-          shape_set_base_value (shape, attr, value);
+          gtk_svg_invalid_attribute (data->svg, context,
+                                     "style", "'%s' is not an attribute of <%s>",
+                                     shape_attr_get_presentation (attr, shape->type),
+                                     shape_types[shape->type].name);
           svg_value_unref (value);
         }
 
@@ -9137,6 +11447,7 @@ parse_shape_attrs (Shape                *shape,
 {
   const char *class_attr = NULL;
   const char *style_attr = NULL;
+  const char *xlink_href_attr = NULL;
 
   for (unsigned int i = 0; attr_names[i]; i++)
     {
@@ -9158,6 +11469,11 @@ parse_shape_attrs (Shape                *shape,
           style_attr = attr_values[i];
           *handled |= BIT (i);
         }
+      else if (strcmp (attr_names[i], "xlink:href") == 0)
+        {
+          xlink_href_attr = attr_values[i];
+          *handled |= BIT (i);
+        }
       else if (strcmp (attr_names[i], "id") == 0)
         {
           shape->id = g_strdup (attr_values[i]);
@@ -9168,13 +11484,19 @@ parse_shape_attrs (Shape                *shape,
           shape->display = strcmp (attr_values[i], "none") != 0;
           *handled |= BIT (i);
         }
+      else if (strcmp (attr_names[i], "marker") == 0 &&
+               shape_has_attr (shape->type, SHAPE_ATTR_MARKER_START))
+        {
+          SvgValue *value = svg_href_parse_url (attr_values[i]);
+          shape_set_base_value (shape, SHAPE_ATTR_MARKER_START, 0, value);
+          shape_set_base_value (shape, SHAPE_ATTR_MARKER_MID, 0, value);
+          shape_set_base_value (shape, SHAPE_ATTR_MARKER_END, 0, value);
+          svg_value_unref (value);
+          *handled |= BIT (i);
+        }
       else if (shape_attr_lookup (attr_names[i], &attr, shape->type))
         {
-          if (!shape_has_attr (shape->type, attr))
-            {
-              gtk_svg_invalid_attribute (data->svg, context, attr_names[i], NULL);
-            }
-          else
+          if (shape_can_set_attr (shape->type, attr, FALSE))
             {
               SvgValue *value = shape_attr_parse_value (attr, attr_values[i]);
               if (!value)
@@ -9183,18 +11505,33 @@ parse_shape_attrs (Shape                *shape,
                 }
               else
                 {
-                  shape_set_base_value (shape, attr, value);
+                  shape_set_base_value (shape, attr, 0, value);
                   svg_value_unref (value);
                 }
             }
+          else
+            {
+              gtk_svg_invalid_attribute (data->svg, context, attr_names[i], NULL);
+            }
+
           *handled |= BIT (i);
         }
     }
 
   if (style_attr)
-    parse_style_attr (shape, style_attr, data, context);
+    parse_style_attr (shape, FALSE, style_attr, data, context);
 
-  if (class_attr)
+  if (xlink_href_attr && !_gtk_bitmask_get (shape->attrs, SHAPE_ATTR_HREF))
+    {
+      SvgValue *value = shape_attr_parse_value (SHAPE_ATTR_HREF, xlink_href_attr);
+      if (value)
+        {
+          shape_set_base_value (shape, SHAPE_ATTR_HREF, 0, value);
+          svg_value_unref (value);
+        }
+    }
+
+  if (class_attr && *class_attr)
     {
       GStrv classes = g_strsplit (class_attr, " ", 0);
       SvgValue *value;
@@ -9215,7 +11552,8 @@ parse_shape_attrs (Shape                *shape,
       else
         value = svg_paint_new_symbolic (GTK_SYMBOLIC_COLOR_FOREGROUND);
 
-      shape_set_base_value (shape, SHAPE_ATTR_FILL, value);
+      if (!_gtk_bitmask_get (shape->attrs, SHAPE_ATTR_FILL))
+        shape_set_base_value (shape, SHAPE_ATTR_FILL, 0, value);
       svg_value_unref (value);
 
       if (g_strv_has (classes, "success-stroke"))
@@ -9229,63 +11567,79 @@ parse_shape_attrs (Shape                *shape,
       else
         value = svg_paint_new_none ();
 
-      shape_set_base_value (shape, SHAPE_ATTR_STROKE, value);
+      if (!_gtk_bitmask_get (shape->attrs, SHAPE_ATTR_STROKE))
+        shape_set_base_value (shape, SHAPE_ATTR_STROKE, 0, value);
       svg_value_unref (value);
 
       g_strfreev (classes);
     }
 
-  if (shape->attrs & BIT (SHAPE_ATTR_STROKE_WIDTH))
+  if (_gtk_bitmask_get (shape->attrs, SHAPE_ATTR_STROKE_WIDTH))
     {
-      if (!(shape->attrs & BIT (SHAPE_ATTR_STROKE_MINWIDTH)))
+      if (!_gtk_bitmask_get (shape->attrs, SHAPE_ATTR_STROKE_MINWIDTH))
         {
           SvgValue *v;
-          v = svg_number_new (0.25 * svg_number_get (shape->base[SHAPE_ATTR_STROKE_WIDTH], 1));
-          shape_set_base_value (shape, SHAPE_ATTR_STROKE_MINWIDTH, v);
+          if (shape->base[SHAPE_ATTR_STROKE_WIDTH]->class == &SVG_NUMBER_CLASS)
+            v = svg_number_new (0.25 * svg_number_get (shape->base[SHAPE_ATTR_STROKE_WIDTH], 1));
+          else
+            v = svg_value_ref (shape->base[SHAPE_ATTR_STROKE_WIDTH]);
+          shape_set_base_value (shape, SHAPE_ATTR_STROKE_MINWIDTH, 0, v);
           svg_value_unref (v);
         }
-      if (!(shape->attrs & BIT (SHAPE_ATTR_STROKE_MAXWIDTH)))
+      if (!_gtk_bitmask_get (shape->attrs, SHAPE_ATTR_STROKE_MAXWIDTH))
         {
           SvgValue *v;
-          v = svg_number_new (1.5 * svg_number_get (shape->base[SHAPE_ATTR_STROKE_WIDTH], 1));
-          shape_set_base_value (shape, SHAPE_ATTR_STROKE_MAXWIDTH, v);
+          if (shape->base[SHAPE_ATTR_STROKE_WIDTH]->class == &SVG_NUMBER_CLASS)
+            v = svg_number_new (1.5 * svg_number_get (shape->base[SHAPE_ATTR_STROKE_WIDTH], 1));
+          else
+            v = svg_value_ref (shape->base[SHAPE_ATTR_STROKE_WIDTH]);
+          shape_set_base_value (shape, SHAPE_ATTR_STROKE_MAXWIDTH, 0, v);
           svg_value_unref (v);
         }
     }
 
-  if (shape->attrs & (BIT (SHAPE_ATTR_CLIP_PATH) | BIT (SHAPE_ATTR_MASK) | BIT (SHAPE_ATTR_HREF)))
+  if (_gtk_bitmask_get (shape->attrs, SHAPE_ATTR_CLIP_PATH) ||
+      _gtk_bitmask_get (shape->attrs, SHAPE_ATTR_MASK) ||
+      _gtk_bitmask_get (shape->attrs, SHAPE_ATTR_HREF) ||
+      _gtk_bitmask_get (shape->attrs, SHAPE_ATTR_MARKER_START) ||
+      _gtk_bitmask_get (shape->attrs, SHAPE_ATTR_MARKER_MID) ||
+      _gtk_bitmask_get (shape->attrs, SHAPE_ATTR_MARKER_END))
     g_ptr_array_add (data->pending_refs, shape);
 
-  if (shape->attrs & BIT (SHAPE_ATTR_FILL))
+  if (_gtk_bitmask_get (shape->attrs, SHAPE_ATTR_FILL))
     {
       SvgPaint *paint = (SvgPaint *) shape->base[SHAPE_ATTR_FILL];
-      if (paint->kind == PAINT_GRADIENT)
+      if (paint->kind == PAINT_SERVER)
         g_ptr_array_add (data->pending_refs, shape);
     }
 
-  if (shape->attrs & BIT (SHAPE_ATTR_STROKE))
+  if (_gtk_bitmask_get (shape->attrs, SHAPE_ATTR_STROKE))
     {
       SvgPaint *paint = (SvgPaint *) shape->base[SHAPE_ATTR_STROKE];
-      if (paint->kind == PAINT_GRADIENT)
+      if (paint->kind == PAINT_SERVER)
         g_ptr_array_add (data->pending_refs, shape);
     }
 
   if (shape_has_attr (shape->type, SHAPE_ATTR_RX) &&
       shape_has_attr (shape->type, SHAPE_ATTR_RY))
     {
-      if ((shape->attrs & (BIT (SHAPE_ATTR_RX) | BIT (SHAPE_ATTR_RY))) == BIT (SHAPE_ATTR_RX))
-        shape_set_base_value (shape, SHAPE_ATTR_RY, shape->base[SHAPE_ATTR_RX]);
-      else if ((shape->attrs & (BIT (SHAPE_ATTR_RX) | BIT (SHAPE_ATTR_RY))) == BIT (SHAPE_ATTR_RY))
-        shape_set_base_value (shape, SHAPE_ATTR_RX, shape->base[SHAPE_ATTR_RY]);
+      if (_gtk_bitmask_get (shape->attrs, SHAPE_ATTR_RX) &&
+          !_gtk_bitmask_get (shape->attrs, SHAPE_ATTR_RY))
+        shape_set_base_value (shape, SHAPE_ATTR_RY, 0, shape->base[SHAPE_ATTR_RX]);
+      else if (_gtk_bitmask_get (shape->attrs, SHAPE_ATTR_RY) &&
+               !_gtk_bitmask_get (shape->attrs, SHAPE_ATTR_RX))
+        shape_set_base_value (shape, SHAPE_ATTR_RX, 0, shape->base[SHAPE_ATTR_RY]);
     }
 
   if (shape_has_attr (shape->type, SHAPE_ATTR_FX) &&
       shape_has_attr (shape->type, SHAPE_ATTR_FY))
     {
-      if ((shape->attrs & (BIT (SHAPE_ATTR_CX) | BIT (SHAPE_ATTR_FX))) == BIT (SHAPE_ATTR_CX))
-        shape_set_base_value (shape, SHAPE_ATTR_FX, shape->base[SHAPE_ATTR_CX]);
-      if ((shape->attrs & (BIT (SHAPE_ATTR_CY) | BIT (SHAPE_ATTR_FY))) == BIT (SHAPE_ATTR_CY))
-        shape_set_base_value (shape, SHAPE_ATTR_FY, shape->base[SHAPE_ATTR_CY]);
+      if (_gtk_bitmask_get (shape->attrs, SHAPE_ATTR_CX) &&
+          !_gtk_bitmask_get (shape->attrs, SHAPE_ATTR_FX))
+        shape_set_base_value (shape, SHAPE_ATTR_FX, 0, shape->base[SHAPE_ATTR_CX]);
+      if (_gtk_bitmask_get (shape->attrs, SHAPE_ATTR_CY) &&
+          !_gtk_bitmask_get (shape->attrs, SHAPE_ATTR_FY))
+        shape_set_base_value (shape, SHAPE_ATTR_FY, 0, shape->base[SHAPE_ATTR_CY]);
     }
 }
 
@@ -9360,7 +11714,7 @@ parse_shape_gpa_attrs (Shape                *shape,
       value = svg_paint_parse_gpa (stroke_attr);
       if (value)
         {
-          shape_set_base_value (shape, SHAPE_ATTR_STROKE, value);
+          shape_set_base_value (shape, SHAPE_ATTR_STROKE, 0, value);
           svg_value_unref (value);
         }
       else
@@ -9374,7 +11728,7 @@ parse_shape_gpa_attrs (Shape                *shape,
       value = svg_paint_parse_gpa (fill_attr);
       if (value)
         {
-          shape_set_base_value (shape, SHAPE_ATTR_FILL, value);
+          shape_set_base_value (shape, SHAPE_ATTR_FILL, 0, value);
           svg_value_unref (value);
         }
       else
@@ -9392,13 +11746,13 @@ parse_shape_gpa_attrs (Shape                *shape,
           len == 3)
         {
           value = svg_number_new (v[0]);
-          shape_set_base_value (shape, SHAPE_ATTR_STROKE_MINWIDTH, value);
+          shape_set_base_value (shape, SHAPE_ATTR_STROKE_MINWIDTH, 0, value);
           svg_value_unref (value);
           value = svg_number_new (v[1]);
-          shape_set_base_value (shape, SHAPE_ATTR_STROKE_WIDTH, value);
+          shape_set_base_value (shape, SHAPE_ATTR_STROKE_WIDTH, 0, value);
           svg_value_unref (value);
           value = svg_number_new (v[2]);
-          shape_set_base_value (shape, SHAPE_ATTR_STROKE_MAXWIDTH, value);
+          shape_set_base_value (shape, SHAPE_ATTR_STROKE_MAXWIDTH, 0, value);
           svg_value_unref (value);
         }
       else
@@ -9542,7 +11896,7 @@ parse_shape_gpa_attrs (Shape                *shape,
     g_ptr_array_add (data->pending_refs, shape);
 
   /* our dasharray-based animations require unit path length */
-  if (shape->attrs & BIT (SHAPE_ATTR_PATH_LENGTH))
+  if (_gtk_bitmask_get (shape->attrs, SHAPE_ATTR_PATH_LENGTH))
     gtk_svg_invalid_attribute (data->svg, context, NULL, "Can't set pathLength and use gpa features");
 
   create_states (shape,
@@ -9614,155 +11968,49 @@ start_element_cb (GMarkupParseContext  *context,
 {
   ParserData *data = user_data;
   ShapeType shape_type;
-  Shape *shape;
+  Shape *shape = NULL;
   uint64_t handled = 0;
 
   if (data->skip.to)
     return;
 
-  if (strcmp (element_name, "svg") == 0)
+  if (strcmp (element_name, "metadata") == 0)
     {
-      const char *width_attr = NULL;
-      const char *height_attr = NULL;
-      const char *viewbox_attr = NULL;
-      const char *state_attr = NULL;
-      const char *version_attr = NULL;
-      const char *keywords_attr = NULL;
-      const char *preserve_aspect_ratio_attr = NULL;
-      double width, height;
+      return;
+    }
+  else if (strcmp (element_name, "rdf:RDF") == 0 ||
+           strcmp (element_name, "cc:Work") == 0 ||
+           strcmp (element_name, "dc:subject") == 0 ||
+           strcmp (element_name, "rdf:Bag") == 0 ||
+           strcmp (element_name, "rdf:li") == 0)
+    {
+      if (!has_ancestor (context, "metadata"))
+        skip_element (data, context, "Ignoring RDF elements outside <metadata>: <%s>", element_name);
 
-      if (data->current_shape != data->svg->content)
+      if (strcmp (element_name, "rdf:li") == 0)
         {
-          skip_element (data, context, "Nested <svg> elements are not supported");
-          return;
-        }
-
-      markup_filter_attributes (element_name,
-                                attr_names, attr_values,
-                                &handled,
-                                "width", &width_attr,
-                                "height", &height_attr,
-                                "viewBox", &viewbox_attr,
-                                "preserveAspectRatio", &preserve_aspect_ratio_attr,
-                                "gpa:state", &state_attr,
-                                "gpa:version", &version_attr,
-                                "gpa:keywords", &keywords_attr,
-                                NULL);
-
-      if (viewbox_attr)
-        {
-          GStrv strv;
-          unsigned int n;
-          double x, y, w, h;
-
-          strv = g_strsplit (viewbox_attr, " ", 0);
-          n = g_strv_length (strv);
-          if (n != 4 ||
-              !parse_length (strv[0], -DBL_MAX, DBL_MAX, &x) ||
-              !parse_length (strv[1], -DBL_MAX, DBL_MAX, &y) ||
-              !parse_length (strv[2], 0, DBL_MAX, &w) ||
-              !parse_length (strv[3], 0, DBL_MAX, &h))
-            gtk_svg_invalid_attribute (data->svg, context, "viewBox", NULL);
-          else
-            graphene_rect_init (&data->svg->view_box, x, y, w, h);
-          g_strfreev (strv);
-        }
-
-      width = data->svg->view_box.size.width;
-      if (width_attr)
-        {
-          if (!parse_length (width_attr, 0, DBL_MAX, &width))
-            gtk_svg_invalid_attribute (data->svg, context, "width", NULL);
-        }
-
-      height = data->svg->view_box.size.height;
-      if (height_attr)
-        {
-          if (!parse_length (height_attr, 0, DBL_MAX, &height))
-            gtk_svg_invalid_attribute (data->svg, context, "height", NULL);
-        }
-
-      data->svg->width = width;
-      data->svg->height = height;
-
-      if (preserve_aspect_ratio_attr)
-        {
-          GStrv strv;
-          unsigned int align;
-          unsigned int meet;
-
-          strv = g_strsplit (preserve_aspect_ratio_attr, " ", 0);
-          if (g_strv_length (strv) == 1)
+          /* Verify we're in the right place */
+          if (check_ancestors (context, "rdf:Bag", "dc:subject", "cc:Work", "rdf:RDF", "metadata", NULL))
             {
-              if (!parse_align (strv[0], &align))
-                {
-                  gtk_svg_invalid_attribute (data->svg, context, "preserveAspectRatio", NULL);
-                }
-              else
-                {
-                  data->svg->align = align;
-                  data->svg->meet_or_slice = MEET;
-                }
-            }
-          else if (g_strv_length (strv) == 2)
-            {
-
-              if (parse_align (strv[0], &align) &&
-                  parse_meet (strv[1], &meet))
-                {
-                  data->svg->align = align;
-                  data->svg->meet_or_slice = meet;
-                }
-              else
-                gtk_svg_invalid_attribute (data->svg, context, "preserveAspectRatio", NULL);
+              data->collect_text = TRUE;
+              g_string_set_size (data->text, 0);
             }
           else
-            gtk_svg_invalid_attribute (data->svg, context, "preserveAspectRatio", NULL);
+            skip_element (data, context, "Ignoring RDF element in wrong context: <%s>", element_name);
         }
-
-      if (state_attr)
-        {
-          double v;
-
-          if (strcmp (state_attr, "empty") == 0)
-            gtk_svg_set_state (data->svg, GTK_SVG_STATE_EMPTY);
-          else if (!parse_number (state_attr, -1, 63, &v))
-            gtk_svg_invalid_attribute (data->svg, context, "gpa:state", NULL);
-          else if (v < 0)
-            gtk_svg_set_state (data->svg, GTK_SVG_STATE_EMPTY);
-          else
-            gtk_svg_set_state (data->svg, (unsigned int) CLAMP (v, 0, 63));
-        }
-
-      if (version_attr)
-        {
-          unsigned int version;
-          char *end;
-
-          version = (unsigned int) g_ascii_strtoull (version_attr, &end, 10);
-          if ((end && *end != '\0') || version != 1)
-            gtk_svg_invalid_attribute (data->svg, context, "gpa:version", "must be 1");
-          else
-            data->svg->gpa_version = version;
-        }
-
-      if (keywords_attr)
-        data->svg->gpa_keywords = g_strdup (keywords_attr);
 
       return;
     }
   else if (strcmp (element_name, "style") == 0 ||
            strcmp (element_name, "title") == 0 ||
            strcmp (element_name, "desc") == 0 ||
-           strcmp (element_name, "metadata") == 0 ||
            g_str_has_prefix (element_name, "sodipodi:") ||
            g_str_has_prefix (element_name, "inkscape:"))
     {
       skip_element (data, context, "Ignoring metadata and style elements: <%s>", element_name);
       return;
     }
-  else if (strcmp (element_name, "filter") == 0 ||
-           strcmp (element_name, "pattern") == 0)
+  else if (strcmp (element_name, "filter") == 0)
     {
       skip_element (data, context, "Ignoring unsupported element: <%s>", element_name);
       return;
@@ -10055,15 +12303,12 @@ start_element_cb (GMarkupParseContext  *context,
 
       return;
     }
-  else if (shape_type_lookup (element_name, &shape_type))
-    {
-      shape = shape_new (data->current_shape, shape_type);
-    }
   else if (strcmp (element_name, "stop") == 0)
     {
       const char *parent = g_markup_parse_context_get_element_stack (context)->next->data;
       SvgValue *value;
       const char *style_attr = NULL;
+      unsigned int idx;
 
       if (strcmp (parent, "linearGradient") != 0 &&
           strcmp (parent, "radialGradient") != 0)
@@ -10073,6 +12318,7 @@ start_element_cb (GMarkupParseContext  *context,
         }
 
       shape_add_color_stop (data->current_shape);
+      idx = data->current_shape->color_stops->len - 1;
       for (unsigned int i = 0; attr_names[i]; i++)
         {
           if (strcmp (attr_names[i], "offset") == 0)
@@ -10081,7 +12327,7 @@ start_element_cb (GMarkupParseContext  *context,
               value = shape_attr_parse_value (SHAPE_ATTR_STOP_OFFSET, attr_values[i]);
               if (value)
                 {
-                  shape_set_base_value (data->current_shape, SHAPE_ATTR_STOP_OFFSET, value);
+                  shape_set_base_value (data->current_shape, SHAPE_ATTR_STOP_OFFSET, idx, value);
                   svg_value_unref (value);
                 }
               else
@@ -10093,7 +12339,7 @@ start_element_cb (GMarkupParseContext  *context,
               value = shape_attr_parse_value (SHAPE_ATTR_STOP_COLOR, attr_values[i]);
               if (value)
                 {
-                  shape_set_base_value (data->current_shape, SHAPE_ATTR_STOP_COLOR, value);
+                  shape_set_base_value (data->current_shape, SHAPE_ATTR_STOP_COLOR, idx, value);
                   svg_value_unref (value);
                 }
               else
@@ -10105,7 +12351,7 @@ start_element_cb (GMarkupParseContext  *context,
               value = shape_attr_parse_value (SHAPE_ATTR_STOP_OPACITY, attr_values[i]);
               if (value)
                 {
-                  shape_set_base_value (data->current_shape, SHAPE_ATTR_STOP_OPACITY, value);
+                  shape_set_base_value (data->current_shape, SHAPE_ATTR_STOP_OPACITY, idx, value);
                   svg_value_unref (value);
                 }
               else
@@ -10119,11 +12365,15 @@ start_element_cb (GMarkupParseContext  *context,
         }
 
       if (style_attr)
-        parse_style_attr (data->current_shape, style_attr, data, context);
+        parse_style_attr (data->current_shape, TRUE, style_attr, data, context);
 
       gtk_svg_check_unhandled_attributes (data->svg, context, attr_names, handled);
 
       return;
+    }
+  else if (shape_type_lookup (element_name, &shape_type))
+    {
+      shape = shape_new (data->current_shape, shape_type);
     }
   else
     {
@@ -10131,11 +12381,59 @@ start_element_cb (GMarkupParseContext  *context,
       return;
     }
 
-  if (!shape_types[data->current_shape->type].has_shapes)
+  if (data->current_shape &&
+      !shape_types[data->current_shape->type].has_shapes)
     {
       shape_free (shape);
       skip_element (data, context, "Parent element can't contain shapes");
       return;
+    }
+
+  if (data->current_shape == NULL && shape->type == SHAPE_SVG)
+    {
+      const char *state_attr = NULL;
+      const char *version_attr = NULL;
+      const char *keywords_attr = NULL;
+
+      data->svg->content = shape;
+
+      markup_filter_attributes (element_name,
+                                attr_names, attr_values,
+                                &handled,
+                                "xmlns*", NULL,
+                                "gpa:state", &state_attr,
+                                "gpa:version", &version_attr,
+                                "gpa:keywords", &keywords_attr,
+                                NULL);
+
+      if (state_attr)
+        {
+          double v;
+
+          if (strcmp (state_attr, "empty") == 0)
+            gtk_svg_set_state (data->svg, GTK_SVG_STATE_EMPTY);
+          else if (!parse_number (state_attr, -1, 63, &v))
+            gtk_svg_invalid_attribute (data->svg, context, "gpa:state", NULL);
+          else if (v < 0)
+            gtk_svg_set_state (data->svg, GTK_SVG_STATE_EMPTY);
+          else
+            gtk_svg_set_state (data->svg, (unsigned int) CLAMP (v, 0, 63));
+        }
+
+      if (version_attr)
+        {
+          unsigned int version;
+          char *end;
+
+          version = (unsigned int) g_ascii_strtoull (version_attr, &end, 10);
+          if ((end && *end != '\0') || version != 1)
+            gtk_svg_invalid_attribute (data->svg, context, "gpa:version", "must be 1");
+          else
+            data->svg->gpa_version = version;
+        }
+
+      if (keywords_attr)
+        data->svg->gpa_keywords = g_strdup (keywords_attr);
     }
 
   parse_shape_attrs (shape,
@@ -10149,8 +12447,20 @@ start_element_cb (GMarkupParseContext  *context,
 
   gtk_svg_check_unhandled_attributes (data->svg, context, attr_names, handled);
 
-  g_ptr_array_add (data->current_shape->shapes, shape);
+  if (data->current_shape)
+    g_ptr_array_add (data->current_shape->shapes, shape);
+
   data->shape_stack = g_slist_prepend (data->shape_stack, data->current_shape);
+
+  if (data->current_shape && (data->current_shape->type == SHAPE_TEXT || data->current_shape->type == SHAPE_TSPAN) && shape->type == SHAPE_TSPAN)
+  {
+    TextNode node = {
+      .type = TEXT_NODE_SHAPE,
+      .shape = { .shape = shape },
+    };
+    g_array_append_val (data->current_shape->text, node);
+  }
+
   data->current_shape = shape;
 
   if (shape->id)
@@ -10165,6 +12475,8 @@ end_element_cb (GMarkupParseContext *context,
 {
   ParserData *data = user_data;
   ShapeType shape_type;
+
+  data->collect_text = FALSE;
 
   if (data->skip.to != NULL)
     {
@@ -10191,7 +12503,11 @@ end_element_cb (GMarkupParseContext *context,
       return;
     }
 
-  if (shape_type_lookup (element_name, &shape_type))
+  if (strcmp (element_name, "rdf:li") == 0)
+    {
+      g_set_str (&data->svg->gpa_keywords, data->text->str);
+    }
+  else if (shape_type_lookup (element_name, &shape_type))
     {
       GSList *tos = data->shape_stack;
 
@@ -10208,6 +12524,31 @@ end_element_cb (GMarkupParseContext *context,
     {
       data->current_animation = NULL;
     }
+}
+
+static void
+text_cb (GMarkupParseContext  *context,
+         const char           *text,
+         size_t                len,
+         gpointer              user_data,
+         GError              **error)
+{
+  ParserData *data = user_data;
+
+  if (data->current_shape->type == SHAPE_TEXT || data->current_shape->type == SHAPE_TSPAN)
+    {
+      TextNode node = {
+        .type = TEXT_NODE_CHARACTERS,
+        .characters = { .text = g_strndup (text, len) }
+      };
+      g_array_append_val (data->current_shape->text, node);
+      return;
+    }
+
+  if (!data->collect_text)
+    return;
+
+  g_string_append_len (data->text, text, len);
 }
 
 static gboolean
@@ -10345,11 +12686,39 @@ resolve_href_ref (SvgValue   *value,
 {
   SvgHref *href = (SvgHref *) value;
 
-  if (href->kind == HREF_REF && href->shape == NULL)
+  if (href->kind != HREF_NONE && href->shape == NULL)
     {
       Shape *target = g_hash_table_lookup (data->shapes, href->ref);
       if (!target)
         gtk_svg_invalid_reference (data->svg, "No shape with ID %s (resolving <use>)", href->ref);
+      else
+        {
+          href->shape = target;
+          add_dependency_to_common_ancestor (shape, target);
+        }
+    }
+}
+
+static void
+resolve_marker_ref (SvgValue   *value,
+                    Shape      *shape,
+                    ParserData *data)
+{
+  SvgHref *href = (SvgHref *) value;
+
+  if (href->kind != HREF_NONE && href->shape == NULL)
+    {
+      Shape *target = g_hash_table_lookup (data->shapes, href->ref);
+      if (!target)
+        {
+          gtk_svg_invalid_reference (data->svg, "No shape with ID %s", href->ref);
+        }
+      else if (target->type != SHAPE_MARKER)
+        {
+          gtk_svg_invalid_reference (data->svg,
+                                     "Shape with ID %s not a <marker>",
+                                     href->ref);
+        }
       else
         {
           href->shape = target;
@@ -10365,17 +12734,18 @@ resolve_paint_ref (SvgValue   *value,
 {
   SvgPaint *paint = (SvgPaint *) value;
 
-  if (paint->kind == PAINT_GRADIENT && paint->gradient.shape == NULL)
+  if (paint->kind == PAINT_SERVER && paint->server.shape == NULL)
     {
-      Shape *target = g_hash_table_lookup (data->shapes, paint->gradient.ref);
+      Shape *target = g_hash_table_lookup (data->shapes, paint->server.ref);
       if (!target)
-        gtk_svg_invalid_reference (data->svg, "No shape with ID %s (resolving fill or stroke)", paint->gradient.ref);
+        gtk_svg_invalid_reference (data->svg, "No shape with ID %s (resolving fill or stroke)", paint->server.ref);
       else if (target->type != SHAPE_LINEAR_GRADIENT &&
-               target->type != SHAPE_RADIAL_GRADIENT)
-        gtk_svg_invalid_reference (data->svg, "Shape with ID %s not a gradient (resolving fill or stroke)", paint->gradient.ref);
+               target->type != SHAPE_RADIAL_GRADIENT &&
+               target->type != SHAPE_PATTERN)
+        gtk_svg_invalid_reference (data->svg, "Shape with ID %s not a paint server (resolving fill or stroke)", paint->server.ref);
       else
         {
-          paint->gradient.shape = target;
+          paint->server.shape = target;
           add_dependency_to_common_ancestor (shape, target);
         }
     }
@@ -10430,6 +12800,13 @@ resolve_animation_refs (Shape      *shape,
           for (unsigned int j = 0; j < a->n_frames; j++)
             resolve_href_ref (a->frames[j].value, a->shape, data);
         }
+      else if (a->attr == SHAPE_ATTR_MARKER_START ||
+               a->attr == SHAPE_ATTR_MARKER_MID ||
+               a->attr == SHAPE_ATTR_MARKER_END)
+        {
+          for (unsigned int j = 0; j < a->n_frames; j++)
+            resolve_marker_ref (a->frames[j].value, a->shape, data);
+        }
       else if (a->attr == SHAPE_ATTR_FILL ||
                a->attr == SHAPE_ATTR_STROKE)
         {
@@ -10475,6 +12852,9 @@ resolve_shape_refs (Shape      *shape,
   resolve_clip_ref (shape->base[SHAPE_ATTR_CLIP_PATH], shape, data);
   resolve_mask_ref (shape->base[SHAPE_ATTR_MASK], shape, data);
   resolve_href_ref (shape->base[SHAPE_ATTR_HREF], shape, data);
+  resolve_marker_ref (shape->base[SHAPE_ATTR_MARKER_START], shape, data);
+  resolve_marker_ref (shape->base[SHAPE_ATTR_MARKER_MID], shape, data);
+  resolve_marker_ref (shape->base[SHAPE_ATTR_MARKER_END], shape, data);
   resolve_paint_ref (shape->base[SHAPE_ATTR_FILL], shape, data);
   resolve_paint_ref (shape->base[SHAPE_ATTR_STROKE], shape, data);
   resolve_attach_ref (shape, data);
@@ -10564,14 +12944,16 @@ gtk_svg_init_from_bytes (GtkSvg *self,
   GMarkupParser parser = {
     start_element_cb,
     end_element_cb,
-    NULL,
+    text_cb,
     NULL,
     NULL,
   };
   GError *error = NULL;
 
+  g_clear_pointer (&self->content, shape_free);
+
   data.svg = self;
-  data.current_shape = self->content;
+  data.current_shape = NULL;
   data.shape_stack = NULL;
   data.shapes = g_hash_table_new (g_str_hash, g_str_equal);
   data.animations = g_hash_table_new (g_str_hash, g_str_equal);
@@ -10580,6 +12962,8 @@ gtk_svg_init_from_bytes (GtkSvg *self,
   data.pending_refs = g_ptr_array_new ();
   data.skip.to = NULL;
   data.skip.reason = NULL;
+  data.text = g_string_new ("");
+  data.collect_text = FALSE;
 
   context = g_markup_parse_context_new (&parser, G_MARKUP_PREFIX_ERROR_POSITION, &data, NULL);
   if (!g_markup_parse_context_parse (context,
@@ -10599,7 +12983,7 @@ gtk_svg_init_from_bytes (GtkSvg *self,
     }
   else
     {
-      g_assert (data.current_shape == self->content);
+      g_assert (data.current_shape == NULL);
       g_assert (data.shape_stack == NULL);
       g_assert (data.current_animation == NULL);
       g_assert (data.skip.to == NULL);
@@ -10607,6 +12991,24 @@ gtk_svg_init_from_bytes (GtkSvg *self,
     }
 
   g_markup_parse_context_free (context);
+
+  if (self->content == NULL)
+    self->content = shape_new (NULL, SHAPE_SVG);
+
+  if (_gtk_bitmask_get (self->content->attrs, SHAPE_ATTR_VIEW_BOX))
+    {
+      SvgViewBox *vb = (SvgViewBox *) self->content->base[SHAPE_ATTR_VIEW_BOX];
+      self->width = vb->view_box.size.width;
+      self->height = vb->view_box.size.height;
+    }
+
+  if (_gtk_bitmask_get (self->content->attrs, SHAPE_ATTR_WIDTH))
+    self->width = svg_number_get (self->content->base[SHAPE_ATTR_WIDTH], 1);
+
+  if (_gtk_bitmask_get (self->content->attrs, SHAPE_ATTR_HEIGHT))
+    self->height = svg_number_get (self->content->base[SHAPE_ATTR_HEIGHT], 1);
+
+  graphene_rect_init (&self->viewport, 0, 0, self->width, self->height);
 
   for (unsigned int i = 0; i < data.pending_animations->len; i++)
     {
@@ -10644,6 +13046,7 @@ gtk_svg_init_from_bytes (GtkSvg *self,
   g_hash_table_unref (data.animations);
   g_ptr_array_unref (data.pending_animations);
   g_ptr_array_unref (data.pending_refs);
+  g_string_free (data.text, TRUE);
 }
 
 /* }}} */
@@ -10670,6 +13073,12 @@ serialize_shape_attrs (GString              *s,
                        Shape                *shape,
                        GtkSvgSerializeFlags  flags)
 {
+  GString *classes = g_string_new ("");
+  GString *style = g_string_new ("");
+  const char *names[] = {
+    "foreground", "error", "warning", "success", "accent",
+  };
+
   if (shape->id)
     {
       indent_for_attr (s, indent);
@@ -10682,31 +13091,88 @@ serialize_shape_attrs (GString              *s,
       g_string_append (s, "display='none'");
     }
 
-  for (ShapeAttr attr = 0; attr < G_N_ELEMENTS (shape_attrs); attr++)
+  for (ShapeAttr attr = FIRST_SHAPE_ATTR; attr <= LAST_SHAPE_ATTR; attr++)
     {
       if (!shape_has_attr (shape->type, attr))
         continue;
 
-      if ((shape->attrs & BIT (attr)) || (flags & GTK_SVG_SERIALIZE_AT_CURRENT_TIME))
+      if (_gtk_bitmask_get (shape->attrs, attr) ||
+          (flags & GTK_SVG_SERIALIZE_AT_CURRENT_TIME))
         {
           SvgValue *value;
 
           if (flags & GTK_SVG_SERIALIZE_AT_CURRENT_TIME)
-            value = shape_get_current_value (shape, attr);
+            value = shape_get_current_value (shape, attr, 0);
           else
-            value = shape_get_base_value (shape, NULL, attr);
+            value = shape_get_base_value (shape, NULL, attr, 0);
 
           if (value &&
-              ((shape->attrs & BIT (attr)) != 0 ||
-               !svg_value_equal (value, shape_attr_get_initial_value (attr, shape->type))))
+              (_gtk_bitmask_get (shape->attrs, attr) ||
+               !svg_value_equal (value, shape_attr_get_initial_value (attr, shape))))
             {
-              indent_for_attr (s, indent);
-              g_string_append_printf (s, "%s='", shape_attr_get_presentation (attr, shape->type));
-              svg_value_print (value, s);
-              g_string_append_c (s, '\'');
+              if (shape_can_set_attr (shape->type, attr, FALSE))
+                {
+                  indent_for_attr (s, indent);
+                  g_string_append_printf (s, "%s='", shape_attr_get_presentation (attr, shape->type));
+                  svg_value_print (value, s);
+                  g_string_append_c (s, '\'');
+                }
+              else
+                {
+                  if (style->len > 0)
+                    g_string_append (style, "; ");
+                  g_string_append_printf (style, "%s: ", shape_attr_get_presentation (attr, shape->type));
+                  svg_value_print (value, style);
+                }
+            }
+
+          if (value && attr == SHAPE_ATTR_FILL)
+            {
+              SvgPaint *paint = (SvgPaint *) value;
+
+              if (paint->kind == PAINT_NONE)
+                {
+                  g_string_append_printf (classes, "%stransparent-fill",
+                                          classes->len > 0 ? " " : "");
+                }
+              else if (paint->kind == PAINT_SYMBOLIC)
+                {
+                  g_string_append_printf (classes, "%s%s %s-fill",
+                                          classes->len > 0 ? " " : "",
+                                          names[paint->symbolic],
+                                          names[paint->symbolic]);
+                }
+            }
+          if (value && attr == SHAPE_ATTR_STROKE)
+            {
+              SvgPaint *paint = (SvgPaint *) value;
+
+              if (paint->kind == PAINT_SYMBOLIC)
+                {
+                  g_string_append_printf (classes, "%s%s-stroke",
+                                          classes->len > 0 ? " " : "",
+                                          names[paint->symbolic]);
+                }
             }
         }
     }
+
+  if (shape_types[shape->type].has_gpa_attrs &&
+      (flags & GTK_SVG_SERIALIZE_EXPAND_GPA_ATTRS) == 0 &&
+      classes->len > 0)
+    {
+      indent_for_attr (s, indent);
+      g_string_append_printf (s, "class='%s'", classes->str);
+    }
+
+  if (style->len > 0)
+    {
+      indent_for_attr (s, indent);
+      g_string_append_printf (s, "style='%s'", style->str);
+    }
+
+  g_string_free (classes, TRUE);
+  g_string_free (style, TRUE);
 }
 
 static void
@@ -10748,13 +13214,16 @@ serialize_gpa_attrs (GString              *s,
   SvgValue **values;
   SvgPaint *paint;
 
+  if (svg->gpa_version == 0 || !shape_types[shape->type].has_gpa_attrs)
+    return;
+
   if (flags & GTK_SVG_SERIALIZE_AT_CURRENT_TIME)
     values = shape->current;
   else
     values = shape->base;
 
-  if ((shape->attrs & BIT (SHAPE_ATTR_STROKE_MINWIDTH)) ||
-      (shape->attrs & BIT (SHAPE_ATTR_STROKE_MAXWIDTH)))
+  if (_gtk_bitmask_get (shape->attrs, SHAPE_ATTR_STROKE_MINWIDTH) ||
+      _gtk_bitmask_get (shape->attrs, SHAPE_ATTR_STROKE_MAXWIDTH))
     {
       indent_for_attr (s, indent);
       g_string_append (s, "gpa:stroke-width='");
@@ -10767,7 +13236,8 @@ serialize_gpa_attrs (GString              *s,
     }
 
   paint = (SvgPaint *) values[SHAPE_ATTR_STROKE];
-  if (shape->attrs & BIT (SHAPE_ATTR_STROKE) && paint->kind == PAINT_SYMBOLIC)
+  if (_gtk_bitmask_get (shape->attrs, SHAPE_ATTR_STROKE) &&
+      paint->kind == PAINT_SYMBOLIC)
     {
       indent_for_attr (s, indent);
       g_string_append (s, "gpa:stroke='");
@@ -10775,8 +13245,9 @@ serialize_gpa_attrs (GString              *s,
       g_string_append_c (s, '\'');
     }
 
-  paint = (SvgPaint *) values[SHAPE_ATTR_STROKE];
-  if (shape->attrs & BIT (SHAPE_ATTR_FILL) && paint->kind == PAINT_SYMBOLIC)
+  paint = (SvgPaint *) values[SHAPE_ATTR_FILL];
+  if (_gtk_bitmask_get (shape->attrs, SHAPE_ATTR_FILL) &&
+      paint->kind == PAINT_SYMBOLIC)
     {
       indent_for_attr (s, indent);
       g_string_append (s, "gpa:fill='");
@@ -10784,7 +13255,7 @@ serialize_gpa_attrs (GString              *s,
       g_string_append_c (s, '\'');
     }
 
-  if (flags & GTK_SVG_SERIALIZE_INCLUDE_GPA_ATTRS)
+  if ((flags & GTK_SVG_SERIALIZE_EXPAND_GPA_ATTRS) == 0)
     {
       if (shape->gpa.states != ALL_STATES)
         {
@@ -11251,9 +13722,9 @@ serialize_animation_motion (GString              *s,
       GskPath *path;
 
       if (flags & GTK_SVG_SERIALIZE_AT_CURRENT_TIME)
-        path = animation_motion_get_current_path (a, &svg->view_box.size);
+        path = animation_motion_get_current_path (a, &svg->viewport);
       else
-        path = animation_motion_get_base_path (a, &svg->view_box.size);
+        path = animation_motion_get_base_path (a, &svg->viewport);
       if (path)
         {
           indent_for_attr (s, indent);
@@ -11276,7 +13747,7 @@ serialize_animation (GString              *s,
   if (flags & GTK_SVG_SERIALIZE_EXCLUDE_ANIMATION)
     return;
 
-  if (flags & GTK_SVG_SERIALIZE_INCLUDE_GPA_ATTRS)
+  if ((flags & GTK_SVG_SERIALIZE_EXPAND_GPA_ATTRS) == 0)
     {
       if (a->id && g_str_has_prefix (a->id, "gpa:"))
         return;
@@ -11335,8 +13806,7 @@ serialize_color_stop (GString              *s,
   for (unsigned int i = 0; i < shape->animations->len; i++)
     {
       Animation *a = g_ptr_array_index (shape->animations, i);
-      if (SHAPE_ATTR_STOP_OPACITY + N_STOP_PROPS * idx <= a->attr &&
-          a->attr < SHAPE_ATTR_STOP_OPACITY + N_STOP_PROPS * (idx + 1))
+      if (a->idx == idx)
         {
           serialize_animation (s, svg, indent + 2, a, flags);
         }
@@ -11375,7 +13845,29 @@ serialize_shape (GString              *s,
         serialize_animation (s, svg, indent, a, flags);
     }
 
-  if (shape_types[shape->type].has_shapes)
+  if (shape->type == SHAPE_TEXT || shape->type == SHAPE_TSPAN)
+    {
+      for (guint i = 0; i < shape->text->len; i++)
+        {
+          TextNode *node = &g_array_index (shape->text, TextNode, i);
+          switch (node->type)
+            {
+            case TEXT_NODE_SHAPE:
+              serialize_shape (s, svg, indent + 2, node->shape.shape, flags);
+              break;
+            case TEXT_NODE_CHARACTERS:
+              {
+                char *escaped = g_markup_escape_text (node->characters.text, -1);
+                g_string_append (s, escaped);
+                g_free (escaped);
+              }
+              break;
+            default:
+              g_assert_not_reached ();
+            }
+        }
+    }
+  else if (shape_types[shape->type].has_shapes)
     {
       for (unsigned int i = 0; i < shape->shapes->len; i++)
         {
@@ -11396,52 +13888,93 @@ serialize_shape (GString              *s,
 
 typedef enum
 {
-  RENDERING,
   CLIPPING,
   MASKING,
+  RENDERING,
+  MARKERS,
 } RenderOp;
 
 typedef struct
 {
   GtkSvg *svg;
-  const graphene_size_t *viewport;
+  double width;
+  double height;
+  const graphene_rect_t *viewport;
+  GSList *viewport_stack;
   GtkSnapshot *snapshot;
-  graphene_rect_t bounds;
   int64_t current_time;
   const GdkRGBA *colors;
   size_t n_colors;
   double weight;
   RenderOp op;
-  GskFillRule clip_rule;
   GSList *op_stack;
   int depth;
+  Shape *ctx_shape;
+  GSList *ctx_shape_stack;
 } PaintContext;
 
 static void
 push_op (PaintContext *context,
-         RenderOp      op,
-         GskFillRule   clip_rule)
+         RenderOp      op)
 {
-  unsigned int val = ((context->op << 16) | context->clip_rule);
-  context->op_stack = g_slist_prepend (context->op_stack, GUINT_TO_POINTER (val));
+  context->op_stack = g_slist_prepend (context->op_stack, GUINT_TO_POINTER (context->op));
   context->op = op;
-  context->clip_rule = clip_rule;
 }
 
 static void
 pop_op (PaintContext *context)
 {
   GSList *tos = context->op_stack;
-  guint val;
 
   g_assert (tos != NULL);
 
-  val = GPOINTER_TO_UINT (tos->data);
-  context->op = val >> 16;
-  context->clip_rule = val & 0xffff;
-
+  context->op = GPOINTER_TO_UINT (tos->data);
   context->op_stack = context->op_stack->next;
   g_slist_free_1 (tos);
+}
+
+static void
+push_ctx_shape (PaintContext *context,
+                Shape        *shape)
+{
+  context->ctx_shape_stack = g_slist_prepend (context->ctx_shape_stack, context->ctx_shape);
+  context->ctx_shape = shape;
+}
+
+static void
+pop_ctx_shape (PaintContext *context)
+{
+  GSList *tos = context->ctx_shape_stack;
+
+  g_assert (tos != NULL);
+
+  context->ctx_shape = (Shape *) tos->data;
+  context->ctx_shape_stack = context->ctx_shape_stack->next;
+  g_slist_free_1 (tos);
+}
+
+static void
+push_viewport (PaintContext          *context,
+               const graphene_rect_t *viewport)
+{
+  context->viewport_stack = g_slist_prepend (context->viewport_stack,
+                                             (gpointer) context->viewport);
+  context->viewport = viewport;
+}
+
+static const graphene_rect_t *
+pop_viewport (PaintContext *context)
+{
+  GSList *tos = context->viewport_stack;
+  const graphene_rect_t *viewport = context->viewport;
+
+  g_assert (tos != NULL);
+
+  context->viewport = (const graphene_rect_t *) tos->data;
+  context->viewport_stack = tos->next;
+  g_slist_free_1 (tos);
+
+  return viewport;
 }
 
 static void paint_shape (Shape        *shape,
@@ -11451,6 +13984,48 @@ static void pop_context (Shape        *shape,
 static void render_shape (Shape        *shape,
                           PaintContext *context);
 
+static gboolean
+needs_isolation (Shape        *shape,
+                 PaintContext *context)
+{
+  if (context->op != CLIPPING)
+    {
+      SvgValue *isolation = shape->current[SHAPE_ATTR_ISOLATION];
+      SvgValue *opacity = shape->current[SHAPE_ATTR_OPACITY];
+      SvgValue *blend = shape->current[SHAPE_ATTR_BLEND_MODE];
+      SvgFilter *filter = (SvgFilter *) shape->current[SHAPE_ATTR_FILTER];
+      SvgTransform *tf = (SvgTransform *) shape->current[SHAPE_ATTR_TRANSFORM];
+      GskTransform *transform;
+
+      if (shape->type == SHAPE_SVG && shape->parent == NULL)
+        return TRUE;
+
+      if (context->op == MASKING && shape->type == SHAPE_MASK)
+        return TRUE;
+
+      if (svg_enum_get (isolation) == ISOLATION_ISOLATE)
+        return TRUE;
+
+      if (svg_number_get (opacity, 1) != 1)
+        return TRUE;
+
+      if (svg_enum_get (blend) != GSK_BLEND_MODE_DEFAULT)
+        return TRUE;
+
+      if (filter->n_functions > 0 && filter->functions[0].kind != FILTER_NONE)
+        return TRUE;
+
+      transform = svg_transform_get_gsk (tf);
+      if (gsk_transform_get_category (transform) <= GSK_TRANSFORM_CATEGORY_3D)
+        {
+          gsk_transform_unref (transform);
+          return TRUE;
+        }
+      gsk_transform_unref (transform);
+    }
+
+  return FALSE;
+}
 
 static void
 push_context (Shape        *shape,
@@ -11461,68 +14036,107 @@ push_context (Shape        *shape,
   SvgClip *clip = (SvgClip *) shape->current[SHAPE_ATTR_CLIP_PATH];
   SvgMask *mask = (SvgMask *) shape->current[SHAPE_ATTR_MASK];
   SvgTransform *tf = (SvgTransform *) shape->current[SHAPE_ATTR_TRANSFORM];
+  SvgValue *blend = shape->current[SHAPE_ATTR_BLEND_MODE];
 
-  for (unsigned int i = filter->n_functions; i > 0; i--)
+  if (shape->type == SHAPE_SVG)
     {
-      FilterFunction *f = &filter->functions[i - 1];
+      double x, y, width, height;
+      SvgViewBox *vb;
+      SvgContentFit *cf;
+      SvgValue *overflow;
+      double sx, sy, tx, ty;
+      graphene_rect_t view_box;
+      graphene_rect_t *viewport;
 
-      switch (f->kind)
+      if (shape->parent == NULL)
         {
-        case FILTER_NONE:
-          break;
-        case FILTER_BLUR:
-          gtk_snapshot_push_blur (context->snapshot, f->value);
-          break;
-        case FILTER_OPACITY:
-          gtk_snapshot_push_opacity (context->snapshot, f->value);
-          break;
-        case FILTER_BRIGHTNESS:
-        case FILTER_CONTRAST:
-        case FILTER_GRAYSCALE:
-        case FILTER_HUE_ROTATE:
-        case FILTER_INVERT:
-        case FILTER_SATURATE:
-        case FILTER_SEPIA:
-          {
-            graphene_matrix_t matrix;
-            graphene_vec4_t offset;
-            svg_filter_get_matrix (f, &matrix, &offset);
-            gtk_snapshot_push_color_matrix (context->snapshot, &matrix, &offset);
-          }
-          break;
-        case FILTER_ALPHA_LEVEL:
-          {
-            GskComponentTransfer *identity, *alpha;
-            float values[10];
-
-            identity = gsk_component_transfer_new_identity ();
-            for (unsigned int j = 0; j < 10; j++)
-              {
-                if ((j + 1) / 10.0 <= f->value)
-                  values[j] = 0;
-                else
-                  values[j] = 1;
-              }
-            alpha = gsk_component_transfer_new_discrete (10, values);
-            gtk_snapshot_push_component_transfer (context->snapshot, identity, identity, identity, alpha);
-            gsk_component_transfer_free (identity);
-            gsk_component_transfer_free (alpha);
-          }
-          break;
-        default:
-          g_assert_not_reached ();
+          x = 0;
+          y = 0;
         }
+      else
+        {
+          x = svg_number_get (shape->current[SHAPE_ATTR_X], context->viewport->size.width);
+          y = svg_number_get (shape->current[SHAPE_ATTR_Y], context->viewport->size.height);
+        }
+
+      width = svg_number_get (shape->current[SHAPE_ATTR_WIDTH], context->viewport->size.width);
+      height = svg_number_get (shape->current[SHAPE_ATTR_HEIGHT], context->viewport->size.height);
+
+      vb = (SvgViewBox *) shape->current[SHAPE_ATTR_VIEW_BOX];
+      cf = (SvgContentFit *) shape->current[SHAPE_ATTR_CONTENT_FIT];
+      overflow = shape->current[SHAPE_ATTR_OVERFLOW];
+
+      if (vb->unset)
+        graphene_rect_init (&view_box, 0, 0, width, height);
+      else
+        view_box = vb->view_box;
+
+      viewport = g_new (graphene_rect_t, 1);
+      graphene_rect_init (viewport, x, y, width, height);
+
+      compute_viewport_transform (cf->is_none,
+                                  cf->align_x,
+                                  cf->align_y,
+                                  cf->meet,
+                                  &view_box,
+                                  x, y, width, height,
+                                  &sx, &sy, &tx, &ty);
+
+      push_viewport (context, viewport);
+
+      if (svg_enum_get (overflow) == OVERFLOW_HIDDEN)
+        gtk_snapshot_push_clip (context->snapshot, viewport);
+
+      gtk_snapshot_save (context->snapshot);
+
+      gtk_snapshot_translate (context->snapshot, &GRAPHENE_POINT_INIT (tx, ty));
+      gtk_snapshot_scale (context->snapshot, sx, sy);
     }
 
-  if (svg_number_get (opacity, 1) != 1)
-    gtk_snapshot_push_opacity (context->snapshot, svg_number_get (opacity, 1));
+  if (tf->transforms[0].type != TRANSFORM_NONE)
+    {
+      GskTransform *transform = svg_transform_get_gsk (tf);
+
+      gtk_snapshot_save (context->snapshot);
+      gtk_snapshot_transform (context->snapshot, transform);
+      gsk_transform_unref (transform);
+    }
+
+  if (shape->type == SHAPE_USE)
+    {
+      double x, y;
+
+      x = svg_number_get (shape->current[SHAPE_ATTR_X], context->viewport->size.width);
+      y = svg_number_get (shape->current[SHAPE_ATTR_Y], context->viewport->size.height);
+      gtk_snapshot_save (context->snapshot);
+      gtk_snapshot_translate (context->snapshot, &GRAPHENE_POINT_INIT (x, y));
+    }
+
+  if (context->op != CLIPPING)
+    {
+      if (needs_isolation (shape, context))
+        gtk_snapshot_push_isolation (context->snapshot, GSK_ISOLATION_ALL);
+
+      if (svg_enum_get (blend) != GSK_BLEND_MODE_DEFAULT)
+        {
+          graphene_rect_t bounds;
+
+          shape_get_current_bounds (shape, context->viewport, &bounds);
+
+          gtk_snapshot_push_copy (context->snapshot);
+          gtk_snapshot_push_blend (context->snapshot, svg_enum_get (blend));
+          gtk_snapshot_append_paste (context->snapshot, &bounds, 0);
+          gtk_snapshot_pop (context->snapshot);
+        }
+    }
 
   if (clip->kind == CLIP_PATH ||
       (clip->kind == CLIP_REF && clip->ref.shape != NULL))
     {
-      push_op (context, CLIPPING, svg_enum_get (shape->current[SHAPE_ATTR_CLIP_RULE]));
+      push_op (context, CLIPPING);
       gtk_snapshot_push_mask (context->snapshot, GSK_MASK_MODE_ALPHA);
 
+      /* Clip mask - see language in the spec about 'raw geometry' */
       if (clip->kind == CLIP_PATH)
         {
           gtk_snapshot_append_fill (context->snapshot,
@@ -11532,7 +14146,25 @@ push_context (Shape        *shape,
         }
       else
         {
+          if (svg_enum_get (clip->ref.shape->current[SHAPE_ATTR_CONTENT_UNITS]) == COORD_UNITS_OBJECT_BOUNDING_BOX)
+            {
+              graphene_rect_t bounds;
+
+              gtk_snapshot_save (context->snapshot);
+
+              if (shape_get_current_bounds (shape, context->viewport, &bounds))
+                {
+                  gtk_snapshot_translate (context->snapshot, &bounds.origin);
+                  gtk_snapshot_scale (context->snapshot, bounds.size.width, bounds.size.height);
+                }
+            }
+
           render_shape (clip->ref.shape, context);
+
+          if (svg_enum_get (clip->ref.shape->current[SHAPE_ATTR_CONTENT_UNITS]) == COORD_UNITS_OBJECT_BOUNDING_BOX)
+            {
+              gtk_snapshot_restore (context->snapshot);
+            }
         }
 
       gtk_snapshot_pop (context->snapshot);
@@ -11542,25 +14174,129 @@ push_context (Shape        *shape,
 
   if (mask->kind != MASK_NONE && (mask->shape != NULL))
     {
-      push_op (context, MASKING, context->clip_rule);
+      gboolean has_clip = FALSE;
 
-      gtk_snapshot_push_mask (context->snapshot, svg_enum_get (shape->current[SHAPE_ATTR_MASK_TYPE]));
+      push_op (context, MASKING);
+
+      gtk_snapshot_push_mask (context->snapshot, svg_enum_get (mask->shape->current[SHAPE_ATTR_MASK_TYPE]));
+
+      if (_gtk_bitmask_get (mask->shape->attrs, SHAPE_ATTR_X) ||
+          _gtk_bitmask_get (mask->shape->attrs, SHAPE_ATTR_Y) ||
+          _gtk_bitmask_get (mask->shape->attrs, SHAPE_ATTR_WIDTH) ||
+          _gtk_bitmask_get (mask->shape->attrs, SHAPE_ATTR_HEIGHT))
+        {
+           graphene_rect_t mask_clip;
+
+          if (svg_enum_get (mask->shape->current[SHAPE_ATTR_BOUND_UNITS]) == COORD_UNITS_OBJECT_BOUNDING_BOX)
+            {
+              graphene_rect_t bounds;
+
+              if (shape_get_current_bounds (shape, context->viewport, &bounds))
+                {
+                  mask_clip.origin.x = bounds.origin.x + svg_number_get (mask->shape->current[SHAPE_ATTR_X], bounds.size.width);
+                  mask_clip.origin.y = bounds.origin.y + svg_number_get (mask->shape->current[SHAPE_ATTR_Y], bounds.size.height);
+                  mask_clip.size.width = svg_number_get (mask->shape->current[SHAPE_ATTR_WIDTH], bounds.size.width);
+                  mask_clip.size.height = svg_number_get (mask->shape->current[SHAPE_ATTR_HEIGHT], bounds.size.height);
+                  has_clip = TRUE;
+                }
+            }
+          else
+            {
+              mask_clip.origin.x = svg_number_get (mask->shape->current[SHAPE_ATTR_X], context->viewport->size.width);
+              mask_clip.origin.y = svg_number_get (mask->shape->current[SHAPE_ATTR_Y], context->viewport->size.height);
+              mask_clip.size.width = svg_number_get (mask->shape->current[SHAPE_ATTR_WIDTH], context->viewport->size.width);
+              mask_clip.size.height = svg_number_get (mask->shape->current[SHAPE_ATTR_HEIGHT], context->viewport->size.height);
+              has_clip = TRUE;
+            }
+
+          if (has_clip)
+            gtk_snapshot_push_clip (context->snapshot, &mask_clip);
+        }
+
+      if (svg_enum_get (mask->shape->current[SHAPE_ATTR_CONTENT_UNITS]) == COORD_UNITS_OBJECT_BOUNDING_BOX)
+        {
+          graphene_rect_t bounds;
+
+          gtk_snapshot_save (context->snapshot);
+
+          if (shape_get_current_bounds (shape, context->viewport, &bounds))
+            {
+              gtk_snapshot_translate (context->snapshot, &bounds.origin);
+              gtk_snapshot_scale (context->snapshot, bounds.size.width, bounds.size.height);
+            }
+        }
 
       render_shape (mask->shape, context);
+
+      if (svg_enum_get (mask->shape->current[SHAPE_ATTR_CONTENT_UNITS]) == COORD_UNITS_OBJECT_BOUNDING_BOX)
+        {
+          gtk_snapshot_restore (context->snapshot);
+        }
+
+      if (has_clip)
+        gtk_snapshot_pop (context->snapshot);
 
       gtk_snapshot_pop (context->snapshot);
 
       pop_op (context);
     }
 
-  if (tf->transforms[0].type != TRANSFORM_NONE)
+  if (context->op != CLIPPING)
     {
-      GskTransform *transform;
+      if (svg_number_get (opacity, 1) != 1)
+        gtk_snapshot_push_opacity (context->snapshot, svg_number_get (opacity, 1));
 
-      transform = svg_transform_get_gsk (tf);
-      gtk_snapshot_save (context->snapshot);
-      gtk_snapshot_transform (context->snapshot, transform);
-      gsk_transform_unref (transform);
+      for (unsigned int i = filter->n_functions; i > 0; i--)
+        {
+          FilterFunction *f = &filter->functions[i - 1];
+
+          switch (f->kind)
+            {
+            case FILTER_NONE:
+              break;
+            case FILTER_BLUR:
+              gtk_snapshot_push_blur (context->snapshot, f->value);
+              break;
+            case FILTER_OPACITY:
+              gtk_snapshot_push_opacity (context->snapshot, f->value);
+              break;
+            case FILTER_BRIGHTNESS:
+            case FILTER_CONTRAST:
+            case FILTER_GRAYSCALE:
+            case FILTER_HUE_ROTATE:
+            case FILTER_INVERT:
+            case FILTER_SATURATE:
+            case FILTER_SEPIA:
+              {
+                graphene_matrix_t matrix;
+                graphene_vec4_t offset;
+                svg_filter_get_matrix (f, &matrix, &offset);
+                gtk_snapshot_push_color_matrix (context->snapshot, &matrix, &offset);
+              }
+              break;
+            case FILTER_ALPHA_LEVEL:
+              {
+                GskComponentTransfer *identity, *alpha;
+                float values[10];
+
+                identity = gsk_component_transfer_new_identity ();
+                for (unsigned int j = 0; j < 10; j++)
+                  {
+                    if ((j + 1) / 10.0 <= f->value)
+                      values[j] = 0;
+                    else
+                      values[j] = 1;
+                  }
+                alpha = gsk_component_transfer_new_discrete (10, values);
+                gtk_snapshot_push_component_transfer (context->snapshot, identity, identity, identity, alpha);
+                gsk_component_transfer_free (identity);
+                gsk_component_transfer_free (alpha);
+              }
+              break;
+            default:
+              g_assert_not_reached ();
+            }
+        }
     }
 }
 
@@ -11573,23 +14309,54 @@ pop_context (Shape        *shape,
   SvgClip *clip = (SvgClip *) shape->current[SHAPE_ATTR_CLIP_PATH];
   SvgMask *mask = (SvgMask *) shape->current[SHAPE_ATTR_MASK];
   SvgTransform *tf = (SvgTransform *) shape->current[SHAPE_ATTR_TRANSFORM];
+  SvgValue *blend = shape->current[SHAPE_ATTR_BLEND_MODE];
 
-  if (tf->transforms[0].type != TRANSFORM_NONE)
-    gtk_snapshot_restore (context->snapshot);
+  if (context->op != CLIPPING)
+    {
+      for (unsigned int i = 0; i < filter->n_functions; i++)
+        if (filter->functions[i].kind != FILTER_NONE)
+          gtk_snapshot_pop (context->snapshot);
 
-  if (svg_number_get (opacity, 1) != 1)
+      if (svg_number_get (opacity, 1) != 1)
+        gtk_snapshot_pop (context->snapshot);
+    }
+
+  if (mask->kind != MASK_NONE && (mask->shape != NULL))
     gtk_snapshot_pop (context->snapshot);
-
-  for (unsigned int i = 0; i < filter->n_functions; i++)
-    if (filter->functions[i].kind != FILTER_NONE)
-      gtk_snapshot_pop (context->snapshot);
 
   if (clip->kind == CLIP_PATH ||
       (clip->kind == CLIP_REF && clip->ref.shape != NULL))
     gtk_snapshot_pop (context->snapshot);
 
-  if (mask->kind != MASK_NONE && (mask->shape != NULL))
-    gtk_snapshot_pop (context->snapshot);
+  if (context->op != CLIPPING)
+    {
+      if (svg_enum_get (blend) != GSK_BLEND_MODE_DEFAULT)
+        {
+          gtk_snapshot_pop (context->snapshot);
+          gtk_snapshot_pop (context->snapshot);
+        }
+
+      if (needs_isolation (shape, context))
+        gtk_snapshot_pop (context->snapshot);
+    }
+
+  if (shape->type == SHAPE_USE)
+    gtk_snapshot_restore (context->snapshot);
+
+  if (tf->transforms[0].type != TRANSFORM_NONE)
+    gtk_snapshot_restore (context->snapshot);
+
+  if (shape->type == SHAPE_SVG)
+    {
+      SvgValue *overflow = shape->current[SHAPE_ATTR_OVERFLOW];
+
+      gtk_snapshot_restore (context->snapshot);
+
+      if (svg_enum_get (overflow) == OVERFLOW_HIDDEN)
+        gtk_snapshot_pop (context->snapshot);
+
+      g_free ((gpointer) pop_viewport (context));
+   }
 }
 
 static void
@@ -11607,19 +14374,19 @@ paint_linear_gradient (Shape                 *gradient,
   for (unsigned int i = 0; i < gradient->color_stops->len; i++)
     {
       ColorStop *cs = g_ptr_array_index (gradient->color_stops, i);
-      SvgPaint *stop_color = (SvgPaint *) cs->current[COLOR_STOP_COLOR];
+      SvgPaint *stop_color = (SvgPaint *) cs->current[color_stop_attr_idx (SHAPE_ATTR_STOP_COLOR)];
       GdkColor color;
 
       g_assert (stop_color->kind == PAINT_COLOR);
-      offset = MAX (svg_number_get (cs->current[COLOR_STOP_OFFSET], 1), offset);
+      offset = MAX (svg_number_get (cs->current[color_stop_attr_idx (SHAPE_ATTR_STOP_OFFSET)], 1), offset);
       gdk_color_init_from_rgba (&color, &stop_color->color);
-      color.alpha *= svg_number_get (cs->current[COLOR_STOP_OPACITY], 1);
+      color.alpha *= svg_number_get (cs->current[color_stop_attr_idx (SHAPE_ATTR_STOP_OPACITY)], 1);
       gsk_gradient_add_stop (g, offset, 0.5, &color);
       gdk_color_finish (&color);
     }
 
   transform = NULL;
-  if (svg_enum_get (gradient->current[SHAPE_ATTR_GRADIENT_UNITS]) == COORD_UNITS_OBJECT_BOUNDING_BOX)
+  if (svg_enum_get (gradient->current[SHAPE_ATTR_CONTENT_UNITS]) == COORD_UNITS_OBJECT_BOUNDING_BOX)
     {
       transform = gsk_transform_translate (transform, &bounds->origin);
       transform = gsk_transform_scale (transform, bounds->size.width, bounds->size.height);
@@ -11633,11 +14400,11 @@ paint_linear_gradient (Shape                 *gradient,
   else
     {
       graphene_point_init (&start,
-                           svg_number_get (gradient->current[SHAPE_ATTR_X1], context->viewport->width),
-                           svg_number_get (gradient->current[SHAPE_ATTR_Y1], context->viewport->height));
+                           svg_number_get (gradient->current[SHAPE_ATTR_X1], context->viewport->size.width),
+                           svg_number_get (gradient->current[SHAPE_ATTR_Y1], context->viewport->size.height));
       graphene_point_init (&end,
-                           svg_number_get (gradient->current[SHAPE_ATTR_X2], context->viewport->width),
-                           svg_number_get (gradient->current[SHAPE_ATTR_Y2], context->viewport->height));
+                           svg_number_get (gradient->current[SHAPE_ATTR_X2], context->viewport->size.width),
+                           svg_number_get (gradient->current[SHAPE_ATTR_Y2], context->viewport->size.height));
     }
 
   gradient_transform = svg_transform_get_gsk ((SvgTransform *) gradient->current[SHAPE_ATTR_TRANSFORM]);
@@ -11666,12 +14433,12 @@ paint_radial_gradient (Shape                 *gradient,
   graphene_rect_t gradient_bounds;
   GskGradient *g;
 
-  graphene_point_init (&start_center, svg_number_get (gradient->current[SHAPE_ATTR_FX], context->viewport->width),
-                                    svg_number_get (gradient->current[SHAPE_ATTR_FY], context->viewport->height));
+  graphene_point_init (&start_center, svg_number_get (gradient->current[SHAPE_ATTR_FX], context->viewport->size.width),
+                                    svg_number_get (gradient->current[SHAPE_ATTR_FY], context->viewport->size.height));
   start_radius = svg_number_get (gradient->current[SHAPE_ATTR_FR], normalized_diagonal (context->viewport));
 
-  graphene_point_init (&end_center, svg_number_get (gradient->current[SHAPE_ATTR_CX], context->viewport->width),
-                                    svg_number_get (gradient->current[SHAPE_ATTR_CY], context->viewport->height));
+  graphene_point_init (&end_center, svg_number_get (gradient->current[SHAPE_ATTR_CX], context->viewport->size.width),
+                                    svg_number_get (gradient->current[SHAPE_ATTR_CY], context->viewport->size.height));
   end_radius = svg_number_get (gradient->current[SHAPE_ATTR_R], normalized_diagonal (context->viewport));
 
   g = gsk_gradient_new ();
@@ -11679,20 +14446,20 @@ paint_radial_gradient (Shape                 *gradient,
   for (unsigned int i = 0; i < gradient->color_stops->len; i++)
     {
       ColorStop *cs = g_ptr_array_index (gradient->color_stops, i);
-      SvgPaint *stop_color = (SvgPaint *) cs->current[COLOR_STOP_COLOR];
+      SvgPaint *stop_color = (SvgPaint *) cs->current[color_stop_attr_idx (SHAPE_ATTR_STOP_COLOR)];
       GdkColor color;
 
       g_assert (stop_color->kind == PAINT_COLOR);
-      offset = MAX (svg_number_get (cs->current[COLOR_STOP_OFFSET], 1), offset);
+      offset = MAX (svg_number_get (cs->current[color_stop_attr_idx (SHAPE_ATTR_STOP_OFFSET)], 1), offset);
       gdk_color_init_from_rgba (&color, &stop_color->color);
-      color.alpha *= svg_number_get (cs->current[COLOR_STOP_OPACITY], 1);
+      color.alpha *= svg_number_get (cs->current[color_stop_attr_idx (SHAPE_ATTR_STOP_OPACITY)], 1);
       gsk_gradient_add_stop (g, offset, 0.5, &color);
       gdk_color_finish (&color);
     }
 
   gtk_snapshot_save (context->snapshot);
 
-  if (svg_enum_get (gradient->current[SHAPE_ATTR_GRADIENT_UNITS]) == COORD_UNITS_OBJECT_BOUNDING_BOX)
+  if (svg_enum_get (gradient->current[SHAPE_ATTR_CONTENT_UNITS]) == COORD_UNITS_OBJECT_BOUNDING_BOX)
     {
       gtk_snapshot_translate (context->snapshot, &bounds->origin);
       gtk_snapshot_scale (context->snapshot,  bounds->size.width, bounds->size.height);
@@ -11722,30 +14489,127 @@ paint_radial_gradient (Shape                 *gradient,
 }
 
 static void
-paint_gradient (Shape                 *gradient,
-                const graphene_rect_t *bounds,
-                PaintContext          *context)
+paint_pattern (Shape                 *pattern,
+               const graphene_rect_t *bounds,
+               PaintContext          *context)
 {
-  if (!gradient)
-    return;
+  SvgViewBox *view_box = (SvgViewBox *) pattern->current[SHAPE_ATTR_VIEW_BOX];
+  SvgContentFit *content_fit = (SvgContentFit *) pattern->current[SHAPE_ATTR_CONTENT_FIT];
+  graphene_rect_t pattern_bounds, child_bounds;
+  double tx, ty;
+  double sx, sy;
+  GskTransform *transform;
+  double dx, dy;
 
-  if (gradient->color_stops->len == 0)
-    return;
-
-  if (gradient->color_stops->len == 1)
+  if (svg_enum_get (pattern->current[SHAPE_ATTR_BOUND_UNITS]) == COORD_UNITS_OBJECT_BOUNDING_BOX)
     {
-      ColorStop *cs = g_ptr_array_index (gradient->color_stops, 0);
-      SvgPaint *stop_color = (SvgPaint *) cs->current[COLOR_STOP_COLOR];
-      GdkRGBA color = stop_color->color;
-      color.alpha *= svg_number_get (cs->current[COLOR_STOP_OPACITY], 1);
-      gtk_snapshot_append_color (context->snapshot, &color, bounds);
-      return;
+      dx = bounds->origin.x + svg_number_get (pattern->current[SHAPE_ATTR_X], 1) * bounds->size.width;
+      dy = bounds->origin.y + svg_number_get (pattern->current[SHAPE_ATTR_Y], 1) * bounds->size.height;
+      child_bounds.origin.x = 0;
+      child_bounds.origin.y = 0;
+      child_bounds.size.width = svg_number_get (pattern->current[SHAPE_ATTR_WIDTH], 1) * bounds->size.width;
+      child_bounds.size.height = svg_number_get (pattern->current[SHAPE_ATTR_HEIGHT], 1) * bounds->size.height;
+    }
+  else
+    {
+      dx = svg_number_get (pattern->current[SHAPE_ATTR_X], context->viewport->size.width);
+      dy = svg_number_get (pattern->current[SHAPE_ATTR_Y], context->viewport->size.height);
+      child_bounds.origin.x = 0;
+      child_bounds.origin.y = 0;
+      child_bounds.size.width = svg_number_get (pattern->current[SHAPE_ATTR_WIDTH], context->viewport->size.width);
+      child_bounds.size.height = svg_number_get (pattern->current[SHAPE_ATTR_HEIGHT], context->viewport->size.height);
     }
 
-  if (gradient->type == SHAPE_LINEAR_GRADIENT)
-    paint_linear_gradient (gradient, bounds, context);
+  if (!view_box->unset)
+    {
+      compute_viewport_transform (content_fit->is_none,
+                                  content_fit->align_x,
+                                  content_fit->align_y,
+                                  content_fit->meet,
+                                  &view_box->view_box,
+                                  child_bounds.origin.x, child_bounds.origin.y,
+                                  child_bounds.size.width, child_bounds.size.height,
+                                  &sx, &sy, &tx, &ty);
+    }
   else
-    paint_radial_gradient (gradient, bounds, context);
+    {
+      if (svg_enum_get (pattern->current[SHAPE_ATTR_CONTENT_UNITS]) == COORD_UNITS_OBJECT_BOUNDING_BOX)
+        {
+          tx = 0;
+          ty = 0;
+          sx = bounds->size.width;
+          sy = bounds->size.height;
+        }
+      else
+        {
+          sx = sy = 1;
+          tx = ty = 0;
+        }
+    }
+
+  child_bounds.origin.x += dx;
+  child_bounds.origin.y += dy;
+
+  tx += dx;
+  ty += dy;
+
+  transform = svg_transform_get_gsk ((SvgTransform *) pattern->current[SHAPE_ATTR_TRANSFORM]);
+  gtk_snapshot_transform (context->snapshot, transform);
+
+  transform = gsk_transform_invert (transform);
+  gsk_transform_transform_bounds (transform, bounds, &pattern_bounds);
+  gsk_transform_unref (transform);
+
+  gtk_snapshot_push_repeat (context->snapshot, &pattern_bounds, &child_bounds);
+
+  gtk_snapshot_save (context->snapshot);
+  gtk_snapshot_translate (context->snapshot, &GRAPHENE_POINT_INIT (tx, ty));
+  gtk_snapshot_scale (context->snapshot, sx, sy);
+
+  for (int i = 0; i < pattern->shapes->len; i++)
+    {
+      Shape *s = g_ptr_array_index (pattern->shapes, i);
+      render_shape (s, context);
+    }
+
+  gtk_snapshot_restore (context->snapshot);
+
+  gtk_snapshot_pop (context->snapshot);
+}
+
+static void
+paint_server (Shape                 *server,
+              const graphene_rect_t *bounds,
+              PaintContext          *context)
+{
+  if (!server)
+    return;
+
+  if (server->type == SHAPE_LINEAR_GRADIENT ||
+      server->type == SHAPE_RADIAL_GRADIENT)
+    {
+      if (server->color_stops->len == 0)
+        return;
+
+      if (server->color_stops->len == 1)
+        {
+          ColorStop *cs = g_ptr_array_index (server->color_stops, 0);
+          SvgPaint *stop_color = (SvgPaint *) cs->current[color_stop_attr_idx (SHAPE_ATTR_STOP_COLOR)];
+          GdkRGBA color = stop_color->color;
+          color.alpha *= svg_number_get (cs->current[color_stop_attr_idx (SHAPE_ATTR_STOP_OPACITY)], 1);
+          gtk_snapshot_append_color (context->snapshot, &color, bounds);
+          return;
+        }
+
+      if (server->type == SHAPE_LINEAR_GRADIENT)
+        paint_linear_gradient (server, bounds, context);
+      else
+        paint_radial_gradient (server, bounds, context);
+    }
+  else if (server->type == SHAPE_PATTERN)
+    {
+      paint_pattern (server, bounds, context);
+    }
 }
 
 static GskStroke *
@@ -11770,38 +14634,42 @@ shape_create_stroke (Shape        *shape,
   dasharray = (SvgDashArray *) shape->current[SHAPE_ATTR_STROKE_DASHARRAY];
   if (dasharray->kind != DASH_ARRAY_NONE)
     {
-      double *dashes = (double *) dasharray->dashes;
+      Number *dashes = dasharray->dashes;
       unsigned int len = dasharray->n_dashes;
       double path_length;
+      double length;
       double offset;
+      GskPathMeasure *measure;
 
-      if (shape->attrs & BIT (SHAPE_ATTR_PATH_LENGTH))
-        path_length = svg_number_get (shape->current[SHAPE_ATTR_PATH_LENGTH], 1);
-      else /* FIXME makes mixing animations hard */
-        path_length = 1;
+      measure = shape_get_current_measure (shape, context->viewport);
+      length = gsk_path_measure_get_length (measure);
+      gsk_path_measure_unref (measure);
 
-      offset = svg_number_get (shape->current[SHAPE_ATTR_STROKE_DASHOFFSET], path_length);
+      path_length = svg_number_get (shape->current[SHAPE_ATTR_PATH_LENGTH], 1);
+      if (path_length < 0)
+        path_length = length;
+
+      offset = svg_number_get (shape->current[SHAPE_ATTR_STROKE_DASHOFFSET], normalized_diagonal (context->viewport));
 
       float *vals = g_newa (float, len);
 
       if (path_length > 0)
         {
-          GskPathMeasure *measure;
-          double length;
-
-          measure = shape_get_current_measure (shape, context->viewport);
-          length = gsk_path_measure_get_length (measure);
-          gsk_path_measure_unref (measure);
-
           for (unsigned int i = 0; i < len; i++)
-            vals[i] = dashes[i] / path_length * length;
+            {
+              g_assert (dashes[i].dim != SVG_DIMENSION_PERCENTAGE);
+              vals[i] = dashes[i].value / path_length * length;
+            }
 
           offset = offset / path_length * length;
         }
       else
         {
           for (unsigned int i = 0; i < len; i++)
-            vals[i] = dashes[i];
+            {
+              g_assert (dashes[i].dim != SVG_DIMENSION_PERCENTAGE);
+              vals[i] = dashes[i].value;
+            }
         }
 
       gsk_stroke_set_dash (stroke, vals, len);
@@ -11811,6 +14679,41 @@ shape_create_stroke (Shape        *shape,
   return stroke;
 }
 
+static const SvgPaint *
+get_context_paint (const SvgPaint *paint,
+                   GSList         *ctx_stack)
+{
+  switch (paint->kind)
+    {
+    case PAINT_NONE:
+        return NULL;
+    case PAINT_COLOR:
+    case PAINT_SERVER:
+    case PAINT_SYMBOLIC:
+      return paint;
+    case PAINT_CONTEXT_FILL:
+    case PAINT_CONTEXT_STROKE:
+      if (ctx_stack->data)
+        {
+          Shape *ctx_shape = ctx_stack->data;
+          SvgValue *ctx_value;
+
+          if (paint->kind == PAINT_CONTEXT_FILL)
+            ctx_value = ctx_shape->current[SHAPE_ATTR_FILL];
+          else
+            ctx_value = ctx_shape->current[SHAPE_ATTR_STROKE];
+
+          return get_context_paint ((const SvgPaint *) ctx_value,
+                                    ctx_stack->next);
+        }
+      else
+        return NULL;
+      break;
+    default:
+      g_assert_not_reached ();
+    }
+}
+
 static void
 fill_shape (Shape        *shape,
             GskPath      *path,
@@ -11818,36 +14721,58 @@ fill_shape (Shape        *shape,
 {
   SvgPaint *paint;
   graphene_rect_t bounds;
+  GskFillRule fill_rule;
+  double opacity;
 
   paint = (SvgPaint *) shape->current[SHAPE_ATTR_FILL];
-  if (paint->kind != PAINT_NONE && gsk_path_get_bounds (path, &bounds))
+
+  if (paint->kind == PAINT_NONE)
+    return;
+
+  if (!gsk_path_get_bounds (path, &bounds))
+    return;
+
+  fill_rule = svg_enum_get (shape->current[SHAPE_ATTR_FILL_RULE]);
+  opacity = svg_number_get (shape->current[SHAPE_ATTR_FILL_OPACITY], 1);
+
+retry:
+  switch (paint->kind)
     {
-      GskFillRule fill_rule;
-      double opacity;
+    case PAINT_NONE:
+      break;
+    case PAINT_COLOR:
+      {
+        GdkRGBA color = paint->color;
+        color.alpha *= opacity;
+        gtk_snapshot_append_fill (context->snapshot, path, fill_rule, &color);
+      }
+      break;
+    case PAINT_SERVER:
+      {
+        if (opacity < 1)
+          gtk_snapshot_push_opacity (context->snapshot, opacity);
 
-      fill_rule = svg_enum_get (shape->current[SHAPE_ATTR_FILL_RULE]);
-      opacity = svg_number_get (shape->current[SHAPE_ATTR_FILL_OPACITY], 1);
-      if (paint->kind == PAINT_COLOR)
-        {
-          GdkRGBA color = paint->color;
-          color.alpha *= opacity;
-          gtk_snapshot_append_fill (context->snapshot, path, fill_rule, &color);
-        }
-      else if (paint->kind == PAINT_GRADIENT)
-        {
-          if (opacity < 1)
-            gtk_snapshot_push_opacity (context->snapshot, opacity);
+        gtk_snapshot_push_fill (context->snapshot, path, fill_rule);
+        paint_server (paint->server.shape, &bounds, context);
+        gtk_snapshot_pop (context->snapshot);
 
-          gtk_snapshot_push_fill (context->snapshot, path, fill_rule);
-          paint_gradient (paint->gradient.shape, &bounds, context);
+        if (opacity < 1)
           gtk_snapshot_pop (context->snapshot);
-
-          if (opacity < 1)
-            gtk_snapshot_pop (context->snapshot);
-        }
-      else
-        g_assert_not_reached ();
-   }
+      }
+      break;
+    case PAINT_CONTEXT_FILL:
+    case PAINT_CONTEXT_STROKE:
+      {
+        GSList ctx_stack = { context->ctx_shape, context->ctx_shape_stack };
+        paint = (SvgPaint *) get_context_paint (paint, &ctx_stack);
+        if (paint)
+          goto retry;
+      }
+      break;
+    case PAINT_SYMBOLIC:
+    default:
+      g_assert_not_reached ();
+    }
 }
 
 static void
@@ -11856,42 +14781,536 @@ stroke_shape (Shape        *shape,
               PaintContext *context)
 {
   SvgPaint *paint;
+  GskStroke *stroke;
+  graphene_rect_t bounds;
+  double opacity;
 
   paint = (SvgPaint *) shape->current[SHAPE_ATTR_STROKE];
-  if (paint->kind != PAINT_NONE)
+
+  if (paint->kind == PAINT_NONE)
+    return;
+
+  stroke = shape_create_stroke (shape, context);
+  if (!gsk_path_get_stroke_bounds (path, stroke, &bounds))
+    return;
+
+  opacity = svg_number_get (shape->current[SHAPE_ATTR_STROKE_OPACITY], 1);
+
+retry:
+  switch (paint->kind)
     {
-      GskStroke *stroke;
-      graphene_rect_t bounds;
+    case PAINT_NONE:
+      break;
+    case PAINT_COLOR:
+      {
+        GdkRGBA color = paint->color;
+        color.alpha *= opacity;
+        gtk_snapshot_append_stroke (context->snapshot, path, stroke, &color);
+      }
+      break;
+    case PAINT_SERVER:
+      {
+        if (opacity < 1)
+          gtk_snapshot_push_opacity (context->snapshot, opacity);
 
-      stroke = shape_create_stroke (shape, context);
-      if (gsk_path_get_stroke_bounds (path, stroke, &bounds))
-        {
-          double opacity;
+        gtk_snapshot_push_stroke (context->snapshot, path, stroke);
+        paint_server (paint->server.shape, &bounds, context);
+        gtk_snapshot_pop (context->snapshot);
 
-          opacity = svg_number_get (shape->current[SHAPE_ATTR_STROKE_OPACITY], 1);
-          if (paint->kind == PAINT_COLOR)
-            {
-              GdkRGBA color = paint->color;
-              color.alpha *= opacity;
-              gtk_snapshot_append_stroke (context->snapshot, path, stroke, &color);
-            }
-          else if (paint->kind == PAINT_GRADIENT)
-            {
-              if (opacity < 1)
-                gtk_snapshot_push_opacity (context->snapshot, opacity);
-
-              gtk_snapshot_push_stroke (context->snapshot, path, stroke);
-              paint_gradient (paint->gradient.shape, &bounds, context);
-              gtk_snapshot_pop (context->snapshot);
-
-              if (opacity < 1)
-                gtk_snapshot_pop (context->snapshot);
-            }
-          else
-            g_assert_not_reached ();
-        }
-      gsk_stroke_free (stroke);
+        if (opacity < 1)
+          gtk_snapshot_pop (context->snapshot);
+      }
+      break;
+    case PAINT_CONTEXT_FILL:
+    case PAINT_CONTEXT_STROKE:
+      {
+        GSList ctx_stack = { context->ctx_shape, context->ctx_shape_stack };
+        paint = (SvgPaint *) get_context_paint (paint, &ctx_stack);
+        if (paint)
+          goto retry;
+      }
+      break;
+    case PAINT_SYMBOLIC:
+    default:
+      g_assert_not_reached ();
     }
+
+  gsk_stroke_free (stroke);
+}
+
+typedef enum {
+  VERTEX_START,
+  VERTEX_MID,
+  VERTEX_END,
+} VertexKind;
+
+static gboolean
+paint_marker (Shape              *shape,
+              GskPath            *path,
+              PaintContext       *context,
+              const GskPathPoint *point,
+              VertexKind          kind)
+{
+  ShapeAttr attrs[] = { SHAPE_ATTR_MARKER_START, SHAPE_ATTR_MARKER_MID, SHAPE_ATTR_MARKER_END };
+  SvgHref *href;
+  SvgOrient *orient;
+  SvgValue *units;
+  Shape *marker;
+  double scale;
+  graphene_point_t vertex;
+  double angle;
+  double x, y;
+  double width, height;
+
+  gsk_path_point_get_position (point, path, &vertex);
+
+  href = (SvgHref *) shape->current[attrs[kind]];
+  if (href->kind == HREF_NONE)
+    return TRUE;
+
+  marker = href->shape;
+
+  orient = (SvgOrient *) marker->current[SHAPE_ATTR_MARKER_ORIENT];
+  units = marker->current[SHAPE_ATTR_MARKER_UNITS];
+
+  if (svg_enum_get (units) == MARKER_UNITS_STROKE_WIDTH)
+    scale = svg_number_get (shape->current[SHAPE_ATTR_STROKE_WIDTH], 1);
+  else
+    scale = 1;
+
+  if (orient->kind == ORIENT_AUTO)
+    {
+      if (kind == VERTEX_START)
+        {
+          angle = gsk_path_point_get_rotation (point, path, GSK_PATH_TO_END);
+          if (orient->start_reverse)
+            angle += 180;
+        }
+      else if (kind == VERTEX_END)
+        {
+          angle = gsk_path_point_get_rotation (point, path, GSK_PATH_FROM_START);
+        }
+      else
+        {
+          angle = (gsk_path_point_get_rotation (point, path, GSK_PATH_TO_END) +
+                   gsk_path_point_get_rotation (point, path, GSK_PATH_FROM_START)) / 2;
+        }
+    }
+  else
+    {
+      angle = orient->angle;
+    }
+
+  width = svg_number_get (marker->current[SHAPE_ATTR_WIDTH], context->viewport->size.width);
+  height = svg_number_get (marker->current[SHAPE_ATTR_HEIGHT], context->viewport->size.height);
+
+  gtk_snapshot_save (context->snapshot);
+
+  x = svg_number_get (marker->current[SHAPE_ATTR_REF_X], width);
+  y = svg_number_get (marker->current[SHAPE_ATTR_REF_Y], height);
+
+  gtk_snapshot_translate (context->snapshot, &vertex);
+  gtk_snapshot_scale (context->snapshot, scale, scale);
+  gtk_snapshot_rotate (context->snapshot, angle);
+  gtk_snapshot_translate (context->snapshot, &GRAPHENE_POINT_INIT (-x, -y));
+
+  if (svg_enum_get (marker->current[SHAPE_ATTR_OVERFLOW]) == OVERFLOW_HIDDEN)
+    gtk_snapshot_push_clip (context->snapshot, &GRAPHENE_RECT_INIT (0, 0, width, height));
+
+  render_shape (marker, context);
+
+  if (svg_enum_get (marker->current[SHAPE_ATTR_OVERFLOW]) == OVERFLOW_HIDDEN)
+    gtk_snapshot_pop (context->snapshot);
+
+  gtk_snapshot_restore (context->snapshot);
+
+  return TRUE;
+}
+
+static void
+paint_markers (Shape        *shape,
+               GskPath      *path,
+               PaintContext *context)
+{
+  GskPathPoint point, point1;
+
+  if (gsk_path_is_empty (path))
+    return;
+
+  if (((SvgHref *) shape->current[SHAPE_ATTR_MARKER_START])->kind == HREF_NONE &&
+      ((SvgHref *) shape->current[SHAPE_ATTR_MARKER_MID])->kind == HREF_NONE &&
+      ((SvgHref *) shape->current[SHAPE_ATTR_MARKER_END])->kind == HREF_NONE)
+    return;
+
+  push_op (context, MARKERS);
+  push_ctx_shape (context, shape);
+
+  if (!gsk_path_get_start_point (path, &point))
+    return;
+
+  paint_marker (shape, path, context, &point, VERTEX_START);
+
+  if (gsk_path_get_next (path, &point))
+    {
+      while (1)
+        {
+          point1 = point;
+          if (!gsk_path_get_next (path, &point1))
+            {
+              break;
+            }
+
+          paint_marker (shape, path, context, &point, VERTEX_MID);
+          point = point1;
+        }
+    }
+
+  paint_marker (shape, path, context, &point, VERTEX_END);
+
+  pop_ctx_shape (context);
+  pop_op (context);
+}
+
+#define SVG_DEFAULT_DPI 96.0
+static PangoLayout *
+text_create_layout (Shape            *self,
+                    const char       *text,
+                    graphene_point_t *origin,
+                    graphene_rect_t  *bounds,
+                    gboolean         *is_vertical,
+                    double           *rotation)
+{
+  PangoContext *context;
+  UnicodeBidi uni;
+  PangoDirection direction;
+  WritingMode wmode;
+  PangoGravity gravity;
+  PangoFontDescription *font_desc;
+  const char *font_family;
+  PangoLayout *layout;
+  PangoAttrList *attr_list;
+  PangoAttribute *attr;
+  TextDecoration decoration;
+  int w,h;
+  PangoLayoutIter *iter;
+  double offset;
+
+
+  context = pango_font_map_create_context (pango_cairo_font_map_get_default ());
+  pango_context_set_language (context, svg_language_get (self->current[SHAPE_ATTR_LANG]));
+
+  uni = svg_enum_get (self->current[SHAPE_ATTR_UNICODE_BIDI]);
+  direction = svg_enum_get (self->current[SHAPE_ATTR_DIRECTION]);
+  wmode = svg_enum_get (self->current[SHAPE_ATTR_WRITING_MODE]);
+  switch (wmode)
+    {
+    case WRITING_MODE_HORIZONTAL_TB:
+      gravity = PANGO_GRAVITY_SOUTH;
+      break;
+    case WRITING_MODE_VERTICAL_LR:
+      // See note about having vertical-lr rotate -90° instead, below
+    case WRITING_MODE_VERTICAL_RL:
+      gravity = PANGO_GRAVITY_EAST;
+      break;
+    case WRITING_MODE_LEGACY_LR:
+    case WRITING_MODE_LEGACY_LR_TB:
+      direction = PANGO_DIRECTION_LTR;
+      gravity = PANGO_GRAVITY_SOUTH;
+      break;
+    case WRITING_MODE_LEGACY_RL:
+    case WRITING_MODE_LEGACY_RL_TB:
+      direction = PANGO_DIRECTION_RTL;
+      gravity = PANGO_GRAVITY_SOUTH;
+      break;
+    case WRITING_MODE_LEGACY_TB:
+    case WRITING_MODE_LEGACY_TB_RL:
+      direction = PANGO_DIRECTION_LTR;
+      gravity = PANGO_GRAVITY_EAST;
+      break;
+    default:
+      g_assert_not_reached ();
+    }
+  pango_context_set_base_gravity (context, gravity);
+
+  if (uni == UNICODE_BIDI_OVERRIDE || uni == UNICODE_BIDI_EMBED)
+    pango_context_set_base_dir (context, direction);
+
+  font_desc = pango_font_description_copy (pango_context_get_font_description (context));
+
+  font_family = svg_string_get (self->current[SHAPE_ATTR_FONT_FAMILY]);
+  if (font_family)
+    pango_font_description_set_family_static (font_desc, font_family);
+
+  pango_font_description_set_style (font_desc, svg_enum_get (self->current[SHAPE_ATTR_FONT_STYLE]));
+  pango_font_description_set_variant (font_desc, svg_enum_get (self->current[SHAPE_ATTR_FONT_VARIANT]));
+  pango_font_description_set_weight (font_desc, svg_number_get (self->current[SHAPE_ATTR_FONT_WEIGHT], 1000.));
+  pango_font_description_set_stretch (font_desc, svg_enum_get (self->current[SHAPE_ATTR_FONT_STRECH]));
+
+  pango_font_description_set_size (font_desc,
+                                   svg_number_get (self->current[SHAPE_ATTR_FONT_SIZE], 1.) *
+                                   PANGO_SCALE / SVG_DEFAULT_DPI * 72);
+
+  layout = pango_layout_new (context);
+  pango_layout_set_font_description (layout, font_desc);
+  pango_font_description_free (font_desc);
+
+  attr_list = pango_attr_list_new ();
+
+  attr = pango_attr_letter_spacing_new (svg_number_get (self->current[SHAPE_ATTR_LETTER_SPACING], 1.) * PANGO_SCALE);
+  attr->start_index = 0;
+  attr->end_index = G_MAXINT;
+  pango_attr_list_insert (attr_list, attr);
+
+  decoration = svg_text_decoration_get (self->current[SHAPE_ATTR_TEXT_DECORATION]);
+  if (text)
+    {
+      if (decoration & TEXT_DECORATION_UNDERLINE)
+        {
+          attr = pango_attr_underline_new (PANGO_UNDERLINE_SINGLE);
+          attr->start_index = 0;
+          attr->end_index = -1;
+          pango_attr_list_insert (attr_list, attr);
+        }
+      if (decoration & TEXT_DECORATION_OVERLINE)
+        {
+          attr = pango_attr_overline_new (PANGO_OVERLINE_SINGLE);
+          attr->start_index = 0;
+          attr->end_index = -1;
+          pango_attr_list_insert (attr_list, attr);
+        }
+      if (decoration & TEXT_DECORATION_LINE_TROUGH)
+        {
+          attr = pango_attr_strikethrough_new (TRUE);
+          attr->start_index = 0;
+          attr->end_index = -1;
+          pango_attr_list_insert (attr_list, attr);
+        }
+    }
+
+  pango_layout_set_attributes (layout, attr_list);
+  pango_attr_list_unref (attr_list);
+
+  pango_layout_set_text (layout, text, -1);
+
+  pango_layout_set_alignment (layout, (direction == PANGO_DIRECTION_LTR) ? PANGO_ALIGN_LEFT : PANGO_ALIGN_RIGHT);
+
+  pango_layout_get_size (layout, &w, &h);
+  iter = pango_layout_get_iter (layout);
+  offset = pango_layout_iter_get_baseline (iter) / (double)PANGO_SCALE;
+  pango_layout_iter_free (iter);
+  switch (wmode)
+    {
+    case WRITING_MODE_HORIZONTAL_TB:
+    case WRITING_MODE_LEGACY_LR:
+    case WRITING_MODE_LEGACY_LR_TB:
+    case WRITING_MODE_LEGACY_RL:
+    case WRITING_MODE_LEGACY_RL_TB:
+      *origin = GRAPHENE_POINT_INIT (0., -offset);
+      *bounds = GRAPHENE_RECT_INIT (0., -offset, w / (double)PANGO_SCALE, h / (double)PANGO_SCALE);
+      *is_vertical = FALSE;
+      *rotation = 0.;
+      break;
+    case WRITING_MODE_VERTICAL_LR:
+      /* Firefox uses 90° here (like for the other vertical modes), while rsvg uses -90°
+       * I came to the conclusion that implementing -90° properly (rsvg doesn't) doesn't
+       * quite work with the current text handling architecture, so we'll just do what the
+       * web browsers do.
+       */
+    case WRITING_MODE_VERTICAL_RL:
+    case WRITING_MODE_LEGACY_TB:
+    case WRITING_MODE_LEGACY_TB_RL:
+      *origin = GRAPHENE_POINT_INIT (offset, 0.);
+      *bounds = GRAPHENE_RECT_INIT (offset - h / (double)PANGO_SCALE, 0., h / (double)PANGO_SCALE, w / (double)PANGO_SCALE);
+      *is_vertical = TRUE;
+      *rotation = 90.;
+      break;
+    default:
+      g_assert_not_reached ();
+    }
+
+  g_object_unref (context);
+  return layout;
+}
+
+static gboolean
+generate_layouts (Shape           *self,
+                  double          *x,
+                  double          *y,
+                  gboolean        *lastwasspace,
+                  graphene_rect_t *bounds)
+{
+  double xs = 0.;
+  double ys = 0.;
+  gboolean lwss = TRUE;
+  double dx, dy;
+
+  g_assert (self->type == SHAPE_TEXT || self->type == SHAPE_TSPAN);
+
+  if (!x)
+    x = &xs;
+  if (!y)
+    y = &ys;
+  if (!lastwasspace)
+    lastwasspace = &lwss;
+
+  if (_gtk_bitmask_get (self->attrs, SHAPE_ATTR_X))
+    *x = svg_number_get (self->current[SHAPE_ATTR_X], 1);
+  if (_gtk_bitmask_get (self->attrs, SHAPE_ATTR_Y))
+    *y = svg_number_get (self->current[SHAPE_ATTR_Y], 1);
+
+  dx = svg_number_get (self->current[SHAPE_ATTR_DX], 1);
+  dy = svg_number_get (self->current[SHAPE_ATTR_DY], 1);
+  *x += dx;
+  *y += dy;
+
+  gboolean set_bounds = FALSE;
+#define ADD_BBOX(box) do {                          \
+  if (!set_bounds)                                  \
+    {                                               \
+      graphene_rect_init_from_rect (bounds, (box)); \
+      set_bounds = TRUE;                            \
+    }                                               \
+  else                                              \
+    {                                               \
+      graphene_rect_t res;                          \
+      graphene_rect_union (bounds, (box), &res);    \
+      graphene_rect_init_from_rect (bounds, &res);  \
+    }                                               \
+} while(0);
+
+  for (guint i = 0; i < self->text->len; i++)
+    {
+      TextNode *node = &g_array_index (self->text, TextNode, i);
+      switch (node->type)
+        {
+        case TEXT_NODE_SHAPE:
+          node->shape.has_bounds = generate_layouts (node->shape.shape, x, y, lastwasspace, &node->shape.bounds);
+          if (node->shape.has_bounds)
+            ADD_BBOX (&node->shape.bounds)
+          break;
+        case TEXT_NODE_CHARACTERS:
+          {
+            graphene_point_t origin;
+            graphene_rect_t cbounds;
+            gboolean is_vertical;
+            char *text = text_chomp (node->characters.text, lastwasspace);
+            node->characters.layout = text_create_layout (self, text, &origin, &cbounds, &is_vertical, &node->characters.r);
+            g_free (text);
+
+            node->characters.x = *x + origin.x;
+            node->characters.y = *y + origin.y;
+
+            graphene_rect_offset (&cbounds, *x, *y);
+            ADD_BBOX (&cbounds)
+
+            if (is_vertical)
+              *y += cbounds.size.height;
+            else
+              *x += cbounds.size.width;
+          }
+          break;
+        default:
+          g_assert_not_reached ();
+        }
+    }
+
+#undef ADD_BBOX
+  return set_bounds;
+}
+
+static void
+render_text (Shape                 *self,
+             PaintContext          *context,
+             SvgPaint              *paint,
+             const graphene_rect_t *bounds)
+{
+  g_assert (self->type == SHAPE_TEXT || self->type == SHAPE_TSPAN);
+
+  for (guint i = 0; i < self->text->len; i++)
+    {
+      TextNode *node = &g_array_index (self->text, TextNode, i);
+      switch (node->type)
+        {
+        case TEXT_NODE_SHAPE:
+          {
+            SvgPaint *cpaint = paint;
+            const graphene_rect_t *cbounds = bounds;
+            if (_gtk_bitmask_get (node->shape.shape->attrs, SHAPE_ATTR_FILL))
+              {
+                cpaint = (SvgPaint *) node->shape.shape->current[SHAPE_ATTR_FILL];
+                if (node->shape.has_bounds)
+                  cbounds = &node->shape.bounds;
+              }
+            render_text (node->shape.shape, context, cpaint, cbounds);
+          }
+          break;
+        case TEXT_NODE_CHARACTERS:
+          {
+            double opacity;
+            if (paint->kind == PAINT_NONE)
+              goto skip;
+
+#if 0
+            GskRoundedRect brd;
+            gsk_rounded_rect_init_from_rect (&brd, bounds, 0.f);
+            GdkRGBA red = (GdkRGBA){ .red = 1., .green = 0., .blue = 0., .alpha = 1. };
+            gtk_snapshot_append_border (context->snapshot, &brd, (const float[4]){ 3.f, 3.f, 3.f, 3.f }, (const GdkRGBA[4]){ red, red, red, red });
+#endif
+
+            gtk_snapshot_save (context->snapshot);
+            opacity = svg_number_get (self->current[SHAPE_ATTR_FILL_OPACITY], 1);
+            if (paint->kind == PAINT_COLOR)
+              {
+                GdkRGBA color = paint->color;
+                color.alpha *= opacity;
+                gtk_snapshot_translate (context->snapshot, &GRAPHENE_POINT_INIT (node->characters.x, node->characters.y));
+                gtk_snapshot_rotate (context->snapshot, node->characters.r);
+                gtk_snapshot_append_layout (context->snapshot, node->characters.layout, &color);
+              }
+            else if (paint->kind == PAINT_SERVER)
+              {
+                if (opacity < 1)
+                  gtk_snapshot_push_opacity (context->snapshot, opacity);
+
+                gtk_snapshot_push_mask (context->snapshot, GSK_MASK_MODE_ALPHA);
+                gtk_snapshot_translate (context->snapshot, &GRAPHENE_POINT_INIT (node->characters.x, node->characters.y));
+                gtk_snapshot_rotate (context->snapshot, node->characters.r);
+                gtk_snapshot_append_layout (context->snapshot, node->characters.layout, &(GdkRGBA){ .red = 0., .green = 0., .blue = 0., .alpha = 1. });
+                gtk_snapshot_pop (context->snapshot);
+                paint_server (paint->server.shape, bounds, context);
+                gtk_snapshot_pop (context->snapshot);
+
+                if (opacity < 1)
+                  gtk_snapshot_pop (context->snapshot);
+              }
+            gtk_snapshot_restore (context->snapshot);
+
+skip:
+            g_clear_object (&node->characters.layout);
+          }
+          break;
+        default:
+          g_assert_not_reached ();
+        }
+    }
+}
+
+static void
+recompute_current_values (Shape        *shape,
+                          Shape        *parent,
+                          PaintContext *context)
+{
+  ComputeContext ctx;
+
+  /* FIXME: this isn't the best way of doing this */
+  ctx.svg = context->svg;
+  ctx.viewport = context->viewport;
+  ctx.parent = parent;
+  ctx.current_time = context->current_time;
+  ctx.colors = context->colors;
+  ctx.n_colors = context->n_colors;
+
+  compute_current_values_for_shape (shape, &ctx);
 }
 
 static void
@@ -11905,26 +15324,64 @@ paint_shape (Shape        *shape,
       if (((SvgHref *) shape->current[SHAPE_ATTR_HREF])->shape != NULL)
         {
           Shape *use_shape = ((SvgHref *) shape->current[SHAPE_ATTR_HREF])->shape;
-          ComputeContext use_context;
-          double x, y;
-          x = svg_number_get (shape->current[SHAPE_ATTR_X], context->viewport->width);
-          y = svg_number_get (shape->current[SHAPE_ATTR_Y], context->viewport->height);
-          gtk_snapshot_save (context->snapshot);
-          gtk_snapshot_translate (context->snapshot, &GRAPHENE_POINT_INIT (x, y));
 
-          /* FIXME: this isn't the best way of doing this */
-          use_context.svg = context->svg;
-          use_context.viewport = &context->svg->view_box.size;
-          use_context.parent = shape;
-          use_context.current_time = context->current_time;
-          use_context.colors = context->colors;
-          use_context.n_colors = context->n_colors;
-          compute_current_values_for_shape (use_shape, &use_context);
+          mark_as_computed_for_use (use_shape, FALSE);
+          recompute_current_values (use_shape, shape, context);
 
+          push_ctx_shape (context, shape);
           render_shape (use_shape, context);
+          pop_ctx_shape (context);
 
-          gtk_snapshot_restore (context->snapshot);
+          mark_as_computed_for_use (use_shape, TRUE);
         }
+      return;
+    }
+
+  if (shape->computed_for_use)
+    {
+      recompute_current_values (shape, shape->parent, context);
+      mark_as_computed_for_use (shape, FALSE);
+    }
+
+  if (shape->type == SHAPE_TEXT)
+    {
+      TextAnchor anchor;
+      WritingMode wmode;
+      graphene_rect_t bounds;
+
+      if (svg_enum_get (shape->current[SHAPE_ATTR_VISIBILITY]) == VISIBILITY_HIDDEN)
+        return;
+
+      anchor = svg_enum_get (shape->current[SHAPE_ATTR_TEXT_ANCHOR]);
+      wmode = svg_enum_get (shape->current[SHAPE_ATTR_WRITING_MODE]);
+      if (!generate_layouts (shape, NULL, NULL, NULL, &bounds))
+        return;
+
+      gtk_snapshot_save (context->snapshot);
+      switch (anchor)
+        {
+        case TEXT_ANCHOR_START:
+          break;
+        case TEXT_ANCHOR_MIDDLE:
+          if (is_vertical_writing_mode[wmode])
+            gtk_snapshot_translate (context->snapshot, &GRAPHENE_POINT_INIT (0., -bounds.size.height / 2.));
+          else
+            gtk_snapshot_translate (context->snapshot, &GRAPHENE_POINT_INIT (-bounds.size.width / 2., 0.));
+          break;
+        case TEXT_ANCHOR_END:
+          if (is_vertical_writing_mode[wmode])
+            gtk_snapshot_translate (context->snapshot, &GRAPHENE_POINT_INIT (0., -bounds.size.height));
+          else
+            gtk_snapshot_translate (context->snapshot, &GRAPHENE_POINT_INIT (-bounds.size.width, 0.));
+          break;
+        default:
+          g_assert_not_reached ();
+        }
+
+      render_text (shape, context, (SvgPaint *) shape->current[SHAPE_ATTR_FILL], &bounds);
+
+      gtk_snapshot_restore (context->snapshot);
+
       return;
     }
 
@@ -11944,33 +15401,76 @@ paint_shape (Shape        *shape,
 
   path = shape_get_current_path (shape, context->viewport);
 
-  if (context->op == RENDERING || context->op == MASKING)
-    {
-      if (svg_enum_get (shape->current[SHAPE_ATTR_PAINT_ORDER]) == PAINT_ORDER_NORMAL)
-        {
-          fill_shape (shape, path, context);
-          stroke_shape (shape, path, context);
-        }
-      else
-        {
-          stroke_shape (shape, path, context);
-          fill_shape (shape, path, context);
-        }
-    }
-  else if (context->op == CLIPPING)
+  if (context->op == CLIPPING)
     {
       graphene_rect_t bounds;
 
-      /* Clip mask - see language in the spec about 'raw geometry' */
       if (gsk_path_get_bounds (path, &bounds))
         {
           GdkRGBA color = { 0, 0, 0, 1 };
+          GskFillRule clip_rule;
 
-          gtk_snapshot_push_fill (context->snapshot, path, context->clip_rule);
+          clip_rule = svg_enum_get (shape->current[SHAPE_ATTR_CLIP_RULE]);
+          gtk_snapshot_push_fill (context->snapshot, path, clip_rule);
           gtk_snapshot_append_color (context->snapshot, &color, &bounds);
           gtk_snapshot_pop (context->snapshot);
         }
+    }
+  else
+    {
+      switch (svg_enum_get (shape->current[SHAPE_ATTR_PAINT_ORDER]))
+        {
+        case PAINT_ORDER_FILL_STROKE_MARKERS:
+        case PAINT_ORDER_FILL_MARKERS_STROKE:
+          fill_shape (shape, path, context);
+          break;
+        case PAINT_ORDER_STROKE_FILL_MARKERS:
+        case PAINT_ORDER_STROKE_MARKERS_FILL:
+          stroke_shape (shape, path, context);
+          break;
+        case PAINT_ORDER_MARKERS_FILL_STROKE:
+        case PAINT_ORDER_MARKERS_STROKE_FILL:
+          paint_markers (shape, path, context);
+          break;
+        default:
+          g_assert_not_reached ();
+        }
 
+      switch (svg_enum_get (shape->current[SHAPE_ATTR_PAINT_ORDER]))
+        {
+        case PAINT_ORDER_MARKERS_FILL_STROKE:
+        case PAINT_ORDER_STROKE_FILL_MARKERS:
+          fill_shape (shape, path, context);
+          break;
+        case PAINT_ORDER_FILL_STROKE_MARKERS:
+        case PAINT_ORDER_MARKERS_STROKE_FILL:
+          stroke_shape (shape, path, context);
+          break;
+        case PAINT_ORDER_FILL_MARKERS_STROKE:
+        case PAINT_ORDER_STROKE_MARKERS_FILL:
+          paint_markers (shape, path, context);
+          break;
+        default:
+          g_assert_not_reached ();
+        }
+
+      switch (svg_enum_get (shape->current[SHAPE_ATTR_PAINT_ORDER]))
+        {
+        case PAINT_ORDER_MARKERS_STROKE_FILL:
+        case PAINT_ORDER_STROKE_MARKERS_FILL:
+          fill_shape (shape, path, context);
+          break;
+        case PAINT_ORDER_MARKERS_FILL_STROKE:
+        case PAINT_ORDER_FILL_MARKERS_STROKE:
+          stroke_shape (shape, path, context);
+          break;
+        case PAINT_ORDER_STROKE_FILL_MARKERS:
+        case PAINT_ORDER_FILL_STROKE_MARKERS:
+          paint_markers (shape, path, context);
+          break;
+        default:
+          g_assert_not_reached ();
+        }
     }
 
   gsk_path_unref (path);
@@ -11983,10 +15483,14 @@ render_shape (Shape        *shape,
   if (!shape->display)
     return;
 
+  if (shape->type == SHAPE_DEFS)
+    return;
+
   if (context->op == RENDERING && shape_types[shape->type].never_rendered)
     return;
 
   context->depth++;
+
   if (context->depth > MAX_DEPTH)
     {
       gtk_svg_rendering_error (context->svg,
@@ -12006,43 +15510,6 @@ render_shape (Shape        *shape,
 /* {{{ GtkSymbolicPaintable implementation */
 
 static void
-compute_viewport_transform (GtkSvg *self,
-                            const graphene_rect_t *vb,
-                            double e_x, double e_y,
-                            double e_width, double e_height,
-                            double *scale_x, double *scale_y,
-                            double *translate_x, double *translate_y)
-{
-  double sx, sy, tx, ty;
-
-  sx = e_width / vb->size.width;
-  sy = e_height / vb->size.height;
-
-  if (self->align != 0 && self->meet_or_slice == MEET)
-    sx = sy = MIN (sx, sy);
-  else if (self->align != 0 && self->meet_or_slice == SLICE)
-    sx = sy = MAX (sx, sy);
-
-  tx = e_x - vb->origin.x * sx;
-  ty = e_y - vb->origin.y * sy;
-
-  if (ALIGN_GET_X (self->align) == ALIGN_MID)
-    tx += (e_width - vb->size.width * sx) / 2;
-  else if (ALIGN_GET_X (self->align) == ALIGN_MAX)
-    tx += (e_width - vb->size.width * sx);
-
-  if (ALIGN_GET_Y (self->align) == ALIGN_MID)
-    ty += (e_height - vb->size.height * sy) / 2;
-  else if (ALIGN_GET_Y (self->align) == ALIGN_MAX)
-    ty += (e_height - vb->size.height * sy);
-
-  *scale_x = sx;
-  *scale_y = sy;
-  *translate_x = tx;
-  *translate_y = ty;
-}
-
-static void
 gtk_svg_snapshot_with_weight (GtkSymbolicPaintable  *paintable,
                               GtkSnapshot           *snapshot,
                               double                 width,
@@ -12054,20 +15521,11 @@ gtk_svg_snapshot_with_weight (GtkSymbolicPaintable  *paintable,
   GtkSvg *self = GTK_SVG (paintable);
   ComputeContext compute_context;
   PaintContext paint_context;
-  graphene_rect_t view_box;
-  double sx, sy, tx, ty;
 
-  if (self->view_box.size.width == 0 || self->view_box.size.height == 0)
-    graphene_rect_init (&view_box, 0, 0, self->width, self->height);
-  else
-    view_box = self->view_box;
-
-  compute_viewport_transform (self, &view_box,
-                              0, 0, width, height,
-                              &sx, &sy, &tx, &ty);
+  graphene_rect_init (&self->viewport, 0, 0, width, height);
 
   compute_context.svg = self;
-  compute_context.viewport = &view_box.size;
+  compute_context.viewport = &self->viewport;
   compute_context.colors = colors;
   compute_context.n_colors = n_colors;
   compute_context.current_time = self->current_time;
@@ -12076,25 +15534,20 @@ gtk_svg_snapshot_with_weight (GtkSymbolicPaintable  *paintable,
   compute_current_values_for_shape (self->content, &compute_context);
 
   paint_context.svg = self;
-  paint_context.viewport = &view_box.size;
+  paint_context.viewport = &self->viewport;
+  paint_context.viewport_stack = NULL;
   paint_context.snapshot = snapshot;
-  paint_context.bounds = self->bounds;
   paint_context.colors = colors;
   paint_context.n_colors = n_colors;
   paint_context.weight = self->weight >= 1 ? self->weight : weight;
   paint_context.op = RENDERING;
   paint_context.op_stack = NULL;
-  paint_context.clip_rule = GSK_FILL_RULE_WINDING;
+  paint_context.ctx_shape = NULL;
+  paint_context.ctx_shape_stack = NULL;
   paint_context.current_time = self->current_time;
   paint_context.depth = 0;
 
-  gtk_snapshot_save (snapshot);
-  gtk_snapshot_scale (snapshot, sx, sy);
-  gtk_snapshot_translate (snapshot, &GRAPHENE_POINT_INIT (tx, ty));
-
   render_shape (self->content, &paint_context);
-
-  gtk_snapshot_restore (snapshot);
 
   if (self->advance_after_snapshot)
     {
@@ -12161,12 +15614,17 @@ static double
 gtk_svg_get_intrinsic_aspect_ratio (GdkPaintable *paintable)
 {
   GtkSvg *self = GTK_SVG (paintable);
+  SvgViewBox *vb;
 
   if (self->width > 0 && self->height > 0)
     return self->width / self->height;
 
-  if (self->view_box.size.width > 0 && self->view_box.size.height > 0)
-    return self->view_box.size.width / self->view_box.size.height;
+  vb = (SvgViewBox *) self->content->current[SHAPE_ATTR_VIEW_BOX];
+  if (!vb->unset)
+    {
+      if (vb->view_box.size.width > 0 && vb->view_box.size.height > 0)
+        return vb->view_box.size.width / vb->view_box.size.height;
+    }
 
   return 0;
 }
@@ -12217,8 +15675,10 @@ gtk_svg_init (GtkSvg *self)
   self->playing = FALSE;
   self->run_mode = GTK_SVG_RUN_MODE_STOPPED;
 
+  graphene_rect_init (&self->viewport, 0, 0, 0, 0);
+
+  self->content = shape_new (NULL, SHAPE_SVG);
   self->timeline = timeline_new ();
-  self->content = shape_new (NULL, SHAPE_GROUP);
 }
 
 static void
@@ -12229,8 +15689,8 @@ gtk_svg_dispose (GObject *object)
   frame_clock_disconnect (self);
   g_clear_handle_id (&self->pending_invalidate, g_source_remove);
 
-  shape_free (self->content);
-  timeline_free (self->timeline);
+  g_clear_pointer (&self->content, shape_free);
+  g_clear_pointer (&self->timeline, timeline_free);
 
   g_clear_object (&self->clock);
   g_free (self->gpa_keywords);
@@ -12477,9 +15937,7 @@ gtk_svg_copy (GtkSvg *orig)
   GBytes *bytes = NULL;
   GtkSvg *svg;
 
-  bytes = gtk_svg_serialize_full (orig,
-                                  NULL, 0,
-                                  GTK_SVG_SERIALIZE_INCLUDE_GPA_ATTRS);
+  bytes = gtk_svg_serialize_full (orig, NULL, 0, GTK_SVG_SERIALIZE_DEFAULT);
   svg = gtk_svg_new_from_bytes (bytes);
   g_bytes_unref (bytes);
 
@@ -12613,15 +16071,6 @@ gboolean
 gtk_svg_equal (GtkSvg *svg1,
                GtkSvg *svg2)
 {
-  if (svg1->width != svg2->width ||
-      svg1->height != svg2->height ||
-      !graphene_rect_equal (&svg1->view_box, &svg2->view_box))
-    return FALSE;
-
-  if (svg1->align != svg2->align ||
-      svg1->meet_or_slice != svg2->meet_or_slice)
-    return FALSE;
-
   if (svg1->gpa_version != svg2->gpa_version ||
       g_strcmp0 (svg1->gpa_keywords, svg2->gpa_keywords) != 0)
     return FALSE;
@@ -12898,6 +16347,9 @@ pad_colors (GdkRGBA        col[5],
  * a 'gpa:status' attribute on animation elements that
  * reflects whether they are currently running.
  *
+ * When serializing the 'shadow DOM', the viewport from the
+ * most recently drawn frame is used to resolve percentages.
+ *
  * Returns: the serialized contents
  *
  * Since: 4.22
@@ -12929,7 +16381,7 @@ gtk_svg_serialize_full (GtkSvg               *self,
 
       ComputeContext context;
       context.svg = self;
-      context.viewport = &self->view_box.size;
+      context.viewport = &self->viewport;
       context.current_time = self->current_time;
       context.parent = NULL;
       context.colors = col;
@@ -12939,29 +16391,22 @@ gtk_svg_serialize_full (GtkSvg               *self,
     }
 
   g_string_append (s, "<svg");
+
   indent_for_attr (s, 0);
   g_string_append (s, "xmlns='http://www.w3.org/2000/svg'");
   indent_for_attr (s, 0);
-  g_string_append (s, "width='");
-  string_append_double (s, self->width);
-  g_string_append_c (s, '\'');
-  indent_for_attr (s, 0);
-  g_string_append (s, "height='");
-  string_append_double (s, self->height);
-  g_string_append_c (s, '\'');
-
-  if (self->view_box.size.width != 0 && self->view_box.size.height != 0)
+  g_string_append (s, "xmlns:svg='http://www.w3.org/2000/svg'");
+  if (self->gpa_keywords)
     {
+      /* we only need these to write out keywords in a way
+       * that inkscape understand.s
+       */
       indent_for_attr (s, 0);
-      g_string_append (s, "viewBox='");
-      string_append_double (s, self->view_box.origin.x);
-      g_string_append_c (s, ' ');
-      string_append_double (s, self->view_box.origin.y);
-      g_string_append_c (s, ' ');
-      string_append_double (s, self->view_box.size.width);
-      g_string_append_c (s, ' ');
-      string_append_double (s, self->view_box.size.height);
-      g_string_append_c (s, '\'');
+      g_string_append (s, "xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'");
+      indent_for_attr (s, 0);
+      g_string_append (s, "xmlns:cc='http://creativecommons.org/ns#'");
+      indent_for_attr (s, 0);
+      g_string_append (s, "xmlns:dc='http://purl.org/dc/elements/1.1/'");
     }
 
   if (self->gpa_version > 0 || (flags & GTK_SVG_SERIALIZE_INCLUDE_STATE))
@@ -12997,7 +16442,34 @@ gtk_svg_serialize_full (GtkSvg               *self,
         }
     }
 
+  serialize_shape_attrs (s, self, 0, self->content, flags);
   g_string_append (s, ">");
+
+  if (self->gpa_keywords)
+    {
+      indent_for_elt (s, 2);
+      g_string_append (s, "<metadata>");
+      indent_for_elt (s, 4);
+      g_string_append (s, "<rdf:RDF>");
+      indent_for_elt (s, 6);
+      g_string_append (s, "<cc:Work>");
+      indent_for_elt (s, 8);
+      g_string_append (s, "<dc:subject>");
+      indent_for_elt (s, 10);
+      g_string_append (s, "<rdf:Bag>");
+      indent_for_elt (s, 12);
+      g_string_append_printf (s, "<rdf:li>%s</rdf:li>\n", self->gpa_keywords);
+      indent_for_elt (s, 10);
+      g_string_append (s, "</rdf:Bag>");
+      indent_for_elt (s, 8);
+      g_string_append (s, "</dc:subject>");
+      indent_for_elt (s, 6);
+      g_string_append (s, "</cc:Work>");
+      indent_for_elt (s, 4);
+      g_string_append (s, "</rdf:RDF>");
+      indent_for_elt (s, 2);
+      g_string_append (s, "</metadata>");
+    }
 
   serialize_shape (s, self, 0, self->content, flags);
   g_string_append (s, "\n</svg>\n");
@@ -13008,20 +16480,99 @@ gtk_svg_serialize_full (GtkSvg               *self,
 /* }}} */
 /* {{{ Getters and setters */
 
+unsigned int
+svg_transform_get_n_transforms (const SvgValue *value)
+{
+  SvgTransform *tf = (SvgTransform *) value;
+
+  return tf->n_transforms;
+}
+
+SvgValue *
+svg_transform_get_transform (const SvgValue *value,
+                             unsigned int    pos)
+{
+  SvgTransform *tf = (SvgTransform *) value;
+
+  switch (tf->transforms[pos].type)
+    {
+    case TRANSFORM_NONE:
+      return svg_transform_new_none ();
+    case TRANSFORM_TRANSLATE:
+      return svg_transform_new_translate (tf->transforms[pos].translate.x,
+                                          tf->transforms[pos].translate.y);
+    case TRANSFORM_SCALE:
+      return svg_transform_new_scale (tf->transforms[pos].scale.x,
+                                      tf->transforms[pos].scale.y);
+    case TRANSFORM_ROTATE:
+      return svg_transform_new_rotate (tf->transforms[pos].rotate.angle,
+                                       tf->transforms[pos].rotate.x,
+                                       tf->transforms[pos].rotate.y);
+    case TRANSFORM_SKEW_X:
+      return svg_transform_new_skew_x (tf->transforms[pos].skew_x.angle);
+    case TRANSFORM_SKEW_Y:
+      return svg_transform_new_skew_y (tf->transforms[pos].skew_y.angle);
+    case TRANSFORM_MATRIX:
+      return svg_transform_new_matrix (tf->transforms[pos].matrix.m);
+    default:
+      g_assert_not_reached ();
+    }
+}
+
+TransformType
+svg_transform_get_primitive (const SvgValue *value,
+                             unsigned int    pos,
+                             double          params[6])
+{
+  SvgTransform *tf = (SvgTransform *) value;
+
+  switch (tf->transforms[pos].type)
+    {
+    case TRANSFORM_NONE:
+      break;
+    case TRANSFORM_TRANSLATE:
+      params[0] = tf->transforms[pos].translate.x;
+      params[1] = tf->transforms[pos].translate.y;
+      break;
+    case TRANSFORM_SCALE:
+      params[0] = tf->transforms[pos].scale.x;
+      params[1] = tf->transforms[pos].scale.y;
+      break;
+    case TRANSFORM_ROTATE:
+      params[0] = tf->transforms[pos].rotate.angle;
+      params[1] = tf->transforms[pos].rotate.x;
+      params[2] = tf->transforms[pos].rotate.y;
+      break;
+    case TRANSFORM_SKEW_X:
+      params[0] = tf->transforms[pos].skew_x.angle;
+      break;
+    case TRANSFORM_SKEW_Y:
+      params[0] = tf->transforms[pos].skew_y.angle;
+      break;
+    case TRANSFORM_MATRIX:
+      memcpy (params, tf->transforms[pos].matrix.m, sizeof (double) * 6);
+      break;
+    default:
+      g_assert_not_reached ();
+    }
+
+  return tf->transforms[pos].type;
+}
+
 double
 svg_shape_attr_get_number (Shape                 *shape,
                            ShapeAttr              attr,
-                           const graphene_size_t *viewport)
+                           const graphene_rect_t *viewport)
 {
   g_return_val_if_fail (shape_has_attr (shape->type, attr) ||
                         (attr == SHAPE_ATTR_STROKE_MINWIDTH ||
                          attr == SHAPE_ATTR_STROKE_MAXWIDTH), 0);
   SvgValue *value;
 
-  if (shape->attrs & BIT (attr))
-    value = shape_get_base_value (shape, NULL, attr);
+  if (_gtk_bitmask_get (shape->attrs, attr))
+    value = shape_get_base_value (shape, NULL, attr, 0);
   else
-    value = shape_attr_get_initial_value (attr, shape->type);
+    value = shape_attr_get_initial_value (attr, shape);
 
   switch ((unsigned int) attr)
     {
@@ -13030,13 +16581,13 @@ svg_shape_attr_get_number (Shape                 *shape,
     case SHAPE_ATTR_RX:
     case SHAPE_ATTR_CX:
       g_assert (viewport);
-      return svg_number_get (value, viewport->width);
+      return svg_number_get (value, viewport->size.width);
     case SHAPE_ATTR_Y:
     case SHAPE_ATTR_HEIGHT:
     case SHAPE_ATTR_RY:
     case SHAPE_ATTR_CY:
       g_assert (viewport);
-      return svg_number_get (value, viewport->height);
+      return svg_number_get (value, viewport->size.height);
     case SHAPE_ATTR_R:
       g_assert (viewport);
       return svg_number_get (value, normalized_diagonal (viewport));
@@ -13063,10 +16614,10 @@ svg_shape_attr_get_path (Shape     *shape,
   SvgValue *value;
   GskPath *path;
 
-  if (shape->attrs & BIT (attr))
-    value = shape_get_base_value (shape, NULL, attr);
+  if (_gtk_bitmask_get (shape->attrs, attr))
+    value = shape_get_base_value (shape, NULL, attr, 0);
   else
-    value = shape_attr_get_initial_value (attr, shape->type);
+    value = shape_attr_get_initial_value (attr, shape);
 
   path = svg_path_get (value);
   if (path)
@@ -13082,10 +16633,10 @@ svg_shape_attr_get_enum (Shape     *shape,
   g_return_val_if_fail (shape_has_attr (shape->type, attr), 0);
   SvgValue *value;
 
-  if (shape->attrs & BIT (attr))
-    value = shape_get_base_value (shape, NULL, attr);
+  if (_gtk_bitmask_get (shape->attrs, attr))
+    value = shape_get_base_value (shape, NULL, attr, 0);
   else
-    value = shape_attr_get_initial_value (attr, shape->type);
+    value = shape_attr_get_initial_value (attr, shape);
 
   return svg_enum_get (value);
 }
@@ -13100,10 +16651,10 @@ svg_shape_attr_get_paint (Shape            *shape,
   SvgValue *value;
   SvgPaint *paint;
 
-  if (shape->attrs & BIT (attr))
-    value = shape_get_base_value (shape, NULL, attr);
+  if (_gtk_bitmask_get (shape->attrs, attr))
+    value = shape_get_base_value (shape, NULL, attr, 0);
   else
-    value = shape_attr_get_initial_value (attr, shape->type);
+    value = shape_attr_get_initial_value (attr, shape);
 
   paint = (SvgPaint *) value;
 
@@ -13113,7 +16664,9 @@ svg_shape_attr_get_paint (Shape            *shape,
   switch (paint->kind)
     {
     case PAINT_NONE:
-    case PAINT_GRADIENT:
+    case PAINT_CONTEXT_FILL:
+    case PAINT_CONTEXT_STROKE:
+    case PAINT_SERVER:
       break;
     case PAINT_SYMBOLIC:
       *symbolic = paint->symbolic;
@@ -13136,22 +16689,31 @@ svg_shape_attr_get_points (Shape        *shape,
   g_return_val_if_fail (shape_has_attr (shape->type, attr), NULL);
   SvgValue *value;
   SvgPoints *points;
+  double *ret;
 
-  if (shape->attrs & BIT (attr))
-    value = shape_get_base_value (shape, NULL, attr);
+  if (_gtk_bitmask_get (shape->attrs, attr))
+    value = shape_get_base_value (shape, NULL, attr, 0);
   else
-    value = shape_attr_get_initial_value (attr, shape->type);
+    value = shape_attr_get_initial_value (attr, shape);
 
   points = (SvgPoints *) value;
 
   *n_params = points->n_values;
 
-  return points->values;
+  ret = g_new0 (double, points->n_values);
+
+  for (unsigned int i = 0; i < points->n_values; i++)
+    {
+      /* FIXME: What about the dimension */
+      ret[i] = points->values[i].value;
+    }
+
+  return ret;
 }
 
 GskPath *
 svg_shape_get_path (Shape                 *shape,
-                    const graphene_size_t *viewport)
+                    const graphene_rect_t *viewport)
 {
   return shape_get_path (shape, viewport, FALSE);
 }
@@ -13165,10 +16727,10 @@ svg_shape_attr_get_clip (Shape      *shape,
   SvgValue *value;
   SvgClip *clip;
 
-  if (shape->attrs & BIT (attr))
-    value = shape_get_base_value (shape, NULL, attr);
+  if (_gtk_bitmask_get (shape->attrs, attr))
+    value = shape_get_base_value (shape, NULL, attr, 0);
   else
-    value = shape_attr_get_initial_value (attr, shape->type);
+    value = shape_attr_get_initial_value (attr, shape);
 
   clip = (SvgClip *) value;
 
@@ -13189,10 +16751,10 @@ svg_shape_attr_get_transform (Shape     *shape,
   SvgTransform *transform;
   GString *s = g_string_new ("");
 
-  if (shape->attrs & BIT (attr))
-    value = shape_get_base_value (shape, NULL, attr);
+  if (_gtk_bitmask_get (shape->attrs, attr))
+    value = shape_get_base_value (shape, NULL, attr, 0);
   else
-    value = shape_attr_get_initial_value (attr, shape->type);
+    value = shape_attr_get_initial_value (attr, shape);
 
   transform = (SvgTransform *) value;
 
@@ -13211,10 +16773,10 @@ svg_shape_attr_get_filter (Shape     *shape,
   SvgFilter *filter;
   GString *s = g_string_new ("");
 
-  if (shape->attrs & BIT (attr))
-    value = shape_get_base_value (shape, NULL, attr);
+  if (_gtk_bitmask_get (shape->attrs, attr))
+    value = shape_get_base_value (shape, NULL, attr, 0);
   else
-    value = shape_attr_get_initial_value (attr, shape->type);
+    value = shape_attr_get_initial_value (attr, shape);
 
   filter = (SvgFilter *) value;
 
@@ -13229,10 +16791,10 @@ svg_shape_attr_set (Shape     *shape,
                     ShapeAttr  attr,
                     SvgValue  *value)
 {
-  if (shape->attrs & BIT (attr))
+  if (_gtk_bitmask_get (shape->attrs, attr))
     svg_value_unref (shape->base[attr]);
   shape->base[attr] = value;
-  shape->attrs |= BIT (attr);
+  shape->attrs = _gtk_bitmask_set (shape->attrs, attr, TRUE);
 }
 
 Shape *
@@ -13243,12 +16805,32 @@ svg_shape_add (Shape     *parent,
 
   g_ptr_array_add (parent->shapes, shape);
 
+  if ((parent->type == SHAPE_TEXT || parent->type == SHAPE_TSPAN) && type == SHAPE_TSPAN)
+    {
+      TextNode node = {
+        .type = TEXT_NODE_SHAPE,
+        .shape = { .shape = shape }
+      };
+      g_array_append_val (parent->text, node);
+    }
+
   return shape;
 }
 
 void
 svg_shape_delete (Shape *shape)
 {
+  if (shape->text)
+    for (guint i = 0; i < shape->text->len; i++)
+      {
+        TextNode *node = &g_array_index (shape->text, TextNode, i);
+        if (node->type == TEXT_NODE_SHAPE && node->shape.shape == shape)
+          {
+            g_array_remove_index (shape->text, i);
+            break;
+          }
+      }
+
   g_ptr_array_remove (shape->parent->shapes, shape);
 }
 
@@ -13300,17 +16882,13 @@ gtk_svg_set_playing (GtkSvg   *self,
 static void
 gtk_svg_clear_content (GtkSvg *self)
 {
-  timeline_free (self->timeline);
-  shape_free (self->content);
+  g_clear_pointer (&self->timeline, timeline_free);
+  g_clear_pointer (&self->content, shape_free);
 
+  self->content = shape_new (NULL, SHAPE_SVG);
   self->timeline = timeline_new ();
-  self->content = shape_new (NULL, SHAPE_GROUP);
 
-  self->width = 0;
-  self->height = 0;
-  graphene_rect_init (&self->view_box, 0, 0, 0, 0);
-  self->align = ALIGN_XY (ALIGN_MID, ALIGN_MID);
-  self->meet_or_slice = MEET;
+  graphene_rect_init (&self->viewport, 0, 0, 0, 0);
 
   self->state = 0;
   self->max_state = 0;

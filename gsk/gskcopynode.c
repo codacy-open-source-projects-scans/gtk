@@ -53,11 +53,11 @@ gsk_copy_node_finalize (GskRenderNode *node)
 static void
 gsk_copy_node_draw (GskRenderNode *node,
                     cairo_t       *cr,
-                    GdkColorState *ccs)
+                    GskCairoData  *data)
 {
   GskCopyNode *self = (GskCopyNode *) node;
 
-  gsk_render_node_draw_ccs (self->child, cr, ccs);
+  gsk_render_node_draw_full (self->child, cr, data);
 }
 
 static void
@@ -67,17 +67,40 @@ gsk_copy_node_diff (GskRenderNode *node1,
 {
   GskCopyNode *self1 = (GskCopyNode *) node1;
   GskCopyNode *self2 = (GskCopyNode *) node2;
+  GSList copy = { cairo_region_copy (data->region), data->copies };
+
+  data->copies = &copy;
 
   gsk_render_node_diff (self1->child, self2->child, data);
+
+  cairo_region_destroy (copy.data);
+  data->copies = copy.next;
 }
 
-static gboolean
-gsk_copy_node_get_opaque_rect (GskRenderNode   *node,
-                               graphene_rect_t *out_opaque)
+static GskRenderNode **
+gsk_copy_node_get_children (GskRenderNode *node,
+                            gsize         *n_children)
 {
   GskCopyNode *self = (GskCopyNode *) node;
 
-  return gsk_render_node_get_opaque_rect (self->child, out_opaque);
+  *n_children = 1;
+
+  return &self->child;
+}
+
+static void
+gsk_copy_node_render_opacity (GskRenderNode  *node,
+                              GskOpacityData *data)
+{
+  GskCopyNode *self = (GskCopyNode *) node;
+  graphene_rect_t saved = data->opaque;
+  GSList copy = { &saved, (GSList *) data->copies };
+
+  data->copies = &copy;
+
+  gsk_render_node_render_opacity (self->child, data);
+
+  data->copies = data->copies->next;
 }
 
 static GskRenderNode *
@@ -113,8 +136,9 @@ gsk_copy_node_class_init (gpointer g_class,
   node_class->finalize = gsk_copy_node_finalize;
   node_class->draw = gsk_copy_node_draw;
   node_class->diff = gsk_copy_node_diff;
+  node_class->get_children = gsk_copy_node_get_children;
   node_class->replay = gsk_copy_node_replay;
-  node_class->get_opaque_rect = gsk_copy_node_get_opaque_rect;
+  node_class->render_opacity = gsk_copy_node_render_opacity;
 }
 
 GSK_DEFINE_RENDER_NODE_TYPE (GskCopyNode, gsk_copy_node)

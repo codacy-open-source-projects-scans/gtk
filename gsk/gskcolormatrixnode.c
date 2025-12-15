@@ -122,7 +122,7 @@ apply_color_matrix_to_pattern (cairo_pattern_t         *pattern,
 static void
 gsk_color_matrix_node_draw (GskRenderNode *node,
                             cairo_t       *cr,
-                            GdkColorState *ccs)
+                            GskCairoData  *data)
 {
   GskColorMatrixNode *self = (GskColorMatrixNode *) node;
   cairo_pattern_t *pattern;
@@ -136,7 +136,7 @@ gsk_color_matrix_node_draw (GskRenderNode *node,
 
   cairo_push_group (cr);
 
-  gsk_render_node_draw_ccs (self->child, cr, ccs);
+  gsk_render_node_draw_full (self->child, cr, data);
 
   pattern = cairo_pop_group (cr);
   apply_color_matrix_to_pattern (pattern, &self->color_matrix, &self->color_offset);
@@ -167,6 +167,17 @@ gsk_color_matrix_node_diff (GskRenderNode *node1,
 nope:
   gsk_render_node_diff_impossible (node1, node2, data);
   return;
+}
+
+static GskRenderNode **
+gsk_color_matrix_node_get_children (GskRenderNode *node,
+                                    gsize         *n_children)
+{
+  GskColorMatrixNode *self = (GskColorMatrixNode *) node;
+
+  *n_children = 1;
+  
+  return &self->child;
 }
 
 static GskRenderNode *
@@ -202,6 +213,7 @@ gsk_color_matrix_node_class_init (gpointer g_class,
   node_class->finalize = gsk_color_matrix_node_finalize;
   node_class->draw = gsk_color_matrix_node_draw;
   node_class->diff = gsk_color_matrix_node_diff;
+  node_class->get_children = gsk_color_matrix_node_get_children;
   node_class->replay = gsk_color_matrix_node_replay;
 }
 

@@ -31,6 +31,7 @@
 
 #include "gsk/gskcolornodeprivate.h"
 #include "gsk/gskrendernodeprivate.h"
+#include "gsk/gskrepeatnodeprivate.h"
 #include "gsk/gskroundedrectprivate.h"
 #include "gsk/gskstrokeprivate.h"
 
@@ -95,6 +96,7 @@ struct _GtkSnapshotState {
     struct {
       graphene_rect_t bounds;
       graphene_rect_t child_bounds;
+      GskRepeat repeat;
     } repeat;
     struct {
       graphene_rect_t bounds;
@@ -151,6 +153,9 @@ G_GNUC_END_IGNORE_DEPRECATIONS
       GskPorterDuff op;
       GskRenderNode *mask;
     } composite;
+    struct {
+      GskIsolation allowed;
+    } isolation;
   } data;
 };
 
@@ -525,6 +530,56 @@ gtk_snapshot_push_opacity (GtkSnapshot *snapshot,
 }
 
 static GskRenderNode *
+gtk_snapshot_collect_isolation (GtkSnapshot      *snapshot,
+                                GtkSnapshotState *state,
+                                GskRenderNode   **nodes,
+                                guint             n_nodes)
+{
+  GskRenderNode *node, *isolation_node;
+
+  node = gtk_snapshot_collect_default (snapshot, state, nodes, n_nodes);
+  if (node == NULL)
+    return NULL;
+
+  isolation_node = gsk_isolation_node_new (node, state->data.isolation.allowed);
+  gsk_render_node_unref (node);
+
+  return isolation_node;
+}
+
+/**
+ * gtk_snapshot_push_isolation:
+ * @snapshot: a `GtkSnapshot`
+ * @features: features that are isolated
+ *
+ * Isolates the following drawing operations from previous ones.
+ *
+ * You can express "everything but these flags" in a forward compatible
+ * way by using bit math:
+ * `GSK_ISOLATION_ALL & ~(GSK_ISOLATION_BACKGROUND | GSK_ISOLATION_COPY_PASTE)`
+ * will isolate everything but background and copy/paste.
+ *
+ * For what isolation features exist, see [flags@Gsk.Isolation].
+ *
+ * Content is isolated until the next call to [method@Gtk.Snapshot.pop].
+ *
+ * Since: 4.22
+ */
+void
+gtk_snapshot_push_isolation (GtkSnapshot  *snapshot,
+                             GskIsolation  allowed)
+{
+  GtkSnapshotState *current_state = gtk_snapshot_get_current_state (snapshot);
+  GtkSnapshotState *state;
+
+  state = gtk_snapshot_push_state (snapshot,
+                                   current_state->transform,
+                                   gtk_snapshot_collect_isolation,
+                                   NULL);
+  state->data.isolation.allowed = allowed;
+}
+
+static GskRenderNode *
 gtk_snapshot_collect_blur (GtkSnapshot      *snapshot,
                            GtkSnapshotState *state,
                            GskRenderNode   **nodes,
@@ -772,6 +827,7 @@ gtk_snapshot_collect_repeat (GtkSnapshot      *snapshot,
   GskRenderNode *node, *repeat_node;
   const graphene_rect_t *bounds = &state->data.repeat.bounds;
   const graphene_rect_t *child_bounds = &state->data.repeat.child_bounds;
+  GskRepeat repeat = state->data.repeat.repeat;
 
   node = gtk_snapshot_collect_default (snapshot, state, nodes, n_nodes);
   if (node == NULL)
@@ -790,9 +846,10 @@ gtk_snapshot_collect_repeat (GtkSnapshot      *snapshot,
       return color_node;
     }
 
-  repeat_node = gsk_repeat_node_new (bounds,
-                                     node,
-                                     child_bounds->size.width > 0 ? child_bounds : NULL);
+  repeat_node = gsk_repeat_node_new2 (bounds,
+                                      node,
+                                      child_bounds->size.width > 0 ? child_bounds : NULL,
+                                      repeat);
 
   gsk_render_node_unref (node);
 
@@ -902,21 +959,11 @@ gtk_snapshot_ensure_identity (GtkSnapshot *snapshot)
     gtk_snapshot_autopush_transform (snapshot);
 }
 
-/**
- * gtk_snapshot_push_repeat:
- * @snapshot: a `GtkSnapshot`
- * @bounds: the bounds within which to repeat
- * @child_bounds: (nullable): the bounds of the child or %NULL
- *   to use the full size of the collected child node
- *
- * Creates a node that repeats the child node.
- *
- * The child is recorded until the next call to [method@Gtk.Snapshot.pop].
- */
 void
-gtk_snapshot_push_repeat (GtkSnapshot           *snapshot,
-                          const graphene_rect_t *bounds,
-                          const graphene_rect_t *child_bounds)
+gtk_snapshot_push_repeat2 (GtkSnapshot           *snapshot,
+                           const graphene_rect_t *bounds,
+                           const graphene_rect_t *child_bounds,
+                           GskRepeat              repeat)
 {
   GtkSnapshotState *state;
   gboolean empty_child_bounds = FALSE;
@@ -941,6 +988,26 @@ gtk_snapshot_push_repeat (GtkSnapshot           *snapshot,
 
   gtk_graphene_rect_scale_affine (bounds, scale_x, scale_y, dx, dy, &state->data.repeat.bounds);
   state->data.repeat.child_bounds = real_child_bounds;
+  state->data.repeat.repeat = repeat;
+}
+
+/**
+ * gtk_snapshot_push_repeat:
+ * @snapshot: a `GtkSnapshot`
+ * @bounds: the bounds within which to repeat
+ * @child_bounds: (nullable): the bounds of the child or %NULL
+ *   to use the full size of the collected child node
+ *
+ * Creates a node that repeats the child node.
+ *
+ * The child is recorded until the next call to [method@Gtk.Snapshot.pop].
+ */
+void
+gtk_snapshot_push_repeat (GtkSnapshot           *snapshot,
+                          const graphene_rect_t *bounds,
+                          const graphene_rect_t *child_bounds)
+{
+  gtk_snapshot_push_repeat2 (snapshot, bounds, child_bounds, GSK_REPEAT_REPEAT);
 }
 
 static GskRenderNode *
@@ -1589,11 +1656,11 @@ gtk_snapshot_collect_blend_top (GtkSnapshot      *snapshot,
               ? gsk_render_node_ref (state->data.blend.bottom_node)
               : NULL;
 
-  g_assert (top_node != NULL || bottom_node != NULL);
-
   /* XXX: Is this necessary? Do we need a NULL node? */
   if (top_node == NULL)
-    top_node = gsk_color_node_new (&transparent, &bottom_node->bounds);
+    top_node = gsk_color_node_new (&transparent,
+                                   bottom_node ? &bottom_node->bounds
+                                               : &GRAPHENE_RECT_INIT (0, 0, 0, 0));
   if (bottom_node == NULL)
     bottom_node = gsk_color_node_new (&transparent, &top_node->bounds);
 
