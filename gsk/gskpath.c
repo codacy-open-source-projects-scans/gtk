@@ -77,7 +77,7 @@ gsk_path_new_from_contours (const GSList *contours)
   guint8 *contour_data;
   GskPathFlags flags;
 
-  flags = GSK_PATH_CLOSED | GSK_PATH_FLAT;
+  flags = GSK_PATH_CLOSED | GSK_PATH_FLAT | GSK_PATH_ZERO_LENGTH;
   size = 0;
   n_contours = 0;
   for (l = contours; l; l = l->next)
@@ -560,6 +560,7 @@ gsk_path_get_start_point (GskPath      *self,
    */
   result->contour = 0;
   result->idx = 1;
+  result->idx = MIN (1, gsk_contour_get_n_ops (self->contours[0]) - 1);
   result->t = 0;
 
   return TRUE;

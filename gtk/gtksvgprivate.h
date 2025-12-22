@@ -59,9 +59,9 @@ struct _GtkSvg
   GObject parent_instance;
   Shape *content;
 
-  double width, height;
-  graphene_rect_t bounds;
-  graphene_rect_t viewport;
+  double width, height; /* Intrinsic size */
+
+  double current_width, current_height; /* last snapshot size */
 
   double weight;
   unsigned int state;
@@ -111,12 +111,14 @@ typedef enum
   SHAPE_TSPAN,
   SHAPE_SVG,
   SHAPE_IMAGE,
+  SHAPE_FILTER,
 } ShapeType;
 
 typedef enum
 {
   SHAPE_ATTR_LANG,
   FIRST_SHAPE_ATTR = SHAPE_ATTR_LANG,
+  SHAPE_ATTR_DISPLAY,
   SHAPE_ATTR_VISIBILITY,
   SHAPE_ATTR_TRANSFORM,
   SHAPE_ATTR_OPACITY,
@@ -194,10 +196,43 @@ typedef enum
   SHAPE_ATTR_STOP_COLOR,
   SHAPE_ATTR_STOP_OPACITY,
   LAST_STOP_ATTR = SHAPE_ATTR_STOP_OPACITY,
+  SHAPE_ATTR_FE_X,
+  FIRST_FILTER_ATTR = SHAPE_ATTR_FE_X,
+  SHAPE_ATTR_FE_Y,
+  SHAPE_ATTR_FE_WIDTH,
+  SHAPE_ATTR_FE_HEIGHT,
+  SHAPE_ATTR_FE_RESULT,
+  SHAPE_ATTR_FE_COLOR,
+  SHAPE_ATTR_FE_OPACITY,
+  SHAPE_ATTR_FE_IN,
+  SHAPE_ATTR_FE_IN2,
+  SHAPE_ATTR_FE_STD_DEV,
+  SHAPE_ATTR_FE_DX,
+  SHAPE_ATTR_FE_DY,
+  SHAPE_ATTR_FE_BLUR_EDGE_MODE,
+  SHAPE_ATTR_FE_BLEND_MODE,
+  SHAPE_ATTR_FE_BLEND_COMPOSITE,
+  SHAPE_ATTR_FE_COLOR_MATRIX_TYPE,
+  SHAPE_ATTR_FE_COLOR_MATRIX_VALUES,
+  SHAPE_ATTR_FE_COMPOSITE_OPERATOR,
+  SHAPE_ATTR_FE_DISPLACEMENT_SCALE,
+  SHAPE_ATTR_FE_DISPLACEMENT_X,
+  SHAPE_ATTR_FE_DISPLACEMENT_Y,
+  SHAPE_ATTR_FE_IMAGE_HREF,
+  SHAPE_ATTR_FE_IMAGE_CONTENT_FIT,
+  SHAPE_ATTR_FE_FUNC_TYPE,
+  SHAPE_ATTR_FE_FUNC_VALUES,
+  SHAPE_ATTR_FE_FUNC_SLOPE,
+  SHAPE_ATTR_FE_FUNC_INTERCEPT,
+  SHAPE_ATTR_FE_FUNC_AMPLITUDE,
+  SHAPE_ATTR_FE_FUNC_EXPONENT,
+  SHAPE_ATTR_FE_FUNC_OFFSET,
+  LAST_FILTER_ATTR = SHAPE_ATTR_FE_FUNC_OFFSET,
 } ShapeAttr;
 
 #define N_SHAPE_ATTRS (LAST_SHAPE_ATTR + 1 - FIRST_SHAPE_ATTR)
 #define N_STOP_ATTRS (LAST_STOP_ATTR + 1 - FIRST_STOP_ATTR)
+#define N_FILTER_ATTRS (LAST_FILTER_ATTR + 1 - FIRST_FILTER_ATTR)
 
 typedef enum
 {
@@ -256,7 +291,6 @@ typedef struct
 struct _Shape
 {
   ShapeType type;
-  gboolean display;
   Shape *parent;
   GtkBitmask *attrs;
   char *id;
@@ -273,6 +307,7 @@ struct _Shape
   GPtrArray *shapes;
   GPtrArray *animations;
   GPtrArray *color_stops;
+  GPtrArray *filters;
   GPtrArray *deps;
 
   GskPath *path;
@@ -405,7 +440,7 @@ SvgValue *   svg_paint_order_new    (PaintOrder        order);
 SvgValue *   svg_paint_new_none     (void);
 SvgValue *   svg_paint_new_symbolic (GtkSymbolicColor  symbolic);
 SvgValue *   svg_paint_new_rgba     (const GdkRGBA    *rgba);
-SvgValue *   svg_points_new         (double           *values,
+SvgValue *   svg_numbers_new        (double           *values,
                                      unsigned int      n_values);
 SvgValue *   svg_path_new           (GskPath          *path);
 SvgValue *   svg_clip_new_none      (void);
