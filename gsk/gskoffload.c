@@ -35,6 +35,7 @@
 #include "gskroundedclipnode.h"
 #include "gskroundedrectprivate.h"
 #include "gsksubsurfacenode.h"
+#include "gsktransformnode.h"
 #include "gsktransformprivate.h"
 
 #include "gdkrgbaprivate.h"
@@ -667,6 +668,7 @@ visit_node (GskOffload    *self,
     case GSK_COMPONENT_TRANSFER_NODE:
     case GSK_COMPOSITE_NODE:
     case GSK_DISPLACEMENT_NODE:
+    case GSK_ARITHMETIC_NODE:
       /* cannot offload */
       {
         const char *was_impossible = self->offload_impossible;

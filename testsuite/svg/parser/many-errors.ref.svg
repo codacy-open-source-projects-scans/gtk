@@ -4,8 +4,6 @@
         width='100'
         height='100'>
   <g>
-    <defs>
-    </defs>
     <circle>
     </circle>
     <path>
@@ -17,5 +15,18 @@
     </rect>
     <use>
     </use>
+    <path>
+    </path>
+    <circle>
+    </circle>
   </g>
+  <defs>
+    <filter
+            id='myfirstfilter'>
+      <feFlood>
+      </feFlood>
+      <feMerge>
+      </feMerge>
+    </filter>
+  </defs>
 </svg>

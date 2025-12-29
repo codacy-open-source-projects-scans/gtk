@@ -4,6 +4,7 @@
 
 #include "broadway/gdkprivate-broadway.h"
 
+#include "gskarithmeticnodeprivate.h"
 #include "gskblendnode.h"
 #include "gskblurnode.h"
 #include "gskbordernode.h"
@@ -21,6 +22,7 @@
 #include "gskrendererprivate.h"
 #include "gskrendernodeprivate.h"
 #include "gsksubsurfacenode.h"
+#include "gsktransformnode.h"
 #include "gdk/gdkcolorstateprivate.h"
 #include "gdk/gdktextureprivate.h"
 
@@ -311,6 +313,7 @@ collect_reused_child_nodes (GskRenderer *renderer,
     case GSK_COMPOSITE_NODE:
     case GSK_ISOLATION_NODE:
     case GSK_DISPLACEMENT_NODE:
+    case GSK_ARITHMETIC_NODE:
 
     default:
 
@@ -915,6 +918,7 @@ gsk_broadway_renderer_add_node (GskRenderer *renderer,
     case GSK_COMPOSITE_NODE:
     case GSK_ISOLATION_NODE:
     case GSK_DISPLACEMENT_NODE:
+    case GSK_ARITHMETIC_NODE:
     default:
       break; /* Fallback */
     }

@@ -67,10 +67,15 @@ struct _GtkSvg
   unsigned int state;
   unsigned int max_state;
   int64_t state_change_delay;
+  GtkSvgFeatures features;
+
+  char *resource;
 
   int64_t load_time;
   int64_t current_time;
+  int64_t pause_time;
 
+  GtkOverflow overflow;
   gboolean playing;
   GtkSvgRunMode run_mode;
   GdkFrameClock *clock;
@@ -87,6 +92,9 @@ struct _GtkSvg
   Timeline *timeline;
 
   GHashTable *images;
+
+  PangoFontMap *fontmap;
+  GPtrArray *font_files;
 };
 
 typedef enum
@@ -116,18 +124,15 @@ typedef enum
 
 typedef enum
 {
-  SHAPE_ATTR_LANG,
-  FIRST_SHAPE_ATTR = SHAPE_ATTR_LANG,
   SHAPE_ATTR_DISPLAY,
+  FIRST_SHAPE_ATTR = SHAPE_ATTR_DISPLAY,
   SHAPE_ATTR_VISIBILITY,
   SHAPE_ATTR_TRANSFORM,
   SHAPE_ATTR_OPACITY,
-  SHAPE_ATTR_OVERFLOW,
   SHAPE_ATTR_FILTER,
   SHAPE_ATTR_CLIP_PATH,
   SHAPE_ATTR_CLIP_RULE,
   SHAPE_ATTR_MASK,
-  SHAPE_ATTR_MASK_TYPE,
   SHAPE_ATTR_FILL,
   SHAPE_ATTR_FILL_OPACITY,
   SHAPE_ATTR_FILL_RULE,
@@ -139,11 +144,15 @@ typedef enum
   SHAPE_ATTR_STROKE_MITERLIMIT,
   SHAPE_ATTR_STROKE_DASHARRAY,
   SHAPE_ATTR_STROKE_DASHOFFSET,
+  SHAPE_ATTR_MARKER_START,
+  SHAPE_ATTR_MARKER_MID,
+  SHAPE_ATTR_MARKER_END,
   SHAPE_ATTR_PAINT_ORDER,
   SHAPE_ATTR_BLEND_MODE,
   SHAPE_ATTR_ISOLATION,
-  SHAPE_ATTR_HREF,
   SHAPE_ATTR_PATH_LENGTH,
+  SHAPE_ATTR_HREF,
+  SHAPE_ATTR_OVERFLOW,
   SHAPE_ATTR_PATH,
   SHAPE_ATTR_CX,
   SHAPE_ATTR_CY,
@@ -165,29 +174,28 @@ typedef enum
   SHAPE_ATTR_FX,
   SHAPE_ATTR_FY,
   SHAPE_ATTR_FR,
+  SHAPE_ATTR_MASK_TYPE,
   SHAPE_ATTR_VIEW_BOX,
   SHAPE_ATTR_CONTENT_FIT,
   SHAPE_ATTR_REF_X,
   SHAPE_ATTR_REF_Y,
   SHAPE_ATTR_MARKER_UNITS,
   SHAPE_ATTR_MARKER_ORIENT,
-  SHAPE_ATTR_MARKER_START,
-  SHAPE_ATTR_MARKER_MID,
-  SHAPE_ATTR_MARKER_END,
+  SHAPE_ATTR_LANG,
   SHAPE_ATTR_TEXT_ANCHOR,
   SHAPE_ATTR_DX,
   SHAPE_ATTR_DY,
   SHAPE_ATTR_UNICODE_BIDI,
   SHAPE_ATTR_DIRECTION,
   SHAPE_ATTR_WRITING_MODE,
+  SHAPE_ATTR_LETTER_SPACING,
+  SHAPE_ATTR_TEXT_DECORATION,
   SHAPE_ATTR_FONT_FAMILY,
   SHAPE_ATTR_FONT_STYLE,
   SHAPE_ATTR_FONT_VARIANT,
   SHAPE_ATTR_FONT_WEIGHT,
-  SHAPE_ATTR_FONT_STRECH, // Deprecated & not part of SVG2!
+  SHAPE_ATTR_FONT_STRETCH, // Deprecated & not part of SVG2!
   SHAPE_ATTR_FONT_SIZE,
-  SHAPE_ATTR_LETTER_SPACING,
-  SHAPE_ATTR_TEXT_DECORATION,
   SHAPE_ATTR_STROKE_MINWIDTH,
   SHAPE_ATTR_STROKE_MAXWIDTH,
   LAST_SHAPE_ATTR = SHAPE_ATTR_STROKE_MAXWIDTH,
@@ -215,6 +223,10 @@ typedef enum
   SHAPE_ATTR_FE_COLOR_MATRIX_TYPE,
   SHAPE_ATTR_FE_COLOR_MATRIX_VALUES,
   SHAPE_ATTR_FE_COMPOSITE_OPERATOR,
+  SHAPE_ATTR_FE_COMPOSITE_K1,
+  SHAPE_ATTR_FE_COMPOSITE_K2,
+  SHAPE_ATTR_FE_COMPOSITE_K3,
+  SHAPE_ATTR_FE_COMPOSITE_K4,
   SHAPE_ATTR_FE_DISPLACEMENT_SCALE,
   SHAPE_ATTR_FE_DISPLACEMENT_X,
   SHAPE_ATTR_FE_DISPLACEMENT_Y,
@@ -233,6 +245,8 @@ typedef enum
 #define N_SHAPE_ATTRS (LAST_SHAPE_ATTR + 1 - FIRST_SHAPE_ATTR)
 #define N_STOP_ATTRS (LAST_STOP_ATTR + 1 - FIRST_STOP_ATTR)
 #define N_FILTER_ATTRS (LAST_FILTER_ATTR + 1 - FIRST_FILTER_ATTR)
+
+#define N_ATTRS (LAST_FILTER_ATTR + 1 - FIRST_SHAPE_ATTR)
 
 typedef enum
 {
@@ -300,9 +314,10 @@ struct _Shape
   Shape *next;
 
   gboolean computed_for_use;
+  gboolean valid_bounds;
 
-  SvgValue *base[N_SHAPE_ATTRS];
-  SvgValue *current[N_SHAPE_ATTRS];
+  SvgValue *base[N_ATTRS];
+  SvgValue *current[N_ATTRS];
 
   GPtrArray *shapes;
   GPtrArray *animations;
@@ -312,6 +327,7 @@ struct _Shape
 
   GskPath *path;
   GskPathMeasure *measure;
+  graphene_rect_t bounds;
   union {
     struct {
       double cx, cy, r;
@@ -368,6 +384,7 @@ typedef enum
   PAINT_COLOR,
   PAINT_SYMBOLIC,
   PAINT_SERVER,
+  PAINT_SERVER_WITH_FALLBACK,
 } PaintKind;
 
 typedef enum
@@ -442,9 +459,9 @@ SvgValue *   svg_paint_new_symbolic (GtkSymbolicColor  symbolic);
 SvgValue *   svg_paint_new_rgba     (const GdkRGBA    *rgba);
 SvgValue *   svg_numbers_new        (double           *values,
                                      unsigned int      n_values);
-SvgValue *   svg_path_new           (GskPath          *path);
+SvgValue *   svg_path_new           (const char *string);
 SvgValue *   svg_clip_new_none      (void);
-SvgValue *   svg_clip_new_path      (GskPath          *path);
+SvgValue *   svg_clip_new_path      (const char *string);
 SvgValue *   svg_transform_parse    (const char       *value);
 unsigned int svg_transform_get_n_transforms (const SvgValue *value);
 SvgValue *   svg_transform_get_transform    (const SvgValue *value,
@@ -482,6 +499,12 @@ void           gtk_svg_set_load_time   (GtkSvg                *self,
 void           gtk_svg_set_playing     (GtkSvg                *self,
                                         gboolean               playing);
 
+void           gtk_svg_clear_content   (GtkSvg                *self);
+
+void           gtk_svg_set_overflow    (GtkSvg                *self,
+                                        GtkOverflow            overflow);
+GtkOverflow    gtk_svg_get_overflow    (GtkSvg                *self);
+
 void           gtk_svg_advance         (GtkSvg                *self,
                                         int64_t                current_time);
 
@@ -489,6 +512,24 @@ GtkSvgRunMode  gtk_svg_get_run_mode    (GtkSvg                *self);
 
 int64_t        gtk_svg_get_next_update (GtkSvg                *self);
 
+/*< private >
+ * GtkSvgSerializeFlags:
+ * @GTK_SVG_SERIALIZE_DEFAULT: Default behavior. Serialize
+ *   the DOM, with gpa attributes, and with compatibility
+ *   tweaks
+ * @GTK_SVG_SERIALIZE_AT_CURRENT_TIME: Serialize the current
+ *   values of a running animation, as opposed to the DOM
+ *   values that the parser produced
+ * @GTK_SVG_SERIALIZE_INCLUDE_STATE: Include custom attributes
+ *   with various information about the state of the renderer,
+ *   such as the current time, or the status of running animations
+ * @GTK_SVG_SERIALIZE_EXPAND_GPA_ATTRS: Instead of gpa attributes,
+ *   include the animations that were generated from them
+ * @GTK_SVG_SERIALIZE_NO_COMPAT: Don't include things that
+ *   improve the rendering of the serialized result in renderers
+ *   which don't support extensions, but stick to the pristine
+ *   DOM
+ */
 typedef enum
 {
   GTK_SVG_SERIALIZE_DEFAULT            = 0,
@@ -496,6 +537,7 @@ typedef enum
   GTK_SVG_SERIALIZE_EXCLUDE_ANIMATION  = 1 << 1,
   GTK_SVG_SERIALIZE_INCLUDE_STATE      = 1 << 2,
   GTK_SVG_SERIALIZE_EXPAND_GPA_ATTRS   = 1 << 3,
+  GTK_SVG_SERIALIZE_NO_COMPAT          = 1 << 4,
 } GtkSvgSerializeFlags;
 
 GBytes *       gtk_svg_serialize_full  (GtkSvg                *self,

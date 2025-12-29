@@ -5,8 +5,6 @@
         width='100%'
         height='100%'
         viewBox='0 0 480 360'>
-  <defs>
-  </defs>
   <g
           id='test-body-content'
           font-family='FreeSerif, serif'
@@ -15,45 +13,39 @@
             fill='rgb(0,0,255)'
             x='19'
             y='61'
-            font-size='32'>Plain
-    </text>
+            font-size='32'>Plain</text>
     <text
             fill='rgb(0,0,255)'
             x='142'
             y='61'
             font-style='italic'
-            font-size='32'>Italic
-    </text>
+            font-size='32'>Italic</text>
     <text
             fill='rgb(0,0,255)'
             x='257'
             y='60'
             font-weight='700'
-            font-size='32'>Bold
-    </text>
+            font-size='32'>Bold</text>
     <text
             fill='rgb(0,0,255)'
             x='224'
             y='110'
-            font-size='32'
-            text-decoration='underline'>Underline
-    </text>
+            text-decoration='underline'
+            font-size='32'>Underline</text>
     <text
             fill='rgb(255,0,255)'
             x='39'
             y='147'
-            font-size='32'
-            text-decoration='line-through'>Line through
-    </text>
+            text-decoration='line-through'
+            font-size='32'>Line through</text>
     <text
             fill='rgb(0,0,0)'
             x='1'
             y='200'
+            text-decoration='underline'
             font-style='italic'
             font-weight='700'
-            font-size='32'
-            text-decoration='underline'>Bold, italic and underlined
-    </text>
+            font-size='32'>Bold, italic and underlined</text>
     <g>
       <rect
               fill='none'
@@ -71,20 +63,17 @@
                 fill='rgb(0,0,0)'
                 x='55'
                 y='245'
-                font-size='24'>Each line of text which flows in a 
-        </text>
+                font-size='24'>Each line of text which flows in a </text>
         <text
                 fill='rgb(0,0,0)'
                 x='55'
                 y='265'
-                font-size='24'>rectangular box has to be broken
-        </text>
+                font-size='24'>rectangular box has to be broken</text>
         <text
                 fill='rgb(0,0,0)'
                 x='55'
                 y='285'
-                font-size='24'>into separated lines.
-        </text>
+                font-size='24'>into separated lines.</text>
       </g>
     </g>
   </g>
@@ -96,8 +85,7 @@
             fill='rgb(0,0,0)'
             stroke='none'
             x='10'
-            y='340'>$Revision: 1.9 $
-    </text>
+            y='340'>$Revision: 1.9 $</text>
   </g>
   <rect
           id='test-frame'
