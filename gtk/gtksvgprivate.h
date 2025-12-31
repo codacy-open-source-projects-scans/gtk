@@ -120,6 +120,7 @@ typedef enum
   SHAPE_SVG,
   SHAPE_IMAGE,
   SHAPE_FILTER,
+  SHAPE_SYMBOL,
 } ShapeType;
 
 typedef enum
@@ -153,6 +154,7 @@ typedef enum
   SHAPE_ATTR_PATH_LENGTH,
   SHAPE_ATTR_HREF,
   SHAPE_ATTR_OVERFLOW,
+  SHAPE_ATTR_VECTOR_EFFECT,
   SHAPE_ATTR_PATH,
   SHAPE_ATTR_CX,
   SHAPE_ATTR_CY,
@@ -459,7 +461,8 @@ SvgValue *   svg_paint_new_symbolic (GtkSymbolicColor  symbolic);
 SvgValue *   svg_paint_new_rgba     (const GdkRGBA    *rgba);
 SvgValue *   svg_numbers_new        (double           *values,
                                      unsigned int      n_values);
-SvgValue *   svg_path_new           (const char *string);
+SvgValue *   svg_view_box_new       (const graphene_rect_t *box);
+SvgValue *   svg_path_new           (GskPath *path);
 SvgValue *   svg_clip_new_none      (void);
 SvgValue *   svg_clip_new_path      (const char *string);
 SvgValue *   svg_transform_parse    (const char       *value);
