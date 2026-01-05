@@ -54,20 +54,32 @@ typedef enum
   GTK_SVG_RUN_MODE_CONTINUOUS,
 } GtkSvgRunMode;
 
+typedef enum
+{
+  GTK_SVG_USES_STROKES             = 1 << 0,
+  GTK_SVG_USES_SYMBOLIC_FOREGROUND = 1 << 1,
+  GTK_SVG_USES_SYMBOLIC_ERROR      = 1 << 2,
+  GTK_SVG_USES_SYMBOLIC_WARNING    = 1 << 3,
+  GTK_SVG_USES_SYMBOLIC_SUCCESS    = 1 << 4,
+  GTK_SVG_USES_SYMBOLIC_ACCENT     = 1 << 5,
+} GtkSvgUses;
+
 struct _GtkSvg
 {
   GObject parent_instance;
   Shape *content;
 
-  double width, height; /* Intrinsic size */
+  double current_width, current_height; /* Last snapshot size */
 
-  double current_width, current_height; /* last snapshot size */
+  double width, height; /* Intrinsic size */
 
   double weight;
   unsigned int state;
   unsigned int max_state;
   int64_t state_change_delay;
+  gboolean has_animations;
   GtkSvgFeatures features;
+  GtkSvgUses used;
 
   char *resource;
 
@@ -95,6 +107,15 @@ struct _GtkSvg
 
   PangoFontMap *fontmap;
   GPtrArray *font_files;
+
+  GskRenderNode *node;
+
+  struct {
+    double width, height;
+    GdkRGBA colors[5];
+    size_t n_colors;
+    double weight;
+  } node_for;
 };
 
 typedef enum
@@ -134,6 +155,12 @@ typedef enum
   SHAPE_ATTR_CLIP_PATH,
   SHAPE_ATTR_CLIP_RULE,
   SHAPE_ATTR_MASK,
+  SHAPE_ATTR_FONT_FAMILY,
+  SHAPE_ATTR_FONT_STYLE,
+  SHAPE_ATTR_FONT_VARIANT,
+  SHAPE_ATTR_FONT_WEIGHT,
+  SHAPE_ATTR_FONT_STRETCH,
+  SHAPE_ATTR_FONT_SIZE, /* must come before lengths */
   SHAPE_ATTR_FILL,
   SHAPE_ATTR_FILL_OPACITY,
   SHAPE_ATTR_FILL_RULE,
@@ -192,12 +219,6 @@ typedef enum
   SHAPE_ATTR_WRITING_MODE,
   SHAPE_ATTR_LETTER_SPACING,
   SHAPE_ATTR_TEXT_DECORATION,
-  SHAPE_ATTR_FONT_FAMILY,
-  SHAPE_ATTR_FONT_STYLE,
-  SHAPE_ATTR_FONT_VARIANT,
-  SHAPE_ATTR_FONT_WEIGHT,
-  SHAPE_ATTR_FONT_STRETCH, // Deprecated & not part of SVG2!
-  SHAPE_ATTR_FONT_SIZE,
   SHAPE_ATTR_STROKE_MINWIDTH,
   SHAPE_ATTR_STROKE_MAXWIDTH,
   LAST_SHAPE_ATTR = SHAPE_ATTR_STROKE_MAXWIDTH,
@@ -373,10 +394,16 @@ struct _Shape
 
 typedef enum
 {
-  SVG_DIMENSION_NUMBER,
-  SVG_DIMENSION_PERCENTAGE,
-  SVG_DIMENSION_LENGTH,
-} SvgDimension;
+  SVG_UNIT_NUMBER,
+  SVG_UNIT_PERCENTAGE,
+  SVG_UNIT_PX,
+  SVG_UNIT_PT,
+  SVG_UNIT_IN,
+  SVG_UNIT_CM,
+  SVG_UNIT_MM,
+  SVG_UNIT_EM,
+  SVG_UNIT_EX,
+} SvgUnit;
 
 typedef enum
 {

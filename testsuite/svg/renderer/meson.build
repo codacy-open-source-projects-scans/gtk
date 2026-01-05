@@ -1,6 +1,7 @@
 test_renderer = executable('test-svg-renderer',
-  sources: ['test-svg-renderer.c', '../../testutils.c'],
+  sources: ['test-svg-renderer.c'],
   c_args: common_cflags,
+  link_with: testutils_lib,
   dependencies: libgtk_dep,
 )
 
@@ -30,6 +31,7 @@ test_data = [
   'filter-flood.svg',
   'filter-gaussian-blur.svg',
   'filter-image.svg',
+  'filter-image-shenanigans.svg',
   'filter-merge.svg',
   'filter-offset.svg',
   'filter-offset2.svg',
@@ -39,6 +41,7 @@ test_data = [
   'filter-units-combined.svg',
   'filter-units-object-bounding-box.svg',
   'filter-units-user-space-on-use.svg',
+  'font-size-units.svg',
   'gpa-attachment1.svg',
   'gpa-attachment2.svg',
   'gpa-attachment3.svg',
@@ -75,11 +78,13 @@ test_data = [
   'nested-svg-overflow.svg',
   'nested-svg-positioning.svg',
   'nested-svg-viewbox.svg',
+  'nested-use.test',
   'non-scaling-stroke.svg',
   'not-rendered.svg',
   'opacity.svg',
   'overflow.svg',
   'paint-order.svg',
+  'paint-server-fallback.svg',
   'pattern1.svg',
   'pattern2.svg',
   'pattern3.svg',
@@ -88,6 +93,7 @@ test_data = [
   'pattern6.svg',
   'pattern7.svg',
   'pattern8.svg',
+  'pattern-billion-laughs.test',
   'percentage.svg',
   'polygon.svg',
   'polyline.svg',
@@ -100,6 +106,7 @@ test_data = [
   'rect2.svg',
   'render-after-use.svg',
   'rounded-rect.svg',
+  'size-units.svg',
   'spec-ellipse.svg',
   'spec-opacity.svg',
   'spec-rect.svg',
@@ -117,7 +124,16 @@ test_data = [
   'zero-length-path-stroke.svg',
 ]
 
+slow_tests = [
+  'nested-use.test',
+  'pattern-billion-laughs.test',
+]
+
 foreach testname : test_data
+  suites = [ 'svg', 'svg renderer' ]
+  if testname in slow_tests
+    suites += 'slow'
+  endif
   test('svg renderer ' + testname, test_renderer,
         args: [ '--tap',
                 '-k',
@@ -129,6 +145,6 @@ foreach testname : test_data
               'G_TEST_SRCDIR=@0@'.format(meson.current_source_dir()),
               'G_TEST_BUILDDIR=@0@'.format(meson.current_build_dir())
              ],
-        suite: [ 'svg', 'svg renderer']
+        suite: suites
   )
 endforeach

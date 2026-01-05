@@ -22,9 +22,11 @@
   </g>
   <defs>
     <filter id='myfirstfilter'>
+      <animate attributeName='x' values='1;;2 ; 3'/>
       <feFlood/>
       <feMerge/>
       <fefe/>
     </filter>
   </defs>
+  <polyline points='1,,2, 3 4'/>
 </svg>

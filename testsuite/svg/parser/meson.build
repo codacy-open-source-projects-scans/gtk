@@ -1,6 +1,7 @@
 test_parser = executable('test-svg-parser',
-  sources: ['test-svg-parser.c', '../../testutils.c'],
+  sources: ['test-svg-parser.c'],
   c_args: common_cflags,
+  link_with: testutils_lib,
   dependencies: libgtk_dep,
 )
 
@@ -53,6 +54,7 @@ test_data = [
   'nested-svg-positioning.svg',
   'nested-svg-viewbox.svg',
   'paint.svg',
+  'paint-server-fallback.svg',
   'pattern.svg',
   'percentage.svg',
   'polygon.svg',
@@ -72,6 +74,7 @@ test_data = [
   'text-text-10-t.svg',
   'text-vertical.svg',
   'times.svg',
+  'too-many-elements.test',
   'transforms.svg',
   'use.svg',
   'viewbox.svg',
