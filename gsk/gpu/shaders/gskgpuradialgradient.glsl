@@ -1,11 +1,34 @@
-#define GSK_N_TEXTURES 0
+#ifdef GSK_PREAMBLE
+var_name = "gsk_gpu_radial_gradient";
+struct_name = "GskGpuRadialGradient";
+acs_premultiplied = true;
 
-#include "common.glsl"
+graphene_rect_t rect;
+GdkColor color0;
+GdkColor color1;
+GdkColor color2;
+GdkColor color3;
+GdkColor color4;
+GdkColor color5;
+GdkColor color6;
+graphene_vec4_t offsets0;
+graphene_vec4_t offsets1;
+graphene_vec4_t hints0;
+graphene_vec4_t hints1;
+graphene_point_t start_center;
+graphene_size_t start_radius;
+graphene_point_t end_center;
+graphene_size_t end_radius;
+
+variation: gboolean supersampling;
+variation: gboolean concentric;
+variation: gboolean premultiplied;
+variation: GskRepeat repeat;
+#endif
+
+#include "gskgpuradialgradientinstance.glsl"
+
 #include "enums.glsl"
-
-#define VARIATION_SUPERSAMPLING ((GSK_VARIATION & (1u << 0)) == (1u << 0))
-#define VARIATION_CONCENTRIC ((GSK_VARIATION & (1u << 1)) == (1u << 1))
-#define GSK_REPEAT ((GSK_VARIATION >> 2) & GSK_REPEAT_MASK)
 
 PASS(0) vec2 _pos;
 PASS_FLAT(1) Rect _rect;
@@ -17,29 +40,14 @@ PASS_FLAT(6) vec4 _color4;
 PASS_FLAT(7) vec4 _color5;
 PASS_FLAT(8) vec4 _color6;
 PASS_FLAT(9) vec4 _offsets0;
-PASS_FLAT(10) vec3 _offsets1;
+PASS_FLAT(10) vec4 _offsets1;
 PASS_FLAT(11) vec4 _hints0;
-PASS_FLAT(12) vec3 _hints1;
+PASS_FLAT(12) vec4 _hints1;
 PASS_FLAT(13) vec4 _start_circle; /* xy are center, zw the radii */
 PASS_FLAT(14) vec4 _end_circle;
 
 
 #ifdef GSK_VERTEX_SHADER
-
-IN(0) vec4 in_rect;
-IN(1) vec4 in_color0;
-IN(2) vec4 in_color1;
-IN(3) vec4 in_color2;
-IN(4) vec4 in_color3;
-IN(5) vec4 in_color4;
-IN(6) vec4 in_color5;
-IN(7) vec4 in_color6;
-IN(8) vec4 in_offsets0;
-IN(9) vec3 in_offsets1;
-IN(10) vec4 in_hints0;
-IN(11) vec3 in_hints1;
-IN(12) vec4 in_start_circle;
-IN(13) vec4 in_end_circle;
 
 void
 run (out vec2 pos)
@@ -51,16 +59,29 @@ run (out vec2 pos)
   _pos = pos;
   _rect = r;
 
-  _start_circle = in_start_circle;
-  _end_circle = in_end_circle;
+  _start_circle = vec4 (in_start_center, in_start_radius);
+  _end_circle = vec4 (in_end_center, in_end_radius);
 
-  _color0 = color_premultiply (in_color0);
-  _color1 = color_premultiply (in_color1);
-  _color2 = color_premultiply (in_color2);
-  _color3 = color_premultiply (in_color3);
-  _color4 = color_premultiply (in_color4);
-  _color5 = color_premultiply (in_color5);
-  _color6 = color_premultiply (in_color6);
+  if (VARIATION_PREMULTIPLIED)
+    {
+      _color0 = color_premultiply (in_color0);
+      _color1 = color_premultiply (in_color1);
+      _color2 = color_premultiply (in_color2);
+      _color3 = color_premultiply (in_color3);
+      _color4 = color_premultiply (in_color4);
+      _color5 = color_premultiply (in_color5);
+      _color6 = color_premultiply (in_color6);
+    }
+  else
+    {
+      _color0 = in_color0;
+      _color1 = in_color1;
+      _color2 = in_color2;
+      _color3 = in_color3;
+      _color4 = in_color4;
+      _color5 = in_color5;
+      _color6 = in_color6;
+    }
   _offsets0 = in_offsets0;
   _offsets1 = in_offsets1;
   _hints0 = in_hints0;
@@ -94,7 +115,7 @@ get_gradient_color (float offset)
   vec4 color;
   float f;
 
-  switch (GSK_REPEAT)
+  switch (VARIATION_REPEAT)
     {
     case GSK_REPEAT_NONE:
       if (offset < 0.0 || offset > 1.0)
@@ -110,8 +131,13 @@ get_gradient_color (float offset)
         offset = 1.0 - fract (offset);
       break;
     case GSK_REPEAT_PAD:
-      offset = clamp (offset, 0.0, 1.0);
+      if (offset <= 0.0)
+        return _color0;
+      else if (offset >= 1.0)
+        return _color6;
       break;
+    default:
+      return vec4(1.0, 0.0, 0.8, 1.0);
     }
 
   if (offset <= _offsets0[3])
@@ -172,7 +198,11 @@ get_gradient_color (float offset)
             color = _color6;
         }
     }
-  return color;
+
+  if (VARIATION_PREMULTIPLIED)
+    return color;
+  else
+    return color_premultiply (color);
 }
 
 vec4

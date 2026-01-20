@@ -9,6 +9,7 @@ gsk_gradient_new (void)
 
   gradient->interpolation = GDK_COLOR_STATE_SRGB;
   gradient->hue_interpolation = GSK_HUE_INTERPOLATION_SHORTER;
+  gradient->premultiplied = TRUE;
   gradient->repeat = GSK_REPEAT_PAD;
   gradient->opaque = TRUE;
 
@@ -38,6 +39,7 @@ gsk_gradient_init_copy (GskGradient       *gradient,
 
   gradient->interpolation = gdk_color_state_ref (orig->interpolation);
   gradient->hue_interpolation = orig->hue_interpolation;
+  gradient->premultiplied = orig->premultiplied;
   gradient->repeat = orig->repeat;
   gradient->opaque = orig->opaque;
 
@@ -65,6 +67,7 @@ gsk_gradient_equal (const GskGradient *gradient0,
 {
   if (gradient0->repeat != gradient1->repeat ||
       gradient0->hue_interpolation != gradient1->hue_interpolation ||
+      gradient0->premultiplied != gradient1->premultiplied ||
       gradient_stops_get_size (&gradient0->stops) != gradient_stops_get_size (&gradient1->stops) ||
       !gdk_color_state_equal (gradient0->interpolation, gradient1->interpolation))
     return FALSE;
@@ -143,6 +146,13 @@ gsk_gradient_set_hue_interpolation (GskGradient         *gradient,
   gradient->hue_interpolation = hue_interpolation;
 }
 
+void
+gsk_gradient_set_premultiplied (GskGradient *gradient,
+                                gboolean     premultiplied)
+{
+  gradient->premultiplied = premultiplied;
+}
+
 gsize
 gsk_gradient_get_n_stops (const GskGradient *gradient)
 {
@@ -186,6 +196,12 @@ GskHueInterpolation
 gsk_gradient_get_hue_interpolation (const GskGradient *gradient)
 {
   return gradient->hue_interpolation;
+}
+
+gboolean
+gsk_gradient_get_premultiplied (const GskGradient *gradient)
+{
+  return gradient->premultiplied;
 }
 
 GskRepeat
@@ -281,4 +297,197 @@ gsk_gradient_check_single_color (const GskGradient *gradient)
     }
 
   return &first->color;
+}
+
+static void
+add_to_average (float values[4],
+                float amount,
+                float hint,
+                float start[4],
+                float end[4])
+{
+  gsize i;
+  float lerp;
+
+  if (amount <= 0.0)
+    return;
+
+  if (hint == 0.5)
+    lerp = 0.5f;
+  else if (hint <= 0.0)
+    lerp = 1.0f;
+  else if (hint >= 1.0)
+    lerp = 0.0f;
+  else
+    lerp = logf (hint) / (logf (hint) - logf (2.0f));
+
+  for (i = 0; i < 4; i++)
+    {
+      values[i] += amount * ((1.0f - lerp) * start[i] + lerp * end[i]); 
+    }
+}
+
+static void
+color_convert (const GskGradient *self,
+               const GdkColor    *color,
+               float              out_values[4])
+{
+  GdkColor tmp;
+  gsize i;
+
+  gdk_color_convert (&tmp, self->interpolation, color);
+
+  if (self->premultiplied)
+    {
+      for (i = 0; i < 3; i++)
+        {
+          out_values[i] = tmp.values[i] * tmp.alpha;
+        }
+      out_values[GDK_COLOR_CHANNEL_ALPHA] = tmp.alpha;
+    }
+  else
+    {
+      for (i = 0; i < 4; i++)
+        out_values[i] = tmp.values[i];
+    }
+}
+
+/**
+ * gsk_gradient_get_average_color:
+ * @self: a gradient
+ * @out_color: (out caller-allocates): Return location to place the color
+ *
+ * Computes the weighted average color of all color stops, respecting
+ * transition hints and premultiplication. This can be imagined as the gradient
+ * line being shrunk to a single pixel. Not relevant for this computation is
+ * the repeat.
+ *
+ * This color is used in some cases for repeating zero-length gradients.
+ *
+ * Note that different gradient implementations have a different meaning for
+ * degenerate gradient corner cases and not all of them may trivially map to
+ * this function.
+ **/
+void
+gsk_gradient_get_average_color (const GskGradient *self,
+                                GdkColor          *out_color)
+{
+  float values[4] = { 0, 0, 0, 0 };
+  GskGradientStop *cur, *next;
+  float cur_offset;
+  float cur_values[4], next_values[4];
+  gsize i;
+
+  cur = gradient_stops_get (&self->stops, 0);
+  color_convert (self, &cur->color, cur_values);
+  cur_offset = cur->offset;
+  add_to_average (values, cur->offset, 0.5, cur_values, cur_values);
+
+  for (i = 1; i < gradient_stops_get_size (&self->stops); i++)
+    {
+      next = gradient_stops_get (&self->stops, i);
+      color_convert (self, &next->color, next_values);
+      if (self->interpolation->hue_channel != GDK_COLOR_CHANNEL_ALPHA)
+        {
+          next_values[self->interpolation->hue_channel] =
+              gsk_hue_interpolation_fixup (self->hue_interpolation,
+                                           cur_values[self->interpolation->hue_channel],
+                                           next_values[self->interpolation->hue_channel]);
+        }
+
+      add_to_average (values, next->offset - cur_offset, next->transition_hint, cur_values, next_values);
+      cur_values[0] = next_values[0];
+      cur_values[1] = next_values[1];
+      cur_values[2] = next_values[2];
+      cur_values[3] = next_values[3];
+      cur_offset = next->offset;
+    }
+
+  add_to_average (values, 1.0f - cur_offset, 0.5, cur_values, cur_values);
+  if (self->premultiplied && values[GDK_COLOR_CHANNEL_ALPHA] > 0.0f)
+    {
+      for (i = 0; i < 3; i++)
+        {
+          values[i] /= values[GDK_COLOR_CHANNEL_ALPHA];
+        }
+    }
+  gdk_color_init (out_color, gdk_color_state_ref (self->interpolation), values);
+}
+
+float
+gsk_hue_interpolation_fixup (GskHueInterpolation  interp,
+                             float                h1,
+                             float                h2)
+{
+  float d;
+
+  d = h2 - h1;
+
+  while (d > 360)
+    {
+      h2 -= 360;
+      d = h2 - h1;
+    }
+  while (d < -360)
+    {
+      h2 += 360;
+      d = h2 - h1;
+    }
+
+  g_assert (fabsf (d) <= 360);
+
+  switch (interp)
+    {
+    case GSK_HUE_INTERPOLATION_SHORTER:
+      {
+        if (d > 180)
+          h2 -= 360;
+        else if (d < -180)
+          h2 += 360;
+      }
+      g_assert (fabsf (h2 - h1) <= 180);
+      break;
+
+   case GSK_HUE_INTERPOLATION_LONGER:
+      {
+        if (0 < d && d < 180)
+          h2 -= 360;
+        else if (-180 < d && d <= 0)
+          h2 += 360;
+      g_assert (fabsf (h2 - h1) >= 180);
+      }
+      break;
+
+    case GSK_HUE_INTERPOLATION_INCREASING:
+      if (h2 < h1)
+        h2 += 360;
+      d = h2 - h1;
+      g_assert (h1 <= h2);
+      break;
+
+    case GSK_HUE_INTERPOLATION_DECREASING:
+      if (h1 < h2)
+        h2 -= 360;
+      d = h2 - h1;
+      g_assert (h1 >= h2);
+      break;
+
+    default:
+      g_assert_not_reached ();
+    }
+
+  return h2;
+}
+
+cairo_extend_t
+gsk_repeat_to_cairo (GskRepeat repeat)
+{
+  switch (repeat)
+    {
+    case GSK_REPEAT_NONE: return CAIRO_EXTEND_NONE;
+    case GSK_REPEAT_REPEAT: return CAIRO_EXTEND_REPEAT;
+    case GSK_REPEAT_REFLECT: return CAIRO_EXTEND_REFLECT;
+    case GSK_REPEAT_PAD: return CAIRO_EXTEND_PAD;
+    default: g_assert_not_reached ();
+    }
 }

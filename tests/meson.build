@@ -67,6 +67,7 @@ gtk_tests = [
   ['testlockbutton'],
   ['testmenubutton'],
   ['testmountoperation'],
+  ['testnativecontrols'],
   ['testnotebookdnd'],
   ['testnouiprint'],
   ['testoverlay'],
@@ -140,8 +141,7 @@ if os_linux
   rsvg_dep = dependency('librsvg-2.0', required: false)
 
   gtk_tests += [
-    ['svg-compare', ['svgpaintable.c' ],[ libgtk_static_dep, rsvg_dep ]],
-    ['svg-png-compare'],
+    ['svg-compare', ['svgpaintable.c' ],[ libgtk_dep, rsvg_dep ]],
   ]
 endif
 

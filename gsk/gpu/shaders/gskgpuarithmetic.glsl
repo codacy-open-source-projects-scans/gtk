@@ -1,6 +1,19 @@
-#define GSK_N_TEXTURES 2
+#ifdef GSK_PREAMBLE
+textures = 2;
+acs_equals_ccs = true;
+acs_premultiplied = true;
 
-#include "common.glsl"
+graphene_rect_t rect;
+graphene_rect_t first_rect;
+graphene_rect_t second_rect;
+float k1;
+float k2;
+float k3;
+float k4;
+float opacity;
+#endif
+
+#include "gskgpuarithmeticinstance.glsl"
 
 PASS(0) vec2 _pos;
 PASS_FLAT(1) Rect _first_rect;
@@ -13,12 +26,6 @@ PASS_FLAT(6) vec4 _factors;
 
 #ifdef GSK_VERTEX_SHADER
 
-IN(0) vec4 in_rect;
-IN(1) vec4 in_first_rect;
-IN(2) vec4 in_second_rect;
-IN(3) float in_opacity;
-IN(4) vec4 in_factors;
-
 void
 run (out vec2 pos)
 {
@@ -28,7 +35,7 @@ run (out vec2 pos)
 
   _pos = pos;
   _opacity = in_opacity;
-  _factors = in_factors;
+  _factors = vec4(in_k1, in_k2, in_k3, in_k4);
 
   Rect first_rect = rect_from_gsk (in_first_rect);
   _first_rect = first_rect;
@@ -44,7 +51,8 @@ run (out vec2 pos)
 vec4
 arithmetic (vec4 i1, vec4 i2, vec4 k)
 {
-  return k.x * i1 * i2 + k.y * i1 + k.z * i2 + k.w;
+  vec4 result = k.x * i1 * i2 + k.y * i1 + k.z * i2 + k.w;
+  return clamp (result, vec4 (0.0), vec4 (min (1.0, result.a)));
 }
 
 #ifdef GSK_FRAGMENT_SHADER
@@ -59,14 +67,7 @@ run (out vec4 color,
   vec4 second_color = texture (GSK_TEXTURE1, _second_coord);
   second_color = output_color_alpha (second_color, rect_coverage (_second_rect, _pos));
 
-  first_color = color_unpremultiply (first_color);
-  second_color = color_unpremultiply (second_color);
-
   color = arithmetic (first_color, second_color, _factors);
-
-  color = clamp (color, 0.0, 1.0);
-
-  color = color_premultiply (color);
 
   color = output_color_alpha (color, _opacity);
 

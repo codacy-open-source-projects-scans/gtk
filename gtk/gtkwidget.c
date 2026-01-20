@@ -8782,6 +8782,13 @@ gtk_widget_accessible_get_bounds (GtkAccessible *self,
   return TRUE;
 }
 
+static char *
+gtk_widget_accessible_get_accessible_id (GtkAccessible *self)
+{
+  const char *id = gtk_buildable_get_buildable_id (GTK_BUILDABLE (self));
+  return g_strdup (id);
+}
+
 static void
 gtk_widget_accessible_interface_init (GtkAccessibleInterface *iface)
 {
@@ -8791,6 +8798,7 @@ gtk_widget_accessible_interface_init (GtkAccessibleInterface *iface)
   iface->get_first_accessible_child = gtk_widget_accessible_get_first_accessible_child;
   iface->get_next_accessible_sibling = gtk_widget_accessible_get_next_accessible_sibling;
   iface->get_bounds = gtk_widget_accessible_get_bounds;
+  iface->get_accessible_id = gtk_widget_accessible_get_accessible_id;
 }
 
 static void
@@ -12017,7 +12025,7 @@ gtk_widget_create_render_node (GtkWidget   *widget,
                                      &bounds,
                                      0);
         }
-      gtk_css_filter_value_pop_snapshot (backdrop_filter_value, snapshot);
+      gtk_css_filter_value_pop_snapshot (backdrop_filter_value, &bounds, snapshot);
       gtk_snapshot_pop (snapshot); /* clip */
     }
 
@@ -12040,7 +12048,10 @@ gtk_widget_create_render_node (GtkWidget   *widget,
   if (opacity < 1.0)
     gtk_snapshot_pop (snapshot);
 
-  gtk_css_filter_value_pop_snapshot (filter_value, snapshot);
+  gtk_css_filter_value_pop_snapshot (filter_value,
+                                     &gtk_css_boxes_get_border_box (&boxes)->bounds,
+
+                                     snapshot);
 
   if (has_backdrop_filter)
     gtk_snapshot_pop (snapshot);

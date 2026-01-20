@@ -1,6 +1,20 @@
-#define GSK_N_TEXTURES 2
+#ifdef GSK_PREAMBLE
+textures = 2;
+acs_equals_ccs = true;
+acs_premultiplied = true;
 
-#include "common.glsl"
+graphene_rect_t rect;
+graphene_rect_t displacement_rect;
+graphene_rect_t child_rect;
+guint32 x_channel;
+guint32 y_channel;
+graphene_size_t displace_max;
+graphene_size_t displace_scale;
+graphene_size_t displace_offset;
+float opacity;
+#endif
+
+#include "gskgpudisplacementinstance.glsl"
 
 PASS(0) vec2 _pos;
 PASS_FLAT(1) Rect _rect;
@@ -14,15 +28,6 @@ PASS_FLAT(8) float _opacity;
 
 
 #ifdef GSK_VERTEX_SHADER
-
-IN(0) vec4 in_rect;
-IN(1) vec4 in_displacement_rect;
-IN(2) vec4 in_child_rect;
-IN(3) uvec2 in_channels;
-IN(4) vec2 in_max;
-IN(5) vec2 in_scale;
-IN(6) vec2 in_offset;
-IN(7) float in_opacity;
 
 void
 run (out vec2 pos)
@@ -40,10 +45,10 @@ run (out vec2 pos)
   Rect child_rect = rect_from_gsk (in_child_rect);
   _child_rect = child_rect;
 
-  _channels = in_channels;
-  _max = GSK_GLOBAL_SCALE * in_max;
-  _scale = GSK_GLOBAL_SCALE * in_scale;
-  _offset = in_offset;
+  _channels = uvec2(in_x_channel, in_y_channel);
+  _max = GSK_GLOBAL_SCALE * in_displace_max;
+  _scale = GSK_GLOBAL_SCALE * in_displace_scale;
+  _offset = in_displace_offset;
   _opacity = in_opacity;
 }
 
