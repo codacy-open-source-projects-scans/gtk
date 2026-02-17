@@ -33,6 +33,7 @@
 #include "gsk/gskcolornodeprivate.h"
 #include "gsk/gskconicgradientnodeprivate.h"
 #include "gsk/gskinsetshadownodeprivate.h"
+#include "gsk/gskisolationnodeprivate.h"
 #include "gsk/gsklineargradientnodeprivate.h"
 #include "gsk/gskoutsetshadownodeprivate.h"
 #include "gsk/gskradialgradientnodeprivate.h"
@@ -66,6 +67,11 @@
  * The typical way to obtain a `GtkSnapshot` object is as an argument to
  * the [vfunc@Gtk.Widget.snapshot] vfunc. If you need to create your own
  * `GtkSnapshot`, use [ctor@Gtk.Snapshot.new].
+ *
+ * Note that `GtkSnapshot` applies some optimizations, so the node
+ * it produces may not match the API calls 1:1. For example, it will
+ * omit clip nodes if the child node is entirely contained within the
+ * clip rectangle.
  */
 
 typedef struct _GtkSnapshotState GtkSnapshotState;
@@ -544,12 +550,17 @@ gtk_snapshot_collect_isolation (GtkSnapshot      *snapshot,
                                 guint             n_nodes)
 {
   GskRenderNode *node, *isolation_node;
+  GskIsolation features;
 
   node = gtk_snapshot_collect_default (snapshot, state, nodes, n_nodes);
   if (node == NULL)
     return NULL;
 
-  isolation_node = gsk_isolation_node_new (node, state->data.isolation.features);
+  features = gsk_isolation_features_simplify_for_node (state->data.isolation.features, node);
+  if (features == 0)
+    return node;
+
+  isolation_node = gsk_isolation_node_new (node, features);
   gsk_render_node_unref (node);
 
   return isolation_node;
@@ -2109,8 +2120,28 @@ gtk_snapshot_append_node_internal (GtkSnapshot   *snapshot,
 
   if (current_state)
     {
-      gtk_snapshot_nodes_append (&snapshot->nodes, node);
-      current_state->n_nodes ++;
+      if (gsk_render_node_get_node_type (node) == GSK_CONTAINER_NODE)
+        {
+          GskRenderNode **children;
+          gsize i, n_children;
+
+          children = gsk_render_node_get_children (node, &n_children);
+          for (i = 0; i < n_children; i++)
+            gsk_render_node_ref (children[i]);
+          gtk_snapshot_nodes_splice (&snapshot->nodes,
+                                     gtk_snapshot_nodes_get_size (&snapshot->nodes),
+                                     0,
+                                     FALSE,
+                                     children,
+                                     n_children);
+          current_state->n_nodes += n_children;
+          gsk_render_node_unref (node);
+        }
+      else
+        {
+          gtk_snapshot_nodes_append (&snapshot->nodes, node);
+          current_state->n_nodes ++;
+        }
     }
   else
     {
