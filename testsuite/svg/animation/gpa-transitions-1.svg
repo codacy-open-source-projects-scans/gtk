@@ -14,7 +14,7 @@
   <circle
           id='red'
           font-size='13.333'
-          opacity='0'
+          visibility='hidden'
           font-weight='400'
           fill='rgb(255,0,0)'
           cx='0'
@@ -26,8 +26,9 @@
             begin='gpa:states(0).end; 0ms'
             end='gpa:states(0).begin'
             to='hidden'
-            gpa:status='done'
-            gpa:computed-simple-duration='indefinite'/>
+            gpa:status='running'
+            gpa:computed-simple-duration='indefinite'
+            gpa:current-start-time='0ms'/>
     <animate
             id='gpa:transition:fade-in:opacity:red'
             attributeName='opacity'
@@ -40,9 +41,7 @@
             keySplines='0 0 1 1'
             keyTimes='0; 1'
             calcMode='spline'
-            gpa:status='running'
-            gpa:current-start-time='2000ms'
-            gpa:current-end-time='4000ms'/>
+            gpa:status='done'/>
     <animate
             id='gpa:transition:fade-out:opacity:red'
             attributeName='opacity'
