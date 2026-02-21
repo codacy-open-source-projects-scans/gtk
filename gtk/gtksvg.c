@@ -9069,7 +9069,11 @@ static SvgValue *
 svg_language_new_list (unsigned int    len,
                        PangoLanguage **langs)
 {
+  static SvgLanguage empty = { { &SVG_LANGUAGE_CLASS, 0 }, .len = 0, .values[0] = NULL, };
   SvgLanguage *result;
+
+  if (len == 0)
+    return (SvgValue *) &empty;
 
   result = (SvgLanguage *) svg_value_alloc (&SVG_LANGUAGE_CLASS,
                                             svg_language_size (len));
@@ -15825,6 +15829,7 @@ parse_base_animation_attrs (Animation            *a,
   ShapeAttr attr;
   gboolean deprecated;
   Shape *current_shape = NULL;
+  FilterPrimitiveType filter_type = 0;
 
   markup_filter_attributes (element_name,
                             attr_names, attr_values,
@@ -16035,6 +16040,16 @@ parse_base_animation_attrs (Animation            *a,
   if (attr_name_attr && strcmp (attr_name_attr, "xlink:href") == 0)
     attr_name_attr = "href";
 
+  if (current_shape->type == SHAPE_FILTER &&
+      current_shape->filters->len > 0)
+    {
+      FilterPrimitive *fp;
+
+      fp = g_ptr_array_index (current_shape->filters,
+                              current_shape->filters->len - 1);
+      filter_type = fp->type;
+    }
+
   attr = a->attr;
   if (a->type == ANIMATION_TYPE_MOTION)
     {
@@ -16059,7 +16074,10 @@ parse_base_animation_attrs (Animation            *a,
       return FALSE;
     }
   /* FIXME: if href is set, current_shape might be the wrong shape */
-  else if (shape_attr_lookup (attr_name_attr, current_shape->type, &attr, &deprecated))
+  else if ((current_shape->type == SHAPE_FILTER &&
+            filter_attr_lookup (filter_type, attr_name_attr, &attr, &deprecated)) ||
+           (current_shape->type != SHAPE_FILTER &&
+            shape_attr_lookup (attr_name_attr, current_shape->type, &attr, &deprecated)))
     {
       a->attr = attr;
       /* FIXME: if href is set, current_shape might be the wrong shape */
@@ -17735,6 +17753,10 @@ start_element_cb (GMarkupParseContext  *context,
       strcmp (element_name, "cc:Work") == 0 ||
       strcmp (element_name, "dc:subject") == 0 ||
       strcmp (element_name, "dc:description") == 0 ||
+      strcmp (element_name, "dc:creator") == 0 ||
+      strcmp (element_name, "cc:Agent") == 0 ||
+      strcmp (element_name, "dc:title") == 0 ||
+      strcmp (element_name, "cc:license") == 0 ||
       strcmp (element_name, "rdf:Bag") == 0 ||
       strcmp (element_name, "rdf:li") == 0)
     {
@@ -17761,6 +17783,28 @@ start_element_cb (GMarkupParseContext  *context,
             }
           else
             skip_element (data, context, "Ignoring RDF element in wrong context: <%s>", element_name);
+        }
+      else if (strcmp (element_name, "dc:title") == 0)
+        {
+          if (check_ancestors (context, "cc:Agent", "dc:creator", "cc:Work", "rdf:RDF", "metadata", NULL))
+            {
+              data->collect_text = TRUE;
+              g_string_set_size (data->text, 0);
+            }
+          else
+            skip_element (data, context, "Ignoring RDF element in wrong context: <%s>", element_name);
+        }
+      else if (strcmp (element_name, "cc:license") == 0)
+        {
+          const char *license = NULL;
+
+          markup_filter_attributes (element_name,
+                                    attr_names, attr_values,
+                                    &handled,
+                                    "rdf:resource", &license,
+                                    NULL);
+
+          data->svg->license = g_strdup (license);
         }
 
       return;
@@ -18058,6 +18102,10 @@ do_target:
   else if (strcmp (element_name, "dc:description") == 0)
     {
       g_set_str (&data->svg->description, data->text->str);
+    }
+  else if (strcmp (element_name, "dc:title") == 0)
+    {
+      g_set_str (&data->svg->author, data->text->str);
     }
   else if (shape_type_lookup (element_name, &shape_type))
     {
@@ -23971,8 +24019,11 @@ gtk_svg_dispose (GObject *object)
   g_clear_pointer (&self->node, gsk_render_node_unref);
 
   g_clear_object (&self->clock);
-  g_free (self->keywords);
+
+  g_free (self->author);
+  g_free (self->license);
   g_free (self->description);
+  g_free (self->keywords);
 
   G_OBJECT_CLASS (gtk_svg_parent_class)->dispose (object);
 }
@@ -24386,8 +24437,10 @@ gtk_svg_equal (GtkSvg *svg1,
     return TRUE;
 
   if (svg1->gpa_version != svg2->gpa_version ||
-      g_strcmp0 (svg1->keywords, svg2->keywords) != 0 ||
-      g_strcmp0 (svg1->description, svg2->description) != 0)
+      g_strcmp0 (svg1->author, svg2->author) != 0 ||
+      g_strcmp0 (svg1->license, svg2->license) != 0 ||
+      g_strcmp0 (svg1->description, svg2->description) != 0 ||
+      g_strcmp0 (svg1->keywords, svg2->keywords) != 0)
     return FALSE;
 
   return shape_equal (svg1->content, svg2->content);
@@ -24723,7 +24776,7 @@ gtk_svg_serialize_full (GtkSvg               *self,
   g_string_append (s, "xmlns='http://www.w3.org/2000/svg'");
   indent_for_attr (s, 0);
   g_string_append (s, "xmlns:svg='http://www.w3.org/2000/svg'");
-  if (self->keywords || self->description)
+  if (self->keywords || self->description || self->author || self->license)
     {
       /* we only need these to write out keywords or description
        * in a way that inkscape understands
@@ -24769,7 +24822,7 @@ gtk_svg_serialize_full (GtkSvg               *self,
   serialize_shape_attrs (s, self, 0, self->content, flags);
   g_string_append (s, ">");
 
-  if (self->keywords || self->description)
+  if (self->keywords || self->description || self->author || self->license)
     {
       indent_for_elt (s, 2);
       g_string_append (s, "<metadata>");
@@ -24777,9 +24830,33 @@ gtk_svg_serialize_full (GtkSvg               *self,
       g_string_append (s, "<rdf:RDF>");
       indent_for_elt (s, 6);
       g_string_append (s, "<cc:Work>");
-      indent_for_elt (s, 8);
+      if (self->license)
+        {
+          indent_for_elt (s, 8);
+          g_string_append (s, "<cc:license");
+          indent_for_attr (s, 8);
+          g_string_append (s, "rdf:resource='");
+          g_string_append (s, self->license);
+          g_string_append (s, "'/>");
+        }
+      if (self->author)
+        {
+          indent_for_elt (s, 8);
+          g_string_append (s, "<dc:creator>");
+          indent_for_elt (s, 10);
+          g_string_append (s, "<cc:Agent>");
+          indent_for_elt (s, 12);
+          g_string_append_printf (s, "<dc:title>%s</dc:title>", self->author);
+          indent_for_elt (s, 10);
+          g_string_append (s, "</cc:Agent>");
+          indent_for_elt (s, 8);
+          g_string_append (s, "</dc:creator>");
+        }
       if (self->description)
-        g_string_append_printf (s, "<dc:description>%s</dc:description>", self->description);
+        {
+          indent_for_elt (s, 8);
+          g_string_append_printf (s, "<dc:description>%s</dc:description>", self->description);
+        }
       if (self->keywords)
         {
           indent_for_elt (s, 8);
