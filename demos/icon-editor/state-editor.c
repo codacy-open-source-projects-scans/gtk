@@ -59,15 +59,25 @@ get_paintable_for_shape (StateEditor *self,
 {
   GtkSvg *svg = gtk_svg_new ();
   g_autoptr (GBytes) bytes = NULL;
+  Shape *sh;
 
   svg->width = path_paintable_get_width (self->paintable);
   svg->height = path_paintable_get_height (self->paintable);
 
   svg_shape_attr_set (svg->content,
+                      SHAPE_ATTR_WIDTH,
+                      svg_number_new (svg->width));
+  svg_shape_attr_set (svg->content,
+                      SHAPE_ATTR_HEIGHT,
+                      svg_number_new (svg->height));
+  svg_shape_attr_set (svg->content,
                       SHAPE_ATTR_VIEW_BOX,
                       svg_view_box_new (&GRAPHENE_RECT_INIT (0, 0, svg->width, svg->height)));
 
-  g_ptr_array_add (svg->content->shapes, shape_duplicate (shape));
+  sh = shape_duplicate (shape);
+  svg_shape_attr_set (sh, SHAPE_ATTR_VISIBILITY, NULL);
+  svg_shape_attr_set (sh, SHAPE_ATTR_DISPLAY, NULL);
+  g_ptr_array_add (svg->content->shapes, sh);
 
   bytes = gtk_svg_serialize (svg);
   g_object_unref (svg);
@@ -108,9 +118,7 @@ update_states (StateEditor *self)
   self->updating = TRUE;
 
   for (unsigned int i = 0; i < path_paintable_get_n_paths (self->paintable); i++)
-    {
-      path_paintable_set_path_states (self->paintable, i, states[i]);
-    }
+    path_paintable_set_path_states (self->paintable, i, states[i]);
 
   self->updating = FALSE;
 
@@ -120,6 +128,9 @@ update_states (StateEditor *self)
 static void
 drop_state (StateEditor *self)
 {
+  if (self->max_state == 0)
+    return;
+
   self->max_state--;
   self->max_state = CLAMP (self->max_state, 0, 63);
 
@@ -129,6 +140,9 @@ drop_state (StateEditor *self)
 static void
 add_state (StateEditor *self)
 {
+  if (self->max_state == 63)
+    return;
+
   self->max_state++;
   self->max_state = CLAMP (self->max_state, 0, 63);
 
@@ -213,7 +227,7 @@ repopulate (StateEditor *self)
 static void
 paths_changed (StateEditor *self)
 {
-  self->max_state = MAX (self->max_state, path_paintable_get_n_states (self->paintable) - 1);
+  self->max_state = MAX (self->max_state, path_paintable_get_max_state (self->paintable));
   self->max_state = CLAMP (self->max_state, 0, 63);
 
   repopulate (self);

@@ -63,9 +63,8 @@
  *
  * `GtkSvg` fills or strokes paths with symbolic or fixed colors.
  * It can have multiple states, and paths can be included in a subset
- * of the states. The special 'empty' state is always available.
- * States can have animations, and the transition between different
- * states can also be animated.
+ * of the states. States can have animations, and the transition
+ * between different states can also be animated.
  *
  * To show a static SVG image, it is enough to load the
  * the SVG and use it like any other paintable.
@@ -75,7 +74,6 @@
  * [method@Gtk.Svg.play] after loading the SVG. The animation can
  * be paused using [method@Gtk.Svg.pause].
  *
- * To find out what states a `GtkSvg` has, use [method@Gtk.Svg.get_n_states].
  * To set the current state, use [method@Gtk.Svg.set_state].
  *
  *
@@ -102,9 +100,6 @@
  * are not supported.
  *
  * Among the structural elements, `<a>` and `<view>` are not supported.
- *
- * All filter functions are supported, plus a custom `alpha-level()`
- * function, which implements one particular case of feComponentTransfer.
  *
  * In the `<filter>` element, the following primitives are not
  * supported: feConvolveMatrix, feDiffuseLighting,
@@ -137,9 +132,10 @@
  *
  * <image src="svg-renderer1.svg">
  *
- * Note that the generated animations assume a `pathLengh` value of 1.
- * Setting `pathLength` in your SVG is therefore going to interfere with
- * generated animations.
+ * Note that the generated animations are implemented using standard
+ * SVG attributes (`visibility`, `stroke-dasharray, `stroke-dashoffset`,
+ * `pathLength` and `filter`). Setting these attributes in your SVG
+ * is therefore going to interfere with generated animations.
  *
  * To connect general SVG animations to the states of the paintable,
  * use the custom `gpa:states(...)` condition in the `begin` and `end`
@@ -170,6 +166,20 @@
  *              to='0'/>
  *
  * will start a fade-out of path1 300ms before state 0 ends.
+ *
+ * A variant of the `gpa:states(...)` condition allows specifying
+ * both before and after states:
+ *
+ *     <animate href='path1'
+ *              attributeName='opacity'
+ *              begin='gpa:states(0, 1 2)'
+ *              dur='300ms'
+ *              fill='freeze'
+ *              from='1'
+ *              to='0'/>
+ *
+ * will start the animation when the state changes from 0 to 1 or
+ * from 0 to 2, but not when it changes from 0 to 3.
  *
  * In addition to the `gpa:fill` and `gpa:stroke` attributes, symbolic
  * colors can also be specified as a custom paint server reference,
@@ -904,7 +914,7 @@ strsplit_set (const char *str,
           else if (!strchr (sep, ' '))
             {
               g_ptr_array_free (array, TRUE);
-              return NULL;
+              return g_new0 (char *, 1);
             }
         }
 
@@ -1062,6 +1072,7 @@ parse_numbers (const char   *value,
   GStrv strv;
 
   strv = strsplit_set (value, sep);
+
   *n_values = g_strv_length (strv);
 
   for (unsigned int i = 0; strv[i]; i++)
@@ -1259,9 +1270,12 @@ compute_viewport_transform (gboolean               none,
 static GdkTexture *
 load_texture (const char  *string,
               gboolean     allow_external,
+              gboolean    *cache_this,
               GError     **error)
 {
   GdkTexture *texture = NULL;
+
+  *cache_this = TRUE;
 
   if (g_str_has_prefix (string, "data:"))
     {
@@ -1272,6 +1286,7 @@ load_texture (const char  *string,
       if (bytes == NULL)
         return NULL;
 
+      *cache_this = FALSE;
       texture = gdk_texture_new_from_bytes (bytes, error);
 
       g_bytes_unref (bytes);
@@ -1298,10 +1313,13 @@ get_texture (GtkSvg      *svg,
   texture = g_hash_table_lookup (svg->images, string);
   if (!texture)
     {
+      gboolean cache_this;
+
       texture = load_texture (string,
                               (svg->features & GTK_SVG_EXTERNAL_RESOURCES) != 0,
+                              &cache_this,
                               error);
-      if (texture)
+      if (texture && cache_this)
         g_hash_table_insert (svg->images, g_strdup (string), texture);
     }
 
@@ -1937,7 +1955,7 @@ svg_path_data_print (SvgPathData *p,
           string_append_point (s, "M ", &op->seg.pts[0]);
           break;
         case GSK_PATH_CLOSE:
-          g_string_append_printf (s, "Z");
+          g_string_append (s, "Z");
           break;
         case GSK_PATH_LINE:
           string_append_point (s, "L ", &op->seg.pts[1]);
@@ -2685,7 +2703,7 @@ parse_states (const char *text,
 
   *states = 0;
 
-  str = g_strsplit (text, " ", 0);
+  str = strsplit_set (text, " ");
   for (unsigned int i = 0; str[i]; i++)
     {
       unsigned int u;
@@ -2738,9 +2756,6 @@ static gboolean
 state_match (uint64_t     states,
              unsigned int state)
 {
-  if (state == GTK_SVG_STATE_EMPTY)
-    return FALSE;
-
   if ((states & BIT (state)) != 0)
     return TRUE;
 
@@ -2808,10 +2823,16 @@ svg_value_alloc (const SvgValueClass *class,
   return value;
 }
 
+static inline gboolean
+svg_value_is_immortal (SvgValue *value)
+{
+  return value->ref_count == 0;
+}
+
 SvgValue *
 svg_value_ref (SvgValue *value)
 {
-  if (value->ref_count == 0)
+  if (svg_value_is_immortal (value))
     return value;
 
   value->ref_count += 1;
@@ -2821,7 +2842,7 @@ svg_value_ref (SvgValue *value)
 void
 svg_value_unref (SvgValue *value)
 {
-  if (value->ref_count == 0)
+  if (svg_value_is_immortal (value))
     return;
 
   if (value->ref_count > 1)
@@ -3701,6 +3722,7 @@ svg_numbers_parse (const char *value)
   SvgNumbers *p;
 
   strv = strsplit_set (value, ", ");
+
   n = g_strv_length (strv);
 
   p = (SvgNumbers *) svg_value_alloc (&SVG_NUMBERS_CLASS, svg_numbers_size (n));
@@ -5302,7 +5324,7 @@ parse_transform_function (GtkCssParser *self,
 {
   const GtkCssToken *token;
   gboolean result = FALSE;
-  char function_name[64];
+  char func[64];
   guint arg;
   Number *num;
 
@@ -5311,13 +5333,21 @@ parse_transform_function (GtkCssParser *self,
   token = gtk_css_parser_get_token (self);
   g_return_val_if_fail (gtk_css_token_is (token, GTK_CSS_TOKEN_FUNCTION), FALSE);
 
-  g_strlcpy (function_name, gtk_css_token_get_string (token), 64);
+  g_strlcpy (func, gtk_css_token_get_string (token), sizeof (func));
   gtk_css_parser_start_block (self);
 
   arg = 0;
   while (TRUE)
     {
-      guint parse_args = css_parser_parse_number (self, arg, num);
+      guint parse_args;
+
+      if (arg >= max_args)
+        {
+          gtk_css_parser_error_syntax (self, "Expected ')' at end of %s()", func);
+          break;
+        }
+
+      parse_args = css_parser_parse_number (self, arg, num);
       if (parse_args == 0)
         break;
       values[arg] = num[arg].value;
@@ -5327,7 +5357,7 @@ parse_transform_function (GtkCssParser *self,
         {
           if (arg < min_args)
             {
-              gtk_css_parser_error_syntax (self, "%s() requires at least %u arguments", function_name, min_args);
+              gtk_css_parser_error_syntax (self, "%s() requires at least %u arguments", func, min_args);
               break;
             }
           else
@@ -5340,7 +5370,7 @@ parse_transform_function (GtkCssParser *self,
         {
           if (arg >= max_args)
             {
-              gtk_css_parser_error_syntax (self, "Expected ')' at end of %s()", function_name);
+              gtk_css_parser_error_syntax (self, "Expected ')' at end of %s()", func);
               break;
             }
 
@@ -5349,7 +5379,7 @@ parse_transform_function (GtkCssParser *self,
         }
       else if (!gtk_css_parser_has_number (self))
         {
-          gtk_css_parser_error_syntax (self, "Unexpected data at end of %s() argument", function_name);
+          gtk_css_parser_error_syntax (self, "Unexpected data at end of %s()", func);
           break;
         }
     }
@@ -6556,42 +6586,45 @@ svg_paint_parse (const char *value)
     }
   else if (gtk_css_parser_has_url (parser))
     {
-      GdkRGBA fallback = GDK_RGBA_TRANSPARENT;
       char *url;
-      const char *ref;
 
       url = gtk_css_parser_consume_url (parser);
-
-      if (url[0] == '#')
-        ref = url + 1;
-      else
-        ref = url;
-
-      gtk_css_parser_skip_whitespace (parser);
-      if (gtk_css_parser_has_token (parser, GTK_CSS_TOKEN_EOF))
+      if (url)
         {
-          paint = svg_paint_new_server (ref);
-        }
-      else if (gtk_css_parser_try_ident (parser, "none") ||
-               gdk_rgba_parser_parse (parser, &fallback))
-        {
+          const char *ref;
+          GdkRGBA fallback = GDK_RGBA_TRANSPARENT;
+
+          if (url[0] == '#')
+            ref = url + 1;
+          else
+            ref = url;
+
           gtk_css_parser_skip_whitespace (parser);
           if (gtk_css_parser_has_token (parser, GTK_CSS_TOKEN_EOF))
             {
-              GdkColor c;
-              gdk_color_init_from_rgba (&c, &fallback);
-              paint = svg_paint_new_server_with_fallback (ref, &c);
-              gdk_color_finish (&c);
+              paint = svg_paint_new_server (ref);
             }
-        }
-      else if (gtk_css_parser_try_ident (parser, "currentColor"))
-        {
-          gtk_css_parser_skip_whitespace (parser);
-          if (gtk_css_parser_has_token (parser, GTK_CSS_TOKEN_EOF))
-            paint = svg_paint_new_server_with_current_color (ref);
-        }
+          else if (gtk_css_parser_try_ident (parser, "none") ||
+                   gdk_rgba_parser_parse (parser, &fallback))
+            {
+              gtk_css_parser_skip_whitespace (parser);
+              if (gtk_css_parser_has_token (parser, GTK_CSS_TOKEN_EOF))
+                {
+                  GdkColor c;
+                  gdk_color_init_from_rgba (&c, &fallback);
+                  paint = svg_paint_new_server_with_fallback (ref, &c);
+                  gdk_color_finish (&c);
+                }
+            }
+          else if (gtk_css_parser_try_ident (parser, "currentColor"))
+            {
+              gtk_css_parser_skip_whitespace (parser);
+              if (gtk_css_parser_has_token (parser, GTK_CSS_TOKEN_EOF))
+                paint = svg_paint_new_server_with_current_color (ref);
+            }
 
-      g_free (url);
+          g_free (url);
+        }
     }
 
   gtk_css_parser_unref (parser);
@@ -6856,7 +6889,6 @@ typedef enum
   FILTER_OPACITY,
   FILTER_SATURATE,
   FILTER_SEPIA,
-  FILTER_ALPHA_LEVEL,
   FILTER_REF,
   FILTER_DROPSHADOW,
 } FilterKind;
@@ -6886,7 +6918,6 @@ static struct {
   { FILTER_OPACITY,     "opacity", 1, CLAMPED|POSITIVE,   css_parser_parse_number_percentage, },
   { FILTER_SATURATE,    "saturate", 1, POSITIVE,          css_parser_parse_number_percentage, },
   { FILTER_SEPIA,       "sepia", 1, CLAMPED|POSITIVE,     css_parser_parse_number_percentage, },
-  { FILTER_ALPHA_LEVEL, "alpha-level", 0.5, POSITIVE,     css_parser_parse_number, },
   /* FILTER_REF and FILTER_DROPSHADOW are handled separately */
 };
 
@@ -6926,17 +6957,21 @@ svg_filter_free (SvgValue *value)
   SvgFilter *f = (SvgFilter *) value;
   for (unsigned int i = 0; i < f->n_functions; i++)
     {
-      if (f->functions[i].kind == FILTER_REF)
-        g_free (f->functions[i].ref.ref);
-      else if (f->functions[i].kind == FILTER_DROPSHADOW)
+      FilterFunction *ff = &f->functions[i];
+
+      if (ff->kind == FILTER_REF)
         {
-          svg_value_unref (f->functions[i].dropshadow.color);
-          svg_value_unref (f->functions[i].dropshadow.dx);
-          svg_value_unref (f->functions[i].dropshadow.dy);
-          svg_value_unref (f->functions[i].dropshadow.std_dev);
+          g_free (ff->ref.ref);
+        }
+      else if (ff->kind == FILTER_DROPSHADOW)
+        {
+          svg_value_unref (ff->dropshadow.color);
+          svg_value_unref (ff->dropshadow.dx);
+          svg_value_unref (ff->dropshadow.dy);
+          svg_value_unref (ff->dropshadow.std_dev);
         }
       else
-        svg_value_unref (f->functions[i].simple);
+        svg_value_unref (ff->simple);
     }
 
   g_free (value);
@@ -6954,20 +6989,24 @@ svg_filter_equal (const SvgValue *value0,
 
   for (unsigned int i = 0; i < f0->n_functions; i++)
     {
-      if (f0->functions[i].kind != f1->functions[i].kind)
+      const FilterFunction *ff0 = &f0->functions[i];
+      const FilterFunction *ff1 = &f1->functions[i];
+
+      if (ff0->kind != ff1->kind)
         return FALSE;
-      if (f0->functions[i].kind == FILTER_NONE)
+
+      if (ff0->kind == FILTER_NONE)
         return TRUE;
-      else if (f0->functions[i].kind == FILTER_REF)
-        return f0->functions[i].ref.shape == f1->functions[i].ref.shape &&
-               strcmp (f0->functions[i].ref.ref, f1->functions[i].ref.ref) == 0;
-      else if (f0->functions[i].kind == FILTER_DROPSHADOW)
-        return svg_value_equal (f0->functions[i].dropshadow.color, f1->functions[i].dropshadow.color) &&
-               svg_value_equal (f0->functions[i].dropshadow.dx, f1->functions[i].dropshadow.dx) &&
-               svg_value_equal (f0->functions[i].dropshadow.dy, f1->functions[i].dropshadow.dy) &&
-               svg_value_equal (f0->functions[i].dropshadow.std_dev, f1->functions[i].dropshadow.std_dev);
+      else if (ff0->kind == FILTER_REF)
+        return ff0->ref.shape == ff1->ref.shape &&
+               strcmp (ff0->ref.ref, ff1->ref.ref) == 0;
+      else if (ff0->kind == FILTER_DROPSHADOW)
+        return svg_value_equal (ff0->dropshadow.color, ff1->dropshadow.color) &&
+               svg_value_equal (ff0->dropshadow.dx, ff1->dropshadow.dx) &&
+               svg_value_equal (ff0->dropshadow.dy, ff1->dropshadow.dy) &&
+               svg_value_equal (ff0->dropshadow.std_dev, ff1->dropshadow.std_dev);
       else
-        return svg_value_equal (f0->functions[i].simple, f1->functions[i].simple);
+        return svg_value_equal (ff0->simple, ff1->simple);
     }
 
   return TRUE;
@@ -7036,28 +7075,31 @@ svg_filter_resolve (const SvgValue *value,
 
   for (unsigned int i = 0; i < filter->n_functions; i++)
     {
-      result->functions[i].kind = filter->functions[i].kind;
+      const FilterFunction *ff = &filter->functions[i];
+      FilterFunction *r = &result->functions[i];
 
-      if (filter->functions[i].kind == FILTER_REF)
+      r->kind = ff->kind;
+
+      if (ff->kind == FILTER_REF)
         {
-          result->functions[i].ref.ref = g_strdup (filter->functions[i].ref.ref);
-          result->functions[i].ref.shape = filter->functions[i].ref.shape;
+          r->ref.ref = g_strdup (ff->ref.ref);
+          r->ref.shape = ff->ref.shape;
         }
-      else if (filter->functions[i].kind == FILTER_DROPSHADOW)
+      else if (ff->kind == FILTER_DROPSHADOW)
         {
-          result->functions[i].dropshadow.color = svg_value_resolve (filter->functions[i].dropshadow.color, attr, idx, shape, context);
-          result->functions[i].dropshadow.dx = svg_value_resolve (filter->functions[i].dropshadow.dx, attr, idx, shape, context);
-          result->functions[i].dropshadow.dy = svg_value_resolve (filter->functions[i].dropshadow.dy, attr, idx, shape, context);
-          result->functions[i].dropshadow.std_dev = svg_value_resolve (filter->functions[i].dropshadow.std_dev, attr, idx, shape, context);
+          r->dropshadow.color = svg_value_resolve (ff->dropshadow.color, attr, idx, shape, context);
+          r->dropshadow.dx = svg_value_resolve (ff->dropshadow.dx, attr, idx, shape, context);
+          r->dropshadow.dy = svg_value_resolve (ff->dropshadow.dy, attr, idx, shape, context);
+          r->dropshadow.std_dev = svg_value_resolve (ff->dropshadow.std_dev, attr, idx, shape, context);
         }
       else
         {
-          SvgValue *v = svg_value_resolve (filter->functions[i].simple, attr, idx, shape, context);
+          SvgValue *v = svg_value_resolve (ff->simple, attr, idx, shape, context);
 
-          if (filter_desc[filter->functions[i].kind].flags & CLAMPED)
-            result->functions[i].simple = svg_number_new_full (((SvgNumber *) v)->unit, CLAMP (((SvgNumber *) v)->value, 0, 1));
+          if (filter_desc[ff->kind].flags & CLAMPED)
+            r->simple = svg_number_new_full (((SvgNumber *) v)->unit, CLAMP (((SvgNumber *) v)->value, 0, 1));
           else
-            result->functions[i].simple = svg_value_ref (v);
+            r->simple = svg_value_ref (v);
           svg_value_unref (v);
         }
     }
@@ -7123,6 +7165,9 @@ filter_parser_parse (GtkCssParser *parser)
       if (gtk_css_parser_has_url (parser))
         {
           char *url = gtk_css_parser_consume_url (parser);
+          if (url == NULL)
+            goto fail;
+
           function.kind = FILTER_REF;
           if (url[0] == '#')
             function.ref.ref = g_strdup (url + 1);
@@ -7256,39 +7301,39 @@ svg_filter_print (const SvgValue *value,
 
   for (unsigned int i = 0; i < filter->n_functions; i++)
     {
-      const FilterFunction *function = &filter->functions[i];
+      const FilterFunction *f = &filter->functions[i];
 
       if (i > 0)
         g_string_append_c (s, ' ');
 
-      if (function->kind == FILTER_NONE)
+      if (f->kind == FILTER_NONE)
         {
           g_string_append (s, "none");
         }
-      else if (function->kind == FILTER_REF)
+      else if (f->kind == FILTER_REF)
         {
-          g_string_append_printf (s, "url(#%s)", function->ref.ref);
+          g_string_append_printf (s, "url(#%s)", f->ref.ref);
         }
-      else if (function->kind == FILTER_DROPSHADOW)
+      else if (f->kind == FILTER_DROPSHADOW)
         {
           g_string_append (s, "drop-shadow(");
-          if (!svg_color_is_current (function->dropshadow.color))
+          if (!svg_color_is_current (f->dropshadow.color))
             {
-              svg_value_print (function->dropshadow.color, s);
+              svg_value_print (f->dropshadow.color, s);
               g_string_append (s, ", ");
             }
-          svg_value_print (function->dropshadow.dx, s);
+          svg_value_print (f->dropshadow.dx, s);
           g_string_append (s, ", ");
-          svg_value_print (function->dropshadow.dy, s);
+          svg_value_print (f->dropshadow.dy, s);
           g_string_append (s, ", ");
-          svg_value_print (function->dropshadow.std_dev, s);
+          svg_value_print (f->dropshadow.std_dev, s);
           g_string_append_c (s, ')');
         }
       else
         {
-          g_string_append (s, filter_desc[function->kind].name);
+          g_string_append (s, filter_desc[f->kind].name);
           g_string_append_c (s, '(');
-          svg_value_print (function->simple, s);
+          svg_value_print (f->simple, s);
           g_string_append_c (s, ')');
         }
     }
@@ -7302,7 +7347,7 @@ svg_filter_interpolate (const SvgValue *value0,
 {
   const SvgFilter *f0 = (const SvgFilter *) value0;
   const SvgFilter *f1 = (const SvgFilter *) value1;
-  SvgFilter *f;
+  SvgFilter *result;
 
   if (f0->n_functions != f1->n_functions)
     return NULL;
@@ -7310,37 +7355,59 @@ svg_filter_interpolate (const SvgValue *value0,
   /* TODO: filter interpolation wording in the spec */
   for (unsigned int i = 0; i < f0->n_functions; i++)
     {
-      if (f0->functions[i].kind != f1->functions[i].kind)
+      const FilterFunction *ff0 = &f0->functions[i];
+      const FilterFunction *ff1 = &f1->functions[i];
+
+      if (ff0->kind != ff1->kind)
         return NULL;
-      if (f0->functions[i].kind != FILTER_REF &&
-          ((SvgNumber *) f0->functions[i].simple)->unit != ((SvgNumber *) f1->functions[i].simple)->unit)
+
+      if (ff0->kind == FILTER_REF ||
+          ff0->kind == FILTER_DROPSHADOW)
+        continue;
+
+      if (((SvgNumber *) ff0->simple)->unit != ((SvgNumber *) ff1->simple)->unit)
         return NULL;
     }
 
-  f = svg_filter_alloc (f0->n_functions);
+  result = svg_filter_alloc (f0->n_functions);
 
   for (unsigned int i = 0; i < f0->n_functions; i++)
     {
-      f->functions[i].kind = f0->functions[i].kind;
-      if (f->functions[i].kind == FILTER_NONE)
+      const FilterFunction *ff0 = &f0->functions[i];
+      const FilterFunction *ff1 = &f1->functions[i];
+      FilterFunction *r = &result->functions[i];
+
+      r->kind = ff0->kind;
+
+      if (ff0->kind == FILTER_NONE)
         ;
-      else if (f->functions[i].kind == FILTER_REF)
+      else if (ff0->kind == FILTER_REF)
         {
+          if (t < 0.5)
+            {
+              r->ref.ref = g_strdup (ff0->ref.ref);
+              r->ref.shape = ff0->ref.shape;
+            }
+          else
+            {
+              r->ref.ref = g_strdup (ff1->ref.ref);
+              r->ref.shape = ff1->ref.shape;
+            }
         }
-      else if (f->functions[i].kind == FILTER_DROPSHADOW)
+      else if (ff0->kind == FILTER_DROPSHADOW)
         {
-          f->functions[i].dropshadow.color = svg_value_interpolate (f0->functions[i].dropshadow.color, f1->functions[i].dropshadow.color, context, t);
-          f->functions[i].dropshadow.dx = svg_value_interpolate (f0->functions[i].dropshadow.dx, f1->functions[i].dropshadow.dx, context, t);
-          f->functions[i].dropshadow.dy = svg_value_interpolate (f0->functions[i].dropshadow.dy, f1->functions[i].dropshadow.dy, context, t);
-          f->functions[i].dropshadow.std_dev = svg_value_interpolate (f0->functions[i].dropshadow.std_dev, f1->functions[i].dropshadow.std_dev, context, t);
+          r->dropshadow.color = svg_value_interpolate (ff0->dropshadow.color, ff1->dropshadow.color, context, t);
+          r->dropshadow.dx = svg_value_interpolate (ff0->dropshadow.dx, ff1->dropshadow.dx, context, t);
+          r->dropshadow.dy = svg_value_interpolate (ff0->dropshadow.dy, ff1->dropshadow.dy, context, t);
+          r->dropshadow.std_dev = svg_value_interpolate (ff0->dropshadow.std_dev, ff1->dropshadow.std_dev, context, t);
         }
       else
         {
-          f->functions[i].simple = svg_value_interpolate (f0->functions[i].simple, f1->functions[i].simple, context, t);
+          r->simple = svg_value_interpolate (ff0->simple, ff1->simple, context, t);
         }
     }
 
-  return (SvgValue *) f;
+  return (SvgValue *) result;
 }
 
 static SvgValue *
@@ -7351,37 +7418,41 @@ svg_filter_accumulate (const SvgValue *value0,
 {
   const SvgFilter *f0 = (const SvgFilter *) value0;
   const SvgFilter *f1 = (const SvgFilter *) value1;
-  SvgFilter *f;
+  SvgFilter *result;
 
-  f = svg_filter_alloc (f0->n_functions + n * f1->n_functions);
+  result = svg_filter_alloc (f0->n_functions + n * f1->n_functions);
 
   for (unsigned int i = 0; i < n; i++)
-    memcpy (&f->functions[i * f1->n_functions],
+    memcpy (&result->functions[i * f1->n_functions],
             f1->functions,
             f1->n_functions * sizeof (FilterFunction));
 
-  memcpy (&f->functions[f0->n_functions + (n - 1) * f1->n_functions],
+  memcpy (&result->functions[f0->n_functions + (n - 1) * f1->n_functions],
           f0->functions,
           f0->n_functions * sizeof (FilterFunction));
 
-  for (unsigned int i = 0; i < f->n_functions; i++)
+  for (unsigned int i = 0; i < result->n_functions; i++)
     {
-      if (f->functions[i].kind == FILTER_NONE)
+      FilterFunction *r = &result->functions[i];
+
+      if (r->kind == FILTER_NONE)
         ;
-      else if (f->functions[i].kind == FILTER_REF)
-        f->functions[i].ref.ref = g_strdup (f->functions[i].ref.ref);
-      else if (f->functions[i].kind == FILTER_DROPSHADOW)
+      else if (r->kind == FILTER_REF)
         {
-          svg_value_ref (f->functions[i].dropshadow.color);
-          svg_value_ref (f->functions[i].dropshadow.dx);
-          svg_value_ref (f->functions[i].dropshadow.dy);
-          svg_value_ref (f->functions[i].dropshadow.std_dev);
+          r->ref.ref = g_strdup (r->ref.ref);
+        }
+      else if (r->kind == FILTER_DROPSHADOW)
+        {
+          svg_value_ref (r->dropshadow.color);
+          svg_value_ref (r->dropshadow.dx);
+          svg_value_ref (r->dropshadow.dy);
+          svg_value_ref (r->dropshadow.std_dev);
         }
       else
-        svg_value_ref (f->functions[i].simple);
+        svg_value_ref (r->simple);
     }
 
-  return (SvgValue *) f;
+  return (SvgValue *) result;
 }
 
 #define R 0.2126
@@ -7400,7 +7471,6 @@ filter_function_get_color_matrix (FilterKind         kind,
     {
     case FILTER_NONE:
     case FILTER_BLUR:
-    case FILTER_ALPHA_LEVEL:
     case FILTER_REF:
     case FILTER_DROPSHADOW:
       return FALSE;
@@ -8272,20 +8342,24 @@ svg_clip_parse (const char *value)
 
           if (gtk_css_parser_consume_function (parser, 1, 2, parse_clip_path_arg, &data))
             {
-              res = svg_clip_new_path (data.string, data.fill_rule);
-              g_free (data.string);
+              if (data.string != NULL)
+                {
+                  res = svg_clip_new_path (data.string, data.fill_rule);
+                  g_free (data.string);
+                }
             }
         }
       else
         {
           char *url = gtk_css_parser_consume_url (parser);
-          if (!url)
-            res = NULL;
-          else if (url[0] == '#')
-            res = svg_clip_new_ref (url + 1);
-          else
-            res = svg_clip_new_ref (url);
-          g_free (url);
+          if (url != NULL)
+            {
+              if (url[0] == '#')
+                res = svg_clip_new_ref (url + 1);
+              else
+                res = svg_clip_new_ref (url);
+              g_free (url);
+           }
         }
 
       gtk_css_parser_unref (parser);
@@ -8746,6 +8820,7 @@ static SvgValue *
 svg_content_fit_parse (const char *value)
 {
   GStrv strv;
+  size_t len;
   Align align_x;
   Align align_y;
   MeetOrSlice meet;
@@ -8754,7 +8829,8 @@ svg_content_fit_parse (const char *value)
     return svg_content_fit_new_none ();
 
   strv = g_strsplit (value, " ", 0);
-  if (g_strv_length (strv) > 2)
+  len = g_strv_length (strv);
+  if (len < 1 || len > 2)
     {
       g_strfreev (strv);
       return NULL;
@@ -10099,7 +10175,11 @@ parse_number_optional_number (const char *value)
 {
   SvgNumbers *numbers = (SvgNumbers *) svg_numbers_parse (value);
 
-  if (numbers->n_values <= 2)
+  if (numbers == NULL)
+    {
+      return NULL;
+    }
+  else if (numbers->n_values <= 2)
     {
       return (SvgValue *) numbers;
     }
@@ -10978,7 +11058,7 @@ shape_attrs_init_default_values (void)
   shape_attrs[SHAPE_ATTR_FE_OPACITY].initial_value = svg_number_new (1);
   shape_attrs[SHAPE_ATTR_FE_IN].initial_value = svg_filter_primitive_ref_new (DEFAULT_SOURCE);
   shape_attrs[SHAPE_ATTR_FE_IN2].initial_value = svg_filter_primitive_ref_new (DEFAULT_SOURCE);
-  shape_attrs[SHAPE_ATTR_FE_STD_DEV].initial_value = svg_numbers_new1 (2);
+  shape_attrs[SHAPE_ATTR_FE_STD_DEV].initial_value = svg_numbers_new1 (0);
   shape_attrs[SHAPE_ATTR_FE_BLUR_EDGE_MODE].initial_value = svg_edge_mode_new (EDGE_MODE_NONE);
   shape_attrs[SHAPE_ATTR_FE_BLEND_MODE].initial_value = svg_blend_mode_new (GSK_BLEND_MODE_DEFAULT);
   shape_attrs[SHAPE_ATTR_FE_BLEND_COMPOSITE].initial_value = svg_blend_composite_new (BLEND_COMPOSITE);
@@ -11003,6 +11083,11 @@ shape_attrs_init_default_values (void)
   shape_attrs[SHAPE_ATTR_FE_FUNC_AMPLITUDE].initial_value = svg_number_new (1);
   shape_attrs[SHAPE_ATTR_FE_FUNC_EXPONENT].initial_value = svg_number_new (1);
   shape_attrs[SHAPE_ATTR_FE_FUNC_OFFSET].initial_value = svg_number_new (0);
+
+#ifndef G_DISABLE_ASSERT
+  for (unsigned int i = 0; i < G_N_ELEMENTS (shape_attrs); i++)
+    g_assert (svg_value_is_immortal (shape_attrs[i].initial_value));
+#endif
 }
 
 static SvgValue *
@@ -12494,8 +12579,8 @@ typedef struct {
       TimeSpecSide side;
     } sync;
     struct {
-      uint64_t states;
-      TimeSpecSide side;
+      uint64_t from;
+      uint64_t to;
     } states;
   };
   int64_t time;
@@ -12540,8 +12625,8 @@ time_spec_copy (const TimeSpec *orig)
       t->sync.side = orig->sync.side;
       break;
     case TIME_SPEC_TYPE_STATES:
-      t->states.states = orig->states.states;
-      t->states.side = orig->states.side;
+      t->states.from = orig->states.from;
+      t->states.to = orig->states.to;
       break;
     default:
       g_assert_not_reached ();
@@ -12575,8 +12660,8 @@ time_spec_equal (const void *p1,
              t1->offset == t2->offset;
 
     case TIME_SPEC_TYPE_STATES:
-      return t1->states.states == t2->states.states &&
-             t1->states.side == t2->states.side &&
+      return t1->states.from == t2->states.from &&
+             t1->states.to == t2->states.to &&
              t1->offset == t2->offset;
 
     default:
@@ -12634,8 +12719,16 @@ time_spec_parse (TimeSpec   *spec,
           g_free (str);
 
           spec->type = TIME_SPEC_TYPE_STATES;
-          spec->states.side = side;
-          spec->states.states = states;
+          if (side == TIME_SPEC_SIDE_BEGIN)
+            {
+              spec->states.from = ALL_STATES & ~states;
+              spec->states.to = states;
+            }
+          else
+            {
+              spec->states.from = states;
+              spec->states.to = ALL_STATES & ~states;
+            }
         }
       else
         {
@@ -12644,6 +12737,42 @@ time_spec_parse (TimeSpec   *spec,
           spec->sync.base = NULL;
           spec->sync.side = side;
         }
+    }
+  else if (g_str_has_prefix (value, "gpa:states("))
+    {
+      const char *v, *end;
+      char *str;
+      uint64_t from, to;
+
+      v = value + strlen ("gpa:states(");
+      end = strchr (v, ',');
+      if (!end)
+        return FALSE;
+
+      str = g_strndup (v, end - v);
+      if (!parse_states (str, &from))
+        {
+          g_free (str);
+          return FALSE;
+        }
+      g_free (str);
+
+      v = end + 1;
+      end = strchr (v, ')');
+      if (!end)
+        return FALSE;
+
+      str = g_strndup (v, end - v);
+      if (!parse_states (str, &to))
+        {
+          g_free (str);
+          return FALSE;
+        }
+      g_free (str);
+
+      spec->type = TIME_SPEC_TYPE_STATES;
+      spec->states.from = from;
+      spec->states.to = to;
     }
   else if (strlen (value) > 0)
     {
@@ -12678,9 +12807,10 @@ time_spec_print (TimeSpec *spec,
     case TIME_SPEC_TYPE_STATES:
       {
         g_string_append (s, "gpa:states(");
-        print_states (s, spec->states.states);
+        print_states (s, spec->states.from);
+        g_string_append (s, ", ");
+        print_states (s, spec->states.to);
         g_string_append (s, ")");
-        g_string_append_printf (s, "%s", sides[spec->states.side]);
         only_nonzero = TRUE;
       }
       break;
@@ -12770,31 +12900,15 @@ time_spec_update_for_state (TimeSpec     *spec,
 {
   if (spec->type == TIME_SPEC_TYPE_STATES && previous_state != state)
     {
-      gboolean was_in, is_in;
       int64_t time;
 
       time = spec->time;
 
-      was_in = state_match (spec->states.states, previous_state);
-      is_in = state_match (spec->states.states, state);
-
-      if (was_in != is_in)
-        {
-          if (spec->states.side == TIME_SPEC_SIDE_BEGIN)
-            {
-              if (!was_in && is_in)
-                time = state_start_time + spec->offset;
-              else if (was_in && !is_in)
-                time = INDEFINITE;
-            }
-          else if (spec->states.side == TIME_SPEC_SIDE_END)
-            {
-              if (!was_in && is_in)
-                time = INDEFINITE;
-              else if (was_in && !is_in)
-                time = state_start_time + spec->offset;
-            }
-        }
+      if (state_match (spec->states.from & ~spec->states.to, previous_state) &&
+          state_match (spec->states.to & ~spec->states.from, state))
+        time = state_start_time + spec->offset;
+      else
+        time = INDEFINITE;
 
       time_spec_set_time (spec, time);
     }
@@ -12803,8 +12917,7 @@ time_spec_update_for_state (TimeSpec     *spec,
 static int64_t
 time_spec_get_state_change_delay (TimeSpec *spec)
 {
-  if (spec->type == TIME_SPEC_TYPE_STATES &&
-      spec->states.side == TIME_SPEC_SIDE_END)
+  if (spec->type == TIME_SPEC_TYPE_STATES)
     return ABS (spec->offset);
 
   return 0;
@@ -12886,13 +12999,13 @@ timeline_get_sync (Timeline     *timeline,
 }
 
 static TimeSpec *
-timeline_get_states (Timeline     *timeline,
-                     uint64_t      states,
-                     TimeSpecSide  side,
-                     int64_t       offset)
+timeline_get_states (Timeline *timeline,
+                     uint64_t  from,
+                     uint64_t  to,
+                     int64_t   offset)
 {
   TimeSpec spec = { .type = TIME_SPEC_TYPE_STATES,
-                    .states = { .states = states, .side = side },
+                    .states = { .from = from, .to = to },
                     .offset = offset };
   return timeline_get_time_spec (timeline, &spec);
 }
@@ -14797,9 +14910,7 @@ shape_apply_state (GtkSvg       *self,
     {
       Visibility visibility;
 
-      if (state == GTK_SVG_STATE_EMPTY)
-        visibility = VISIBILITY_HIDDEN;
-      else if (shape->gpa.states & BIT (state))
+      if (shape->gpa.states & BIT (state))
         visibility = VISIBILITY_VISIBLE;
       else
         visibility = VISIBILITY_HIDDEN;
@@ -14948,10 +15059,10 @@ create_visibility_setter (Shape        *shape,
   if (initial_visibility == VISIBILITY_VISIBLE)
     {
       a->id = g_strdup_printf ("gpa:out-of-state:%s", shape->id);
-      begin = animation_add_begin (a, timeline_get_states (timeline, states, TIME_SPEC_SIDE_END, MAX (0, - delay)));
+      begin = animation_add_begin (a, timeline_get_states (timeline, states, ALL_STATES & ~states, MAX (0, - delay)));
       time_spec_add_animation (begin, a);
 
-      end = animation_add_end (a, timeline_get_states (timeline, states, TIME_SPEC_SIDE_BEGIN, - (MAX (0, - delay))));
+      end = animation_add_end (a, timeline_get_states (timeline, ALL_STATES & ~states, states, - (MAX (0, - delay))));
       time_spec_add_animation (end, a);
 
       opposite_visibility = VISIBILITY_HIDDEN;
@@ -14959,10 +15070,10 @@ create_visibility_setter (Shape        *shape,
   else
     {
       a->id = g_strdup_printf ("gpa:in-state:%s", shape->id);
-      begin = animation_add_begin (a, timeline_get_states (timeline, states, TIME_SPEC_SIDE_BEGIN, MAX (0, - delay)));
+      begin = animation_add_begin (a, timeline_get_states (timeline, ALL_STATES & ~states, states, MAX (0, - delay)));
       time_spec_add_animation (begin, a);
 
-      end = animation_add_end (a, timeline_get_states (timeline, states, TIME_SPEC_SIDE_END, - (MAX (0, - delay))));
+      end = animation_add_end (a, timeline_get_states (timeline, states, ALL_STATES & ~states, - (MAX (0, - delay))));
       time_spec_add_animation (end, a);
 
       opposite_visibility = VISIBILITY_VISIBLE;
@@ -14997,7 +15108,8 @@ create_states (Shape        *shape,
                int64_t       delay,
                unsigned int  initial)
 {
-  create_visibility_setter (shape, timeline, states, delay, initial);
+  if (states != ALL_STATES)
+    create_visibility_setter (shape, timeline, states, delay, initial);
 }
 
 /* }}} */
@@ -15035,6 +15147,7 @@ create_path_length (Shape    *shape,
 
 static void
 create_transition (Shape         *shape,
+                   unsigned int   idx,
                    Timeline      *timeline,
                    uint64_t       states,
                    int64_t        duration,
@@ -15050,6 +15163,7 @@ create_transition (Shape         *shape,
   TimeSpec *begin;
 
   a = animation_animate_new ();
+  a->idx = idx;
   a->simple_duration = duration;
   a->repeat_duration = duration;
   a->repeat_count = 1;
@@ -15058,9 +15172,9 @@ create_transition (Shape         *shape,
   a->has_simple_duration = 1;
   a->has_repeat_duration = 1;
 
-  a->id = g_strdup_printf ("gpa:transition:fade-in:%s:%s", shape_attr_get_name (attr), shape->id);
+  a->id = g_strdup_printf ("gpa:transition:fade-in:%u:%s:%s", idx, shape_attr_get_name (attr), shape->id);
 
-  begin = animation_add_begin (a, timeline_get_states (timeline, states, TIME_SPEC_SIDE_BEGIN, delay));
+  begin = animation_add_begin (a, timeline_get_states (timeline, ALL_STATES & ~states, states, delay));
 
   a->n_frames = 2;
   a->frames = g_new0 (Frame, a->n_frames);
@@ -15083,6 +15197,7 @@ create_transition (Shape         *shape,
   a->gpa.origin = origin;
 
   a = animation_animate_new ();
+  a->idx = idx;
   a->simple_duration = duration;
   a->repeat_duration = duration;
   a->repeat_count = 1;
@@ -15091,9 +15206,9 @@ create_transition (Shape         *shape,
   a->has_simple_duration = 1;
   a->has_repeat_duration = 1;
 
-  a->id = g_strdup_printf ("gpa:transition:fade-out:%s:%s", shape_attr_get_name (attr), shape->id);
+  a->id = g_strdup_printf ("gpa:transition:fade-out:%u:%s:%s", idx, shape_attr_get_name (attr), shape->id);
 
-  begin = animation_add_begin (a, timeline_get_states (timeline, states, TIME_SPEC_SIDE_END, - (duration + delay)));
+  begin = animation_add_begin (a, timeline_get_states (timeline, states, ALL_STATES & ~states, - (duration + delay)));
 
   a->n_frames = 2;
   a->frames = g_new0 (Frame, a->n_frames);
@@ -15118,13 +15233,14 @@ create_transition (Shape         *shape,
   if (delay > 0)
     {
       a = animation_set_new ();
+      a->idx = idx;
       a->attr = attr;
       a->simple_duration = duration;
       a->repeat_duration = duration;
       a->repeat_count = 1;
 
-      a->id = g_strdup_printf ("gpa:transition:delay-in:%s:%s", shape_attr_get_name (attr), shape->id);
-      begin = animation_add_begin (a, timeline_get_states (timeline, states, TIME_SPEC_SIDE_BEGIN, 0));
+      a->id = g_strdup_printf ("gpa:transition:delay-in:%u:%s:%s", idx, shape_attr_get_name (attr), shape->id);
+      begin = animation_add_begin (a, timeline_get_states (timeline, ALL_STATES & ~states, states, 0));
       time_spec_add_animation (begin, a);
 
       a->has_begin = 1;
@@ -15143,13 +15259,14 @@ create_transition (Shape         *shape,
       shape_add_animation (shape, a);
 
       a = animation_set_new ();
+      a->idx = idx;
       a->attr = attr;
       a->simple_duration = duration;
       a->repeat_duration = duration;
       a->repeat_count = 1;
 
-      a->id = g_strdup_printf ("gpa:transition:delay-out:%s:%s", shape_attr_get_name (attr), shape->id);
-      begin = animation_add_begin (a, timeline_get_states (timeline, states, TIME_SPEC_SIDE_END, 0));
+      a->id = g_strdup_printf ("gpa:transition:delay-out:%u:%s:%s", idx, shape_attr_get_name (attr), shape->id);
+      begin = animation_add_begin (a, timeline_get_states (timeline, states, ALL_STATES & ~states, 0));
       time_spec_add_animation (begin, a);
 
       a->has_begin = 1;
@@ -15191,7 +15308,7 @@ create_transition_delay (Shape     *shape,
 
   a->id = g_strdup_printf ("gpa:transition:fade-in-delay:%s:%s", shape_attr_get_name (attr), shape->id);
 
-  begin = animation_add_begin (a, timeline_get_states (timeline, states, TIME_SPEC_SIDE_BEGIN, 0));
+  begin = animation_add_begin (a, timeline_get_states (timeline, ALL_STATES & ~states, states, 0));
 
   a->attr = attr;
   a->n_frames = 2;
@@ -15217,7 +15334,7 @@ create_transition_delay (Shape     *shape,
 
   a->id = g_strdup_printf ("gpa:transition:fade-out-delay:%s:%s", shape_attr_get_name (attr), shape->id);
 
-  begin = animation_add_begin (a, timeline_get_states (timeline, states, TIME_SPEC_SIDE_END, -delay));
+  begin = animation_add_begin (a, timeline_get_states (timeline, states, ALL_STATES & ~states, -delay));
 
   a->attr = attr;
   a->n_frames = 2;
@@ -15235,9 +15352,185 @@ create_transition_delay (Shape     *shape,
   svg_value_unref (value);
 }
 
+/* The filter we create here looks roughly like this:
+ *
+ * <feGaussianBlur -> blurred
+ * <feComponentTransfer in=SourceGraphic ... make source alpha solid
+ * <feGaussianBlur
+ * <feComponentTransfer threshold alpha, white-out color -> blobbed
+ * <feComposite ...multiply blurred and blobbed
+ *
+ * The blurs and the second component transfer are animated
+ * from their full effect to identity.
+ */
+static void
+create_morph_filter (Shape      *shape,
+                     Timeline   *timeline,
+                     GHashTable *shapes,
+                     uint64_t    states,
+                     int64_t     duration,
+                     int64_t     delay,
+                     GpaEasing   easing)
+{
+  Shape *parent = NULL;
+  Shape *filter;
+  SvgValue *value;
+  Animation *a;
+  unsigned int idx;
+  char *str;
+  TimeSpec *begin;
+  TimeSpec *end;
+
+  for (unsigned int i = 0; i < shape->parent->shapes->len; i++)
+    {
+      Shape *sh = g_ptr_array_index (shape->parent->shapes, i);
+
+      if (sh == shape)
+        break;
+
+      if (sh->type == SHAPE_DEFS)
+        {
+          parent = sh;
+          break;
+        }
+    }
+
+  if (parent == NULL)
+    {
+      parent = shape_new (shape->parent, SHAPE_DEFS);
+      g_ptr_array_insert (shape->parent->shapes, 0, parent);
+    }
+
+  filter = svg_shape_add (parent, SHAPE_FILTER);
+  filter->id = g_strdup_printf ("gpa:morph-filter:%s", shape->id);
+
+  g_hash_table_insert (shapes, filter->id, filter);
+
+  value = svg_percentage_new (-50);
+  shape_set_base_value (filter, SHAPE_ATTR_X, 0, value);
+  shape_set_base_value (filter, SHAPE_ATTR_Y, 0, value);
+  svg_value_unref (value);
+  value = svg_percentage_new (200);
+  shape_set_base_value (filter, SHAPE_ATTR_WIDTH, 0, value);
+  shape_set_base_value (filter, SHAPE_ATTR_HEIGHT, 0, value);
+  svg_value_unref (value);
+
+  idx = shape_add_filter (filter, FE_BLUR);
+  str = g_strdup_printf ("gpa:morph-filter:%s:blurred", shape->id);
+  value = svg_string_new (str);
+  g_free (str);
+  shape_set_base_value (filter, SHAPE_ATTR_FE_RESULT, idx + 1, value);
+  svg_value_unref (value);
+
+  create_transition (filter, idx + 1, timeline, states,
+                     duration, delay, easing,
+                     0, GPA_TRANSITION_MORPH,
+                     SHAPE_ATTR_FE_STD_DEV,
+                     svg_numbers_new1 (4),
+                     svg_numbers_new1 (0));
+
+  idx = shape_add_filter (filter, FE_COMPONENT_TRANSFER);
+  value = svg_filter_primitive_ref_new (SOURCE_GRAPHIC);
+  shape_set_base_value (filter, SHAPE_ATTR_FE_IN, idx + 1, value);
+  svg_value_unref (value);
+
+  idx = shape_add_filter (filter, FE_FUNC_A);
+  value = svg_component_transfer_type_new (COMPONENT_TRANSFER_LINEAR);
+  shape_set_base_value (filter, SHAPE_ATTR_FE_FUNC_TYPE, idx + 1, value);
+  svg_value_unref (value);
+  value = svg_number_new (100);
+  shape_set_base_value (filter, SHAPE_ATTR_FE_FUNC_SLOPE, idx + 1, value);
+  svg_value_unref (value);
+  value = svg_number_new (0);
+  shape_set_base_value (filter, SHAPE_ATTR_FE_FUNC_INTERCEPT, idx + 1, value);
+  svg_value_unref (value);
+
+  idx = shape_add_filter (filter, FE_BLUR);
+
+  create_transition (filter, idx + 1, timeline, states,
+                     duration, delay, easing,
+                     0, GPA_TRANSITION_MORPH,
+                     SHAPE_ATTR_FE_STD_DEV,
+                     svg_numbers_new1 (4),
+                     svg_numbers_new1 (0));
+
+  idx = shape_add_filter (filter, FE_COMPONENT_TRANSFER);
+
+  for (unsigned int func = FE_FUNC_R; func <= FE_FUNC_B; func++)
+    {
+      idx = shape_add_filter (filter, func);
+      value = svg_component_transfer_type_new (COMPONENT_TRANSFER_LINEAR);
+      shape_set_base_value (filter, SHAPE_ATTR_FE_FUNC_TYPE, idx + 1, value);
+      svg_value_unref (value);
+      value = svg_number_new (0);
+      shape_set_base_value (filter, SHAPE_ATTR_FE_FUNC_SLOPE, idx + 1, value);
+      svg_value_unref (value);
+      value = svg_number_new (1);
+      shape_set_base_value (filter, SHAPE_ATTR_FE_FUNC_INTERCEPT, idx + 1, value);
+      svg_value_unref (value);
+    }
+
+  idx = shape_add_filter (filter, FE_FUNC_A);
+  value = svg_component_transfer_type_new (COMPONENT_TRANSFER_LINEAR);
+  shape_set_base_value (filter, SHAPE_ATTR_FE_FUNC_TYPE, idx + 1, value);
+  svg_value_unref (value);
+
+  create_transition (filter, idx + 1, timeline, states,
+                     duration, delay, easing,
+                     0, GPA_TRANSITION_MORPH,
+                     SHAPE_ATTR_FE_FUNC_SLOPE,
+                     svg_number_new (100),
+                     svg_number_new (1));
+
+  create_transition (filter, idx + 1, timeline, states,
+                     duration, delay, easing,
+                     0, GPA_TRANSITION_MORPH,
+                     SHAPE_ATTR_FE_FUNC_INTERCEPT,
+                     svg_number_new (-20),
+                     svg_number_new (0));
+
+  idx = shape_add_filter (filter, FE_COMPOSITE);
+  value = svg_composite_operator_new (COMPOSITE_OPERATOR_ARITHMETIC);
+  shape_set_base_value (filter, SHAPE_ATTR_FE_COMPOSITE_OPERATOR, idx + 1, value);
+  svg_value_unref (value);
+  value = svg_number_new (1);
+  shape_set_base_value (filter, SHAPE_ATTR_FE_COMPOSITE_K1, idx + 1, value);
+  svg_value_unref (value);
+  str = g_strdup_printf ("gpa:morph-filter:%s:blurred", shape->id);
+  value = svg_filter_primitive_ref_new_ref (str);
+  g_free (str);
+  shape_set_base_value (filter, SHAPE_ATTR_FE_IN2, idx + 1, value);
+  svg_value_unref (value);
+
+  a = animation_set_new ();
+  a->id = g_strdup_printf ("gpa:set:morph:%s", shape->id);
+  a->attr = SHAPE_ATTR_FILTER;
+
+  begin = animation_add_begin (a, timeline_get_start_of_time (timeline));
+  time_spec_add_animation (begin, a);
+  end = animation_add_end (a, timeline_get_end_of_time (timeline));
+  time_spec_add_animation (end, a);
+
+  a->has_begin = 1;
+  a->has_end = 1;
+
+  a->n_frames = 2;
+  a->frames = g_new0 (Frame, a->n_frames);
+  a->frames[0].time = 0;
+  a->frames[1].time = 1;
+  str = g_strdup_printf ("url(#%s)", filter->id);
+  a->frames[0].value = svg_filter_parse (str);
+  a->frames[1].value = svg_value_ref (a->frames[0].value);
+  g_free (str);
+
+  shape_add_animation (shape, a);
+}
+
 static void
 create_transitions (Shape         *shape,
                     Timeline      *timeline,
+                    GHashTable    *shapes,
+                    GPtrArray     *pending_refs,
                     uint64_t       states,
                     GpaTransition  type,
                     int64_t        duration,
@@ -15250,7 +15543,7 @@ create_transitions (Shape         *shape,
     case GPA_TRANSITION_NONE:
       break;
     case GPA_TRANSITION_ANIMATE:
-      create_transition (shape, timeline, states,
+      create_transition (shape, 0, timeline, states,
                          duration, delay, easing,
                          origin, type,
                          SHAPE_ATTR_STROKE_DASHARRAY,
@@ -15261,23 +15554,20 @@ create_transitions (Shape         *shape,
                                  SHAPE_ATTR_STROKE_DASHOFFSET,
                                  svg_number_new (0.5));
       if (!G_APPROX_VALUE (origin, 0, 0.001))
-        create_transition (shape, timeline, states,
+        create_transition (shape, 0, timeline, states,
                            duration, delay, easing,
-                         origin, type,
+                           origin, type,
                            SHAPE_ATTR_STROKE_DASHOFFSET,
                            svg_number_new (-origin),
                            svg_number_new (0));
       break;
     case GPA_TRANSITION_MORPH:
-      create_transition (shape, timeline, states,
-                         duration, delay, easing,
-                         origin, type,
-                         SHAPE_ATTR_FILTER,
-                         svg_filter_parse ("blur(32) alpha-level(0.2)"),
-                         svg_filter_parse ("blur(0) alpha-level(0.2)"));
+      create_morph_filter (shape, timeline, shapes, states,
+                           duration, delay, easing);
+      g_ptr_array_add (pending_refs, shape);
       break;
     case GPA_TRANSITION_FADE:
-      create_transition (shape, timeline, states,
+      create_transition (shape, 0, timeline, states,
                          duration, delay, easing,
                          origin, type,
                          SHAPE_ATTR_OPACITY,
@@ -15320,7 +15610,7 @@ create_animation (Shape        *shape,
 
   a->id = g_strdup_printf ("gpa:animation:%s-%s", shape->id, shape_attr_get_name (attr));
 
-  begin = animation_add_begin (a, timeline_get_states (timeline, states, TIME_SPEC_SIDE_BEGIN, 0));
+  begin = animation_add_begin (a, timeline_get_states (timeline, ALL_STATES & ~states, states, 0));
   time_spec_add_animation (begin, a);
 
   if (state_match (states, initial))
@@ -15329,7 +15619,7 @@ create_animation (Shape        *shape,
       time_spec_add_animation (begin, a);
     }
 
-  end = animation_add_end (a, timeline_get_states (timeline, states, TIME_SPEC_SIDE_END, 0));
+  end = animation_add_end (a, timeline_get_states (timeline, states, ALL_STATES & ~states, 0));
   time_spec_add_animation (end, a);
 
   a->attr = attr;
@@ -15749,6 +16039,9 @@ create_attachment_connection (Animation *a,
                               Shape     *sh,
                               Timeline  *timeline)
 {
+  if (sh->animations == NULL)
+    return;
+
   for (unsigned int i = 0; i < sh->animations->len; i++)
     {
       Animation *sha = g_ptr_array_index (sh->animations, i);
@@ -15889,11 +16182,6 @@ parse_base_animation_attrs (Animation            *a,
           begin = animation_add_begin (a, timeline_get_time_spec (data->svg->timeline, &spec));
           time_spec_add_animation (begin, a);
           time_spec_clear (&spec);
-          if (begin->type == TIME_SPEC_TYPE_STATES)
-            {
-              if (begin->states.states != NO_STATES)
-                data->svg->max_state = MAX (data->svg->max_state, g_bit_nth_msf (begin->states.states, -1));
-            }
         }
       g_strfreev (strv);
     }
@@ -15925,11 +16213,6 @@ parse_base_animation_attrs (Animation            *a,
           end = animation_add_end (a, timeline_get_time_spec (data->svg->timeline, &spec));
           time_spec_add_animation (end, a);
           time_spec_clear (&spec);
-          if (end->type == TIME_SPEC_TYPE_STATES)
-            {
-              if (end->states.states != NO_STATES)
-                data->svg->max_state = MAX (data->svg->max_state, g_bit_nth_msf (end->states.states, -1));
-            }
         }
       g_strfreev (strv);
     }
@@ -16040,7 +16323,8 @@ parse_base_animation_attrs (Animation            *a,
   if (attr_name_attr && strcmp (attr_name_attr, "xlink:href") == 0)
     attr_name_attr = "href";
 
-  if (current_shape->type == SHAPE_FILTER &&
+  if (current_shape != NULL &&
+      current_shape->type == SHAPE_FILTER &&
       current_shape->filters->len > 0)
     {
       FilterPrimitive *fp;
@@ -16059,13 +16343,20 @@ parse_base_animation_attrs (Animation            *a,
     }
   else if (a->type == ANIMATION_TYPE_TRANSFORM)
     {
-      const char *expected;
+      if (current_shape != NULL)
+        {
+          const char *expected;
 
-      /* FIXME: if href is set, current_shape might be the wrong shape */
-      expected = shape_attr_get_presentation (SHAPE_ATTR_TRANSFORM, current_shape->type);
-      if (attr_name_attr && strcmp (attr_name_attr, expected) != 0)
-        gtk_svg_invalid_attribute (data->svg, context, "attributeName",
-                                   "value must be '%s'", expected);
+          /* FIXME: if href is set, current_shape might be the wrong shape */
+          expected = shape_attr_get_presentation (SHAPE_ATTR_TRANSFORM, current_shape->type);
+          if (expected == NULL)
+            gtk_svg_invalid_attribute (data->svg, context, "attributeName",
+                                       "no transform attribute");
+          else if (attr_name_attr && strcmp (attr_name_attr, expected) != 0)
+            gtk_svg_invalid_attribute (data->svg, context, "attributeName",
+                                       "value must be '%s'", expected);
+        }
+
       a->attr = SHAPE_ATTR_TRANSFORM;
     }
   else if (!attr_name_attr)
@@ -16074,10 +16365,11 @@ parse_base_animation_attrs (Animation            *a,
       return FALSE;
     }
   /* FIXME: if href is set, current_shape might be the wrong shape */
-  else if ((current_shape->type == SHAPE_FILTER &&
-            filter_attr_lookup (filter_type, attr_name_attr, &attr, &deprecated)) ||
-           (current_shape->type != SHAPE_FILTER &&
-            shape_attr_lookup (attr_name_attr, current_shape->type, &attr, &deprecated)))
+  else if (current_shape != NULL &&
+           ((current_shape->type == SHAPE_FILTER &&
+             filter_attr_lookup (filter_type, attr_name_attr, &attr, &deprecated)) ||
+            (current_shape->type != SHAPE_FILTER &&
+             shape_attr_lookup (attr_name_attr, current_shape->type, &attr, &deprecated))))
     {
       a->attr = attr;
       /* FIXME: if href is set, current_shape might be the wrong shape */
@@ -16356,8 +16648,13 @@ parse_value_animation_attrs (Animation            *a,
               SvgTransform *tf = g_ptr_array_index (values, i);
               PrimitiveTransform *f = &tf->transforms[0];
 
-              g_assert (tf->n_transforms == 1);
-              g_assert (f->type == TRANSFORM_TRANSLATE);
+              if (tf->n_transforms != 1 || f->type != TRANSFORM_TRANSLATE)
+                {
+                  gtk_svg_invalid_attribute (data->svg, context, NULL,  "Don't know how to handle this 'by' value");
+                  g_ptr_array_unref (values);
+                  g_array_unref (points);
+                  return FALSE;
+                }
 
               if (i == 0)
                 {
@@ -16427,6 +16724,7 @@ parse_value_animation_attrs (Animation            *a,
         {
           gtk_svg_invalid_attribute (data->svg, context, "keyTimes", NULL);
           g_clear_pointer (&values, g_ptr_array_unref);
+          g_clear_pointer (&points, g_array_unref);
           return FALSE;
         }
     }
@@ -16440,6 +16738,16 @@ parse_value_animation_attrs (Animation            *a,
                                      "have the same number of items");
           g_clear_pointer (&values, g_ptr_array_unref);
           g_clear_pointer (&times, g_array_unref);
+          g_clear_pointer (&points, g_array_unref);
+          return FALSE;
+        }
+
+      if (times->len == 0)
+        {
+          gtk_svg_invalid_attribute (data->svg, context, NULL, "No keyTimes found");
+          g_clear_pointer (&values, g_ptr_array_unref);
+          g_clear_pointer (&times, g_array_unref);
+          g_clear_pointer (&points, g_array_unref);
           return FALSE;
         }
 
@@ -16449,6 +16757,7 @@ parse_value_animation_attrs (Animation            *a,
                                      "The first keyTimes value must be 0");
           g_clear_pointer (&values, g_ptr_array_unref);
           g_clear_pointer (&times, g_array_unref);
+          g_clear_pointer (&points, g_array_unref);
           return FALSE;
         }
 
@@ -16458,6 +16767,7 @@ parse_value_animation_attrs (Animation            *a,
                                      "The last keyTimes value must be 1");
           g_clear_pointer (&values, g_ptr_array_unref);
           g_clear_pointer (&times, g_array_unref);
+          g_clear_pointer (&points, g_array_unref);
           return FALSE;
         }
 
@@ -16469,6 +16779,7 @@ parse_value_animation_attrs (Animation            *a,
                                          "The keyTimes values must be increasing");
               g_clear_pointer (&values, g_ptr_array_unref);
               g_clear_pointer (&times, g_array_unref);
+              g_clear_pointer (&points, g_array_unref);
               return FALSE;
             }
         }
@@ -16505,6 +16816,7 @@ parse_value_animation_attrs (Animation            *a,
                   g_clear_pointer (&values, g_ptr_array_unref);
                   g_clear_pointer (&times, g_array_unref);
                   g_clear_pointer (&params, g_array_unref);
+                  g_clear_pointer (&points, g_array_unref);
                   return FALSE;
                 }
 
@@ -16522,6 +16834,7 @@ parse_value_animation_attrs (Animation            *a,
               g_clear_pointer (&values, g_ptr_array_unref);
               g_clear_pointer (&times, g_array_unref);
               g_clear_pointer (&params, g_array_unref);
+              g_clear_pointer (&points, g_array_unref);
               return FALSE;
             }
         }
@@ -16542,6 +16855,19 @@ parse_value_animation_attrs (Animation            *a,
     }
 
   g_assert (times != NULL);
+
+  if (times->len < 2 ||
+      (values && times->len != values->len) ||
+      (params && 4 * (times->len - 1) != params->len) ||
+      (points && times->len != points->len))
+    {
+      gtk_svg_invalid_attribute (data->svg, context, NULL, "invalid value attributes");
+      g_clear_pointer (&values, g_ptr_array_unref);
+      g_clear_pointer (&times, g_array_unref);
+      g_clear_pointer (&params, g_array_unref);
+      g_clear_pointer (&points, g_array_unref);
+      return FALSE;
+    }
 
   fill_from_values (a,
                     (double *) times->data,
@@ -16644,7 +16970,7 @@ parse_motion_animation_attrs (Animation            *a,
       g_clear_pointer (&a->frames, g_free);
       a->n_frames = 0;
 
-      if (a->motion.path)
+      if (a->motion.path && !gsk_path_is_empty (a->motion.path))
         {
           fill_from_path (a, a->motion.path);
         }
@@ -17119,12 +17445,8 @@ parse_svg_gpa_attrs (GtkSvg               *svg,
     {
       double v;
 
-      if (strcmp (state_attr, "empty") == 0)
-        gtk_svg_set_state (svg, GTK_SVG_STATE_EMPTY);
-      else if (!parse_number (state_attr, -1, 63, &v))
+      if (!parse_number (state_attr, -1, 63, &v))
         gtk_svg_invalid_attribute (svg, context, "gpa:state", NULL);
-      else if (v < 0)
-        gtk_svg_set_state (svg, GTK_SVG_STATE_EMPTY);
       else
         gtk_svg_set_state (svg, (unsigned int) CLAMP (v, 0, 63));
     }
@@ -17325,7 +17647,7 @@ parse_shape_gpa_attrs (Shape                *shape,
         gtk_svg_invalid_attribute (data->svg, context, "gpa:transition-easing", NULL);
     }
 
-  has_animation = 0;
+  has_animation = 1;
   if (animation_type_attr)
     {
       if (!parse_enum (animation_type_attr,
@@ -17419,6 +17741,10 @@ parse_shape_gpa_attrs (Shape                *shape,
 
       if (_gtk_bitmask_get (shape->attrs, SHAPE_ATTR_STROKE_DASHOFFSET))
         gtk_svg_invalid_attribute (data->svg, context, NULL, "Can't set %s and use gpa features", "stroke-dashoffset");
+
+      if (_gtk_bitmask_get (shape->attrs, SHAPE_ATTR_FILTER) &&
+          shape->gpa.transition == GPA_TRANSITION_MORPH)
+        gtk_svg_invalid_attribute (data->svg, context, NULL, "Can't set %s and use gpa features", "filter");
     }
 
   create_states (shape,
@@ -17442,6 +17768,8 @@ parse_shape_gpa_attrs (Shape                *shape,
 
   create_transitions (shape,
                       data->svg->timeline,
+                      data->shapes,
+                      data->pending_refs,
                       states,
                       transition_type,
                       transition_duration,
@@ -17575,13 +17903,13 @@ start_element_cb (GMarkupParseContext  *context,
 
   if (strcmp (element_name, "stop") == 0)
     {
-      const char *parent = g_markup_parse_context_get_element_stack (context)->next->data;
       SvgValue *value;
       const char *style_attr = NULL;
       unsigned int idx;
 
-      if (strcmp (parent, "linearGradient") != 0 &&
-          strcmp (parent, "radialGradient") != 0)
+      if (data->current_shape == NULL ||
+          (!check_ancestors (context, "linearGradient", NULL) &&
+           !check_ancestors (context, "radialGradient", NULL)))
         {
           skip_element (data, context, "<stop> only allowed in <linearGradient> or <radialGradient>");
           return;
@@ -17915,7 +18243,9 @@ start_element_cb (GMarkupParseContext  *context,
 
       svg_value_unref (value);
 
-      if (!a->href || g_strcmp0 (a->href, data->current_shape->id) == 0)
+      if (!a->href ||
+          (data->current_shape != NULL &&
+           g_strcmp0 (a->href, data->current_shape->id) == 0))
         shape_add_animation (data->current_shape, a);
       else
         g_ptr_array_add (data->pending_animations, a);
@@ -17996,7 +18326,9 @@ start_element_cb (GMarkupParseContext  *context,
 
       gtk_svg_check_unhandled_attributes (data->svg, context, attr_names, handled);
 
-      if (!a->href || g_strcmp0 (a->href, data->current_shape->id) == 0)
+      if (data->current_shape != NULL &&
+          (a->href == NULL ||
+           g_strcmp0 (a->href, data->current_shape->id) == 0))
         shape_add_animation (data->current_shape, a);
       else
         g_ptr_array_add (data->pending_animations, a);
@@ -18039,10 +18371,13 @@ start_element_cb (GMarkupParseContext  *context,
       if (xlink_href_attr && !href_attr)
         href_attr = xlink_href_attr;
 
-      if (href_attr[0] != '#')
-        gtk_svg_invalid_attribute (data->svg, context, "href", "Missing '#' in href");
-      else
-        data->current_animation->motion.path_ref = g_strdup (href_attr + 1);
+      if (href_attr != NULL)
+        {
+          if (href_attr[0] != '#')
+            gtk_svg_invalid_attribute (data->svg, context, "href", "Missing '#' in href");
+          else
+            data->current_animation->motion.path_ref = g_strdup (href_attr + 1);
+        }
 
       gtk_svg_check_unhandled_attributes (data->svg, context, attr_names, handled);
 
@@ -18546,13 +18881,18 @@ resolve_refs_for_animation (Animation  *a,
 
   if (a->motion.path_ref)
     {
-      a->motion.path_shape = g_hash_table_lookup (data->shapes, a->motion.path_ref);
-      if (a->motion.path_shape == NULL)
+      Shape *shape = g_hash_table_lookup (data->shapes, a->motion.path_ref);
+      if (shape == NULL)
         gtk_svg_invalid_reference (data->svg,
                                    "No path with ID %s (resolving <mpath>",
                                    a->motion.path_ref);
+      else if ((BIT (shape->type) & SHAPE_SHAPES) == 0)
+        gtk_svg_invalid_reference (data->svg,
+                                   "Element with ID %s is not a shape (resolving <mpath>",
+                                   a->motion.path_ref);
       else
         {
+          a->motion.path_shape = shape;
           add_dependency_to_common_ancestor (a->shape, a->motion.path_shape);
           if (a->id && g_str_has_prefix (a->id, "gpa:attachment:"))
             {
@@ -19123,16 +19463,16 @@ serialize_gpa_attrs (GString              *s,
       g_string_append_c (s, '\'');
     }
 
+  if (shape->gpa.states != ALL_STATES)
+    {
+      indent_for_attr (s, indent);
+      g_string_append (s, "gpa:states='");
+      states_to_string (s, shape->gpa.states);
+      g_string_append_c (s, '\'');
+    }
+
   if ((flags & GTK_SVG_SERIALIZE_EXPAND_GPA_ATTRS) == 0)
     {
-      if (shape->gpa.states != ALL_STATES)
-        {
-          indent_for_attr (s, indent);
-          g_string_append (s, "gpa:states='");
-          states_to_string (s, shape->gpa.states);
-          g_string_append_c (s, '\'');
-        }
-
       if (shape->gpa.transition != GPA_TRANSITION_NONE)
         {
           const char *names[] = { "none", "animate", "morph", "fade" };
@@ -19251,9 +19591,17 @@ serialize_base_animation_attrs (GString   *s,
 
   if (a->type != ANIMATION_TYPE_MOTION)
     {
+      const char *name;
+
       indent_for_attr (s, indent);
-      g_string_append_printf (s, "attributeName='%s'",
-                              shape_attr_get_presentation (a->attr, a->shape->type));
+      if (a->shape->type == SHAPE_FILTER && a->idx > 0)
+        {
+          FilterPrimitive *f = g_ptr_array_index (a->shape->filters, a->idx - 1);
+          name = filter_attr_get_presentation (a->attr, f->type);
+        }
+      else
+        name = shape_attr_get_presentation (a->attr, a->shape->type);
+      g_string_append_printf (s, "attributeName='%s'", name);
     }
 
   if (a->has_begin)
@@ -20271,6 +20619,16 @@ determine_filter_subregion (FilterPrimitive       *f,
                             GHashTable            *results,
                             graphene_rect_t       *subregion)
 {
+  if (f->type == FE_MERGE_NODE ||
+      f->type == FE_FUNC_R ||
+      f->type == FE_FUNC_G ||
+      f->type == FE_FUNC_B ||
+      f->type == FE_FUNC_A)
+    {
+      g_error ("Can't get subregion for %s\n", filter_types[f->type].name);
+      return FALSE;
+    }
+
   if (f->attrs & (BIT (filter_attr_idx (f->type, SHAPE_ATTR_FE_X)) |
                   BIT (filter_attr_idx (f->type, SHAPE_ATTR_FE_Y)) |
                   BIT (filter_attr_idx (f->type, SHAPE_ATTR_FE_WIDTH)) |
@@ -20463,6 +20821,36 @@ apply_filter_tree (Shape         *shape,
         {
           graphene_rect_init (&subregion, 0, 0, 0, 0);
           result = gsk_container_node_new (NULL, 0);
+
+          /* Skip dependent filters */
+          if (f->type == FE_MERGE)
+            {
+              for (i++; i < filter->filters->len; i++)
+                {
+                  FilterPrimitive *ff = g_ptr_array_index (filter->filters, i);
+                  if (ff->type != FE_MERGE_NODE)
+                    {
+                      i--;
+                      break;
+                    }
+                }
+            }
+          else if (f->type == FE_COMPONENT_TRANSFER)
+            {
+              for (i++; i < filter->filters->len; i++)
+                {
+                  FilterPrimitive *ff = g_ptr_array_index (filter->filters, i);
+                  if (ff->type != FE_FUNC_R &&
+                      ff->type != FE_FUNC_G &&
+                      ff->type != FE_FUNC_B &&
+                      ff->type != FE_FUNC_A)
+                    {
+                      i--;
+                      break;
+                    }
+                }
+            }
+
           goto got_result;
         }
 
@@ -20994,25 +21382,6 @@ apply_filter_functions (SvgValue      *filter,
 
             filter_function_get_color_matrix (ff->kind, svg_number_get (ff->simple, 1), &matrix, &offset);
             result = gsk_color_matrix_node_new (child, &matrix, &offset);
-          }
-          break;
-        case FILTER_ALPHA_LEVEL:
-          {
-            GskComponentTransfer *identity, *alpha;
-            float values[10];
-
-            identity = gsk_component_transfer_new_identity ();
-            for (unsigned int j = 0; j < 10; j++)
-              {
-                if ((j + 1) / 10.0 <= svg_number_get (ff->simple, 1))
-                  values[j] = 0;
-                else
-                  values[j] = 1;
-              }
-            alpha = gsk_component_transfer_new_discrete (10, values);
-            result = gsk_component_transfer_node_new (child, identity, identity, identity, alpha);
-            gsk_component_transfer_free (identity);
-            gsk_component_transfer_free (alpha);
           }
           break;
         case FILTER_DROPSHADOW:
@@ -22560,6 +22929,9 @@ stroke_shape (Shape        *shape,
       gtk_snapshot_push_collect (context->snapshot);
       paint_server (paint, &bounds, &paint_bounds, context);
       child = gtk_snapshot_pop_collect (context->snapshot);
+
+      if (!child)
+        child = empty_node ();
       break;
     case PAINT_NONE:
     case PAINT_CURRENT_COLOR:
@@ -24021,7 +24393,7 @@ gtk_svg_init (GtkSvg *self)
 {
   self->weight = -1;
   self->overflow = GTK_OVERFLOW_HIDDEN;
-  self->state = GTK_SVG_STATE_EMPTY;
+  self->state = 0;
   self->load_time = INDEFINITE;
   self->state_change_delay = 0;
   self->next_update = INDEFINITE;
@@ -24210,15 +24582,13 @@ gtk_svg_class_init (GtkSvgClass *class)
    *
    * The current state of the renderer.
    *
-   * This can be a number between 0 and 63, or the special value
-   * `(unsigned int) -1` to indicate the 'empty' state in which
-   * nothing is drawn.
+   * This can be a number between 0 and 63.
    *
    * Since: 4.22
    */
   properties[PROP_STATE] =
     g_param_spec_uint ("state", NULL, NULL,
-                       0, G_MAXUINT, GTK_SVG_STATE_EMPTY,
+                       0, G_MAXUINT, 0,
                        G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY);
 
   g_object_class_install_properties (object_class, NUM_PROPERTIES, properties);
@@ -24845,10 +25215,7 @@ gtk_svg_serialize_full (GtkSvg               *self,
       indent_for_attr (s, 0);
       g_string_append_printf (s, "gpa:version='%u'", MAX (self->gpa_version, 1));
       indent_for_attr (s, 0);
-      if (self->state == GTK_SVG_STATE_EMPTY)
-        g_string_append (s, "gpa:state='empty'");
-      else
-        g_string_append_printf (s, "gpa:state='%u'", self->state);
+      g_string_append_printf (s, "gpa:state='%u'", self->state);
     }
 
   if (flags & GTK_SVG_SERIALIZE_INCLUDE_STATE)
@@ -25104,7 +25471,10 @@ svg_shape_attr_get_number (Shape                 *shape,
       return svg_number_get (value, 1);
     case SHAPE_ATTR_STROKE_MINWIDTH:
     case SHAPE_ATTR_STROKE_MAXWIDTH:
-      return svg_number_get (value, 1);
+      return svg_number_get (value,
+                             svg_shape_attr_get_number (shape,
+                                                        SHAPE_ATTR_STROKE_WIDTH,
+                                                        viewport));
     default:
       g_assert_not_reached ();
     }
@@ -25311,12 +25681,12 @@ svg_shape_attr_set (Shape     *shape,
                     ShapeAttr  attr,
                     SvgValue  *value)
 {
-  g_return_if_fail (value != NULL);
-
-  if (_gtk_bitmask_get (shape->attrs, attr))
-    svg_value_unref (shape->base[attr]);
-  shape->base[attr] = value;
-  shape->attrs = _gtk_bitmask_set (shape->attrs, attr, TRUE);
+  svg_value_unref (shape->base[attr]);
+  if (value)
+    shape->base[attr] = value;
+  else
+    shape->base[attr] = shape_attr_ref_initial_value (attr, shape->type, shape->parent != NULL);
+  shape->attrs = _gtk_bitmask_set (shape->attrs, attr, value != NULL);
 }
 
 Shape *
@@ -25776,6 +26146,9 @@ gtk_svg_write_to_file (GtkSvg      *self,
  *
  * Sets the weight that is used when rendering.
  *
+ * The weight affects the effective linewidth when stroking
+ * paths.
+ *
  * The default value of -1 means to use the font weight
  * from CSS.
  *
@@ -25818,13 +26191,9 @@ gtk_svg_get_weight (GtkSvg *self)
 /**
  * gtk_svg_set_state:
  * @self: an SVG paintable
- * @state: the state to set, as a value between 0 and 63,
- *   or `(unsigned int) -1`
+ * @state: the state to set, as a value between 0 and 63
  *
  * Sets the state of the paintable.
- *
- * Use [method@Gtk.Svg.get_n_states] to find out
- * what states @self has.
  *
  * If the paintable is currently playing, the state change
  * will apply transitions that are defined in the SVG. If
@@ -25840,7 +26209,7 @@ gtk_svg_set_state (GtkSvg       *self,
   unsigned int previous_state;
 
   g_return_if_fail (GTK_IS_SVG (self));
-  g_return_if_fail (state == GTK_SVG_STATE_EMPTY || state <= 63);
+  g_return_if_fail (state <= 63);
 
   if (self->state == state)
     return;
@@ -25905,29 +26274,6 @@ gtk_svg_get_state (GtkSvg *self)
   g_return_val_if_fail (GTK_IS_SVG (self), -1);
 
   return self->state;
-}
-
-/**
- * gtk_svg_get_n_states:
- * @self: an SVG paintable
- *
- * Gets the number of states defined in the SVG.
- *
- * Note that there is always an empty state, which does
- * not count towards this number. If this function returns
- * the value N, the meaningful states of the SVG are
- * 0, 1, ..., N - 1 and `GTK_SVG_STATE_EMPTY`.
- *
- * Returns: the number of states
- *
- * Since: 4.22
- */
-unsigned int
-gtk_svg_get_n_states (GtkSvg *self)
-{
-  g_return_val_if_fail (GTK_IS_SVG (self), 0);
-
-  return self->max_state + 1;
 }
 
 /**
