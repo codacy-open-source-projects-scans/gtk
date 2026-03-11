@@ -1358,6 +1358,11 @@ load_texture (const char  *string,
     {
       texture = gdk_texture_new_from_filename (string, error);
     }
+  else
+    {
+      g_set_error (error, GTK_SVG_ERROR, GTK_SVG_ERROR_FEATURE_DISABLED,
+                   "Not loading texture from %s: External resources disabled", string);
+    }
 
   return texture;
 }
@@ -4068,6 +4073,16 @@ svg_string_new (const char *str)
   return (SvgValue *) result;
 }
 
+static SvgValue *
+svg_string_new_take (char *str)
+{
+  SvgString *result;
+
+  result = (SvgString *) svg_value_alloc (&SVG_STRING_CLASS, sizeof (SvgString));
+  result->value = str;
+  return (SvgValue *) result;
+}
+
 /* }}} */
 /* {{{ String Lists */
 
@@ -4180,6 +4195,23 @@ svg_string_list_new (GStrv strv)
   result->len = len;
   for (unsigned int i = 0; i < len; i++)
     result->values[i] = g_strdup (strv[i]);
+
+  return (SvgValue *) result;
+}
+
+static SvgValue *
+svg_string_list_new_take (GStrv strv)
+{
+  SvgStringList *result;
+  unsigned int len = g_strv_length (strv);
+
+  result = (SvgStringList *) svg_value_alloc (&SVG_STRING_LIST_CLASS, svg_string_list_size (len));
+
+  result->len = len;
+  for (unsigned int i = 0; i < len; i++)
+    result->values[i] = strv[i];
+
+  g_free (strv);
 
   return (SvgValue *) result;
 }
@@ -10113,14 +10145,7 @@ parse_language_list (const char *value)
 static SvgValue *
 parse_string_list (const char *value)
 {
-  GStrv strv;
-  SvgValue *result;
-
-  strv = strsplit_set (value, " ");
-  result = svg_string_list_new (strv);
-  g_strfreev (strv);
-
-  return result;
+  return svg_string_list_new_take (strsplit_set (value, " "));
 }
 
 static SvgValue *
@@ -11229,7 +11254,7 @@ typedef struct {
   ShapeAttr attr;
 } ShapeAttrLookup;
 
-#define ANY_FILTER \
+#define FILTER_ANY \
   (BIT (FE_FLOOD) | BIT (FE_BLUR) | BIT (FE_BLEND) | BIT (FE_COLOR_MATRIX) | \
    BIT (FE_COMPOSITE) | BIT (FE_OFFSET) | BIT (FE_DISPLACEMENT) | \
    BIT (FE_TILE) | BIT (FE_IMAGE) | BIT (FE_MERGE) | \
@@ -11345,19 +11370,19 @@ static ShapeAttrLookup shape_attr_lookups[] = {
   { "systemLanguage", SHAPE_ANY, 0, SHAPE_ATTR_SYSTEM_LANGUAGE },
   { "gpa:stroke-minwidth", SHAPE_ANY, 0, SHAPE_ATTR_STROKE_MINWIDTH },
   { "gpa:stroke-maxwidth", SHAPE_ANY, 0, SHAPE_ATTR_STROKE_MAXWIDTH },
-  { "stop-offset", SHAPE_GRADIENTS, 0, SHAPE_ATTR_STOP_OFFSET },
+  { "offset", SHAPE_GRADIENTS, 0, SHAPE_ATTR_STOP_OFFSET },
   { "stop-color", SHAPE_ANY, 0, SHAPE_ATTR_STOP_COLOR },
   { "stop-opacity", SHAPE_ANY, 0, SHAPE_ATTR_STOP_OPACITY },
-  { "x", BIT (SHAPE_FILTER), ANY_FILTER, SHAPE_ATTR_FE_X },
-  { "y", BIT (SHAPE_FILTER), ANY_FILTER, SHAPE_ATTR_FE_Y },
-  { "width", BIT (SHAPE_FILTER), ANY_FILTER, SHAPE_ATTR_FE_WIDTH },
-  { "height", BIT (SHAPE_FILTER), ANY_FILTER, SHAPE_ATTR_FE_HEIGHT },
-  { "result", BIT (SHAPE_FILTER), ANY_FILTER, SHAPE_ATTR_FE_RESULT },
+  { "x", BIT (SHAPE_FILTER), FILTER_ANY, SHAPE_ATTR_FE_X },
+  { "y", BIT (SHAPE_FILTER), FILTER_ANY, SHAPE_ATTR_FE_Y },
+  { "width", BIT (SHAPE_FILTER), FILTER_ANY, SHAPE_ATTR_FE_WIDTH },
+  { "height", BIT (SHAPE_FILTER), FILTER_ANY, SHAPE_ATTR_FE_HEIGHT },
+  { "result", BIT (SHAPE_FILTER), FILTER_ANY, SHAPE_ATTR_FE_RESULT },
   { "flood-color", BIT (SHAPE_FILTER), BIT (FE_FLOOD) | BIT (FE_DROPSHADOW), SHAPE_ATTR_FE_COLOR },
   { "flood-color", SHAPE_ANY, 0, SHAPE_ATTR_FE_COLOR },
   { "flood-opacity", BIT (SHAPE_FILTER), BIT (FE_FLOOD) | BIT (FE_DROPSHADOW), SHAPE_ATTR_FE_OPACITY },
   { "flood-opacity", SHAPE_ANY, 0, SHAPE_ATTR_FE_OPACITY },
-  { "in", BIT (SHAPE_FILTER), (ANY_FILTER | BIT (FE_MERGE_NODE)) & ~(BIT (FE_FLOOD) | BIT (FE_IMAGE) | BIT (FE_MERGE)), SHAPE_ATTR_FE_IN },
+  { "in", BIT (SHAPE_FILTER), (FILTER_ANY | BIT (FE_MERGE_NODE)) & ~(BIT (FE_FLOOD) | BIT (FE_IMAGE) | BIT (FE_MERGE)), SHAPE_ATTR_FE_IN },
   { "in2", BIT (SHAPE_FILTER), BIT (FE_BLEND) | BIT (FE_COMPOSITE) | BIT (FE_DISPLACEMENT), SHAPE_ATTR_FE_IN2 },
   { "stdDeviation", BIT (SHAPE_FILTER), BIT (FE_BLUR) | BIT (FE_DROPSHADOW), SHAPE_ATTR_FE_STD_DEV },
   { "dx", BIT (SHAPE_FILTER), BIT (FE_OFFSET) | BIT (FE_DROPSHADOW), SHAPE_ATTR_FE_DX },
@@ -11460,6 +11485,41 @@ shape_attr_lookup (const char *name,
       *attr = found->attr;
       *deprecated = FALSE;
     }
+
+  return TRUE;
+}
+
+static gboolean
+color_stop_attr_lookup (const char *name,
+                        ShapeType   type,
+                        ShapeAttr  *attr,
+                        gboolean   *deprecated)
+{
+  ShapeAttrLookup key;
+  ShapeAttrLookup *found;
+
+  key.name = name;
+  key.shapes = BIT (type);
+  key.filters = 0;
+
+  found = g_hash_table_lookup (shape_attr_lookup_table, &key);
+
+  if (!found)
+    return FALSE;
+
+  if (found->attr & DEPRECATED_BIT)
+    {
+      *attr = found->attr & ~DEPRECATED_BIT;
+      *deprecated = TRUE;
+    }
+  else
+    {
+      *attr = found->attr;
+      *deprecated = FALSE;
+    }
+
+  if (*attr < FIRST_STOP_ATTR || *attr > LAST_STOP_ATTR)
+    return FALSE;
 
   return TRUE;
 }
@@ -15494,8 +15554,7 @@ create_morph_filter (Shape      *shape,
 
   idx = shape_add_filter (filter, FE_BLUR);
   str = g_strdup_printf ("gpa:morph-filter:%s:blurred", shape->id);
-  value = svg_string_new (str);
-  g_free (str);
+  value = svg_string_new_take (str);
   shape_set_base_value (filter, SHAPE_ATTR_FE_RESULT, idx + 1, value);
   svg_value_unref (value);
 
@@ -17315,9 +17374,6 @@ parse_shape_attrs (Shape                *shape,
           continue;
         }
 
-      /* We handle class and style after the loop to
-       * enforce priority over fill/stroke
-       */
       if (strcmp (attr_names[i], "class") == 0)
         {
           class_attr = attr_values[i];
@@ -17889,6 +17945,105 @@ parse_shape_gpa_attrs (Shape                *shape,
 }
 
 /* }}} */
+/* {{{ Color Stop attributes */
+
+static void
+parse_color_stop_attrs (Shape                *shape,
+                        unsigned int          idx,
+                        ColorStop            *stop,
+                        const char           *element_name,
+                        const char          **attr_names,
+                        const char          **attr_values,
+                        uint64_t             *handled,
+                        ParserData           *data,
+                        GMarkupParseContext  *context)
+{
+  const char *style_attr = NULL;
+
+  for (unsigned int i = 0; attr_names[i]; i++)
+    {
+      ShapeAttr attr;
+      gboolean deprecated;
+
+      if (strcmp (attr_names[i], "style") == 0)
+        {
+          *handled |= BIT (i);
+          style_attr = attr_values[i];
+        }
+      else if (color_stop_attr_lookup (attr_names[i], shape->type, &attr, &deprecated))
+        {
+          SvgValue *value;
+
+          *handled |= BIT (i);
+          value = shape_attr_parse_value (attr, attr_values[i]);
+          if (value)
+            {
+              shape_set_base_value (data->current_shape, attr, idx, value);
+              svg_value_unref (value);
+            }
+          else
+            gtk_svg_invalid_attribute (data->svg, context, attr_names[i], NULL);
+        }
+    }
+
+  if (style_attr)
+    parse_style_attr (shape, TRUE, FALSE, style_attr, data, context);
+}
+
+/* }}} */
+/* {{{ Filter attributes */
+
+static void
+parse_filter_attrs (Shape                *shape,
+                    unsigned int          idx,
+                    FilterPrimitive      *f,
+                    const char           *element_name,
+                    const char          **attr_names,
+                    const char          **attr_values,
+                    uint64_t             *handled,
+                    ParserData           *data,
+                    GMarkupParseContext  *context)
+{
+  const char *style_attr = NULL;
+
+  for (unsigned int i = 0; attr_names[i]; i++)
+    {
+      ShapeAttr attr;
+      gboolean deprecated;
+
+      if (strcmp (attr_names[i], "style") == 0)
+        {
+          *handled |= BIT (i);
+          style_attr = attr_values[i];
+        }
+      else if (filter_attr_lookup (f->type, attr_names[i], &attr, &deprecated))
+        {
+          if (deprecated && (f->attrs & BIT (filter_attr_idx (f->type, attr))) != 0)
+            {
+              /* ignore */
+            }
+          else
+            {
+              SvgValue *value;
+
+              value = shape_attr_parse_value (attr, attr_values[i]);
+              *handled |= BIT (i);
+              if (value)
+                {
+                  shape_set_base_value (data->current_shape, attr, idx, value);
+                  svg_value_unref (value);
+                }
+              else
+                gtk_svg_invalid_attribute (data->svg, context, attr_names[i], NULL);
+            }
+        }
+    }
+
+  if (style_attr)
+    parse_style_attr (shape, FALSE, TRUE, style_attr, data, context);
+}
+
+/* }}} */
 
 G_GNUC_PRINTF (4, 5)
 static void
@@ -17920,7 +18075,6 @@ start_element_cb (GMarkupParseContext  *context,
 {
   ParserData *data = user_data;
   ShapeType shape_type;
-  Shape *shape = NULL;
   uint64_t handled = 0;
   FilterPrimitiveType filter_type;
 
@@ -17939,6 +18093,8 @@ start_element_cb (GMarkupParseContext  *context,
 
   if (shape_type_lookup (element_name, &shape_type))
     {
+      Shape *shape = NULL;
+
       if (data->current_shape &&
           !shape_type_has_shapes (data->current_shape->type))
         {
@@ -18005,9 +18161,8 @@ start_element_cb (GMarkupParseContext  *context,
 
   if (strcmp (element_name, "stop") == 0)
     {
-      SvgValue *value;
-      const char *style_attr = NULL;
       unsigned int idx;
+      ColorStop *stop;
 
       if (data->current_shape == NULL ||
           (!check_ancestors (context, "linearGradient", NULL) &&
@@ -18017,55 +18172,12 @@ start_element_cb (GMarkupParseContext  *context,
           return;
         }
 
-      shape_add_color_stop (data->current_shape);
-      idx = data->current_shape->color_stops->len - 1;
-      for (unsigned int i = 0; attr_names[i]; i++)
-        {
-          if (strcmp (attr_names[i], "offset") == 0)
-            {
-              handled |= BIT (i);
-              value = shape_attr_parse_value (SHAPE_ATTR_STOP_OFFSET, attr_values[i]);
-              if (value)
-                {
-                  shape_set_base_value (data->current_shape, SHAPE_ATTR_STOP_OFFSET, idx + 1, value);
-                  svg_value_unref (value);
-                }
-              else
-                gtk_svg_invalid_attribute (data->svg, context, "offset", NULL);
-            }
-          else if (strcmp (attr_names[i], "stop-color") == 0)
-            {
-              handled |= BIT (i);
-              value = shape_attr_parse_value (SHAPE_ATTR_STOP_COLOR, attr_values[i]);
-              if (value)
-                {
-                  shape_set_base_value (data->current_shape, SHAPE_ATTR_STOP_COLOR, idx + 1, value);
-                  svg_value_unref (value);
-                }
-              else
-                gtk_svg_invalid_attribute (data->svg, context, "stop-color", NULL);
-            }
-          else if (strcmp (attr_names[i], "stop-opacity") == 0)
-            {
-              handled |= BIT (i);
-              value = shape_attr_parse_value (SHAPE_ATTR_STOP_OPACITY, attr_values[i]);
-              if (value)
-                {
-                  shape_set_base_value (data->current_shape, SHAPE_ATTR_STOP_OPACITY, idx + 1, value);
-                  svg_value_unref (value);
-                }
-              else
-                gtk_svg_invalid_attribute (data->svg, context, "stop-opacity", NULL);
-            }
-          else if (strcmp (attr_names[i], "style") == 0)
-            {
-              handled |= BIT (i);
-              style_attr = attr_values[i];
-            }
-        }
+      idx = shape_add_color_stop (data->current_shape);
+      stop = g_ptr_array_index (data->current_shape->color_stops, idx);
 
-      if (style_attr)
-        parse_style_attr (data->current_shape, TRUE, FALSE, style_attr, data, context);
+      parse_color_stop_attrs (data->current_shape, idx + 1, stop,
+                              element_name, attr_names, attr_values,
+                              &handled, data, context);
 
       gtk_svg_check_unhandled_attributes (data->svg, context, attr_names, handled);
 
@@ -18074,9 +18186,7 @@ start_element_cb (GMarkupParseContext  *context,
 
   if (filter_type_lookup (element_name, &filter_type))
     {
-      const char *style_attr = NULL;
       unsigned int idx;
-      gboolean values_set = FALSE;
       FilterPrimitive *f;
 
       if (filter_type == FE_MERGE_NODE)
@@ -18111,41 +18221,9 @@ start_element_cb (GMarkupParseContext  *context,
       idx = shape_add_filter (data->current_shape, filter_type);
       f = g_ptr_array_index (data->current_shape->filters, idx);
 
-      for (unsigned int i = 0; attr_names[i]; i++)
-        {
-          ShapeAttr attr;
-          gboolean deprecated;
-
-          if (strcmp (attr_names[i], "style") == 0)
-            {
-              handled |= BIT (i);
-              style_attr = attr_values[i];
-            }
-          else if (filter_attr_lookup (filter_type, attr_names[i], &attr, &deprecated))
-            {
-              if (deprecated && (f->attrs & BIT (filter_attr_idx (filter_type, attr))) != 0)
-                {
-                  /* ignore */
-                }
-              else
-                {
-                  SvgValue *value = shape_attr_parse_value (attr, attr_values[i]);
-                  handled |= BIT (i);
-                  if (value)
-                    {
-                      shape_set_base_value (data->current_shape, attr, idx + 1, value);
-                      svg_value_unref (value);
-                    }
-                  else
-                    gtk_svg_invalid_attribute (data->svg, context, attr_names[i], NULL);
-                  if (attr == SHAPE_ATTR_FE_COLOR_MATRIX_VALUES)
-                    values_set = TRUE;
-                }
-            }
-        }
-
-      if (style_attr)
-        parse_style_attr (data->current_shape, FALSE, TRUE, style_attr, data, context);
+      parse_filter_attrs (data->current_shape, idx + 1, f,
+                          element_name, attr_names, attr_values,
+                          &handled, data, context);
 
       gtk_svg_check_unhandled_attributes (data->svg, context, attr_names, handled);
 
@@ -18154,13 +18232,14 @@ start_element_cb (GMarkupParseContext  *context,
 
       if (filter_type == FE_COLOR_MATRIX)
         {
-          SvgNumbers *values = (SvgNumbers *) f->base[filter_attr_idx (f->type, SHAPE_ATTR_FE_COLOR_MATRIX_VALUES)];
+          unsigned int pos = filter_attr_idx (f->type, SHAPE_ATTR_FE_COLOR_MATRIX_VALUES);
+          SvgNumbers *values = (SvgNumbers *) f->base[pos];
           SvgNumbers *initial = (SvgNumbers *) filter_attr_ref_initial_value (f, SHAPE_ATTR_FE_COLOR_MATRIX_VALUES);
 
           if (values->n_values != initial->n_values)
             {
               shape_set_base_value (data->current_shape, SHAPE_ATTR_FE_COLOR_MATRIX_VALUES, idx + 1, (SvgValue *) initial);
-              if (values_set)
+              if ((f->attrs & BIT (pos)) == 0)
                 {
                   /* If this wasn't user-provided, we quietly correct the initial
                    * value to match the type
@@ -18295,7 +18374,7 @@ start_element_cb (GMarkupParseContext  *context,
 
       if ((data->svg->features & GTK_SVG_ANIMATIONS) == 0)
         {
-          skip_element (data, context, GTK_SVG_ERROR_IGNORED_ELEMENT, "Animations are disabled");
+          skip_element (data, context, GTK_SVG_ERROR_FEATURE_DISABLED, "Animations are disabled");
           return;
         }
 
@@ -18780,7 +18859,10 @@ resolve_href_ref (SvgValue   *value,
 
       if (shape->type == SHAPE_IMAGE)
         {
-          gtk_svg_invalid_reference (data->svg, "Failed to load %s (resolving <image>): %s", href->ref, error->message);
+          if (g_error_matches (error, GTK_SVG_ERROR, GTK_SVG_ERROR_FEATURE_DISABLED))
+            gtk_svg_emit_error (data->svg, error);
+          else
+            gtk_svg_invalid_reference (data->svg, "Failed to load %s (resolving <image>): %s", href->ref, error->message);
           g_error_free (error);
           return; /* Image href is always external */
         }
@@ -19201,7 +19283,10 @@ gtk_svg_init_from_bytes (GtkSvg *self,
   data.collect_text = FALSE;
   data.num_loaded_elements = 0;
 
-  context = g_markup_parse_context_new (&parser, G_MARKUP_PREFIX_ERROR_POSITION, &data, NULL);
+  context = g_markup_parse_context_new (&parser,
+                                        G_MARKUP_PREFIX_ERROR_POSITION |
+                                        G_MARKUP_TREAT_CDATA_AS_TEXT,
+                                        &data, NULL);
   if (!g_markup_parse_context_parse (context,
                                      g_bytes_get_data (bytes, NULL),
                                      g_bytes_get_size (bytes),
@@ -24271,6 +24356,10 @@ gtk_svg_snapshot_with_weight (GtkSymbolicPaintable  *paintable,
 {
   GtkSvg *self = GTK_SVG (paintable);
   graphene_rect_t viewport = GRAPHENE_RECT_INIT (0, 0, width, height);
+  const GdkRGBA *used_colors;
+  GdkRGBA solid_colors[5];
+  size_t n_used_colors;
+  float used_opacity;
 
   if (self->width < 0 || self->height < 0)
     return;
@@ -24299,25 +24388,59 @@ gtk_svg_snapshot_with_weight (GtkSymbolicPaintable  *paintable,
 
       g_clear_pointer (&self->node, gsk_render_node_unref);
 
+      /* Traditional symbolics often have overlapping shapes,
+       * causing things to look wrong when using colors with
+       * alpha. To work around that, we always draw them with
+       * solid colors and apply foreground opacity globally.
+       */
+      if ((self->features & GTK_SVG_TRADITIONAL_SYMBOLIC) != 0 &&
+          colors[GTK_SYMBOLIC_COLOR_FOREGROUND].alpha < 1)
+        {
+          n_used_colors = MIN (n_colors, 5);
+          used_colors = solid_colors;
+
+          used_opacity = 1;
+          for (unsigned int i = 0; i < n_used_colors; i++)
+            {
+              used_opacity = MIN (used_opacity, colors[i].alpha);
+              solid_colors[i] = colors[i];
+              solid_colors[i].alpha = 1;
+            }
+        }
+      else
+        {
+          used_opacity = 1;
+          used_colors = colors;
+          n_used_colors = n_colors;
+        }
+
       self->current_width = width;
       self->current_height = height;
 
       compute_context.svg = self;
       compute_context.viewport = &viewport;
-      compute_context.colors = colors;
-      compute_context.n_colors = n_colors;
+      compute_context.colors = used_colors;
+      compute_context.n_colors = n_used_colors;
       compute_context.current_time = self->current_time;
       compute_context.parent = NULL;
       compute_context.interpolation = GDK_COLOR_STATE_SRGB;
 
       compute_current_values_for_shape (self->content, &compute_context);
 
+      gtk_snapshot_push_collect (snapshot);
+
+      if ((self->features & GTK_SVG_TRADITIONAL_SYMBOLIC) != 0 &&
+          colors[GTK_SYMBOLIC_COLOR_FOREGROUND].alpha < 1)
+        {
+          gtk_snapshot_push_opacity (snapshot, used_opacity);
+        }
+
       paint_context.svg = self;
       paint_context.viewport = &viewport;
       paint_context.viewport_stack = NULL;
       paint_context.snapshot = snapshot;
-      paint_context.colors = colors;
-      paint_context.n_colors = n_colors;
+      paint_context.colors = used_colors;
+      paint_context.n_colors = n_used_colors;
       paint_context.weight = self->weight >= 1 ? self->weight : weight;
       paint_context.op = RENDERING;
       paint_context.op_stack = NULL;
@@ -24326,8 +24449,6 @@ gtk_svg_snapshot_with_weight (GtkSymbolicPaintable  *paintable,
       paint_context.depth = 0;
       paint_context.transforms = NULL;
       paint_context.instance_count = 0;
-
-      gtk_snapshot_push_collect (snapshot);
 
       if (self->overflow == GTK_OVERFLOW_HIDDEN)
         gtk_snapshot_push_clip (snapshot,
@@ -24344,11 +24465,17 @@ gtk_svg_snapshot_with_weight (GtkSymbolicPaintable  *paintable,
       g_assert (paint_context.ctx_shape_stack == NULL);
       g_assert (paint_context.transforms == NULL);
 
+      if ((self->features & GTK_SVG_TRADITIONAL_SYMBOLIC) != 0 &&
+          colors[GTK_SYMBOLIC_COLOR_FOREGROUND].alpha < 1)
+        {
+          gtk_snapshot_pop (snapshot);
+        }
+
       self->node = gtk_snapshot_pop_collect (snapshot);
 
       self->node_for.width = width;
       self->node_for.height = height;
-      memcpy (self->node_for.colors, colors, MIN (n_colors, 5) * sizeof (GdkRGBA));
+      memcpy (self->node_for.colors, colors, n_colors * sizeof (GdkRGBA));
       self->node_for.n_colors = n_colors;
       self->node_for.weight = weight;
     }
@@ -26584,16 +26711,23 @@ gtk_svg_pause (GtkSvg *self)
  * @GTK_SVG_ERROR_IGNORED_ELEMENT: An XML element is ignored,
  *   but it should not affect rendering (this error code is used
  *   for metadata and exension elements)
+ * @GTK_SVG_ERROR_LIMITS_EXCEEDED: An implementation limit has
+ *   been hit, such as the number of loaded shapes.
  * @GTK_SVG_ERROR_NOT_IMPLEMENTED: The SVG uses features that
  *   are not supported by `GtkSvg`. It may be advisable to use
  *   a different SVG renderer.
- * @GTK_SVG_ERROR_LIMITS_EXCEEDED: An implementation limit has
- *   been hit, such as the number of loaded shapes.
  *
  * Error codes in the `GTK_SVG_ERROR` domain for errors
  * that happen during parsing or rendering of SVG.
  *
  * Since: 4.22
+ */
+
+/* GTK_SVG_ERROR_FEATURE_DISABLED:
+ *
+ * The SVG uses features that have been disabled with `gtk_svg_set_features`.
+ *
+ * Since: 4.24
  */
 
 /**
