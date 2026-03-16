@@ -418,8 +418,8 @@ path_paintable_get_shape (PathPaintable *self,
   return (Shape *) g_ptr_array_index (self->svg->content->shapes, path);
 }
 
-static void
-set_default_shape_attrs (Shape *shape)
+void
+shape_set_default_attrs (Shape *shape)
 {
   shape->gpa.states = ALL_STATES;
 
@@ -451,7 +451,7 @@ path_paintable_add_path (PathPaintable *self,
   Shape *shape;
 
   shape = svg_shape_add (self->svg->content, SHAPE_PATH);
-  set_default_shape_attrs (shape);
+  shape_set_default_attrs (shape);
   svg_shape_attr_set (shape, SHAPE_ATTR_PATH, svg_path_new (path));
 
   g_signal_emit (self, signals[CHANGED], 0);
@@ -469,7 +469,7 @@ path_paintable_add_shape (PathPaintable *self,
   Shape *shape;
 
   shape = svg_shape_add (self->svg->content, shape_type);
-  set_default_shape_attrs (shape);
+  shape_set_default_attrs (shape);
 
   switch ((unsigned int) shape_type)
     {
@@ -851,6 +851,7 @@ path_paintable_get_compatibility (PathPaintable *self)
   double miterlimit;
   ClipKind clip_kind;
   GskPath *clip_path;
+  const char *ref;
   char *str;
 
   for (size_t i = 0; i < self->svg->content->shapes->len; i++)
@@ -913,7 +914,7 @@ path_paintable_get_compatibility (PathPaintable *self)
       if (miterlimit != 4)
         compat = MAX (compat, GTK_4_22);
 
-      clip_kind = svg_shape_attr_get_clip (shape, SHAPE_ATTR_CLIP_PATH, &clip_path);
+      clip_kind = svg_shape_attr_get_clip (shape, SHAPE_ATTR_CLIP_PATH, &clip_path, &ref);
       if (clip_kind != CLIP_NONE)
         compat = MAX (compat, GTK_4_22);
 
@@ -1142,12 +1143,13 @@ path_paintable_paths_changed (PathPaintable *self)
 }
 
 Shape *
-shape_duplicate (Shape *shape)
+shape_duplicate (Shape *shape,
+                 Shape *parent)
 {
   Shape *copy = g_new0 (Shape, 1);
 
   copy->type = shape->type;
-  copy->parent = shape->parent;
+  copy->parent = parent;
   copy->attrs = _gtk_bitmask_copy (shape->attrs);
   copy->id = NULL;
   for (unsigned int i = FIRST_SHAPE_ATTR; i <= LAST_FILTER_ATTR; i++)
@@ -1210,8 +1212,8 @@ shape_is_graphical (Shape *shape)
     }
 }
 
-static gboolean
-shape_is_group (Shape *shape)
+gboolean
+shape_has_children (Shape *shape)
 {
   switch (shape->type)
     {
@@ -1245,6 +1247,82 @@ shape_is_group (Shape *shape)
       g_assert_not_reached ();
     }
 }
+
+gboolean
+shape_has_gpa (Shape *shape)
+{
+  switch (shape->type)
+    {
+    case SHAPE_LINE:
+    case SHAPE_POLYLINE:
+    case SHAPE_POLYGON:
+    case SHAPE_RECT:
+    case SHAPE_CIRCLE:
+    case SHAPE_ELLIPSE:
+    case SHAPE_PATH:
+      return TRUE;
+    case SHAPE_GROUP:
+    case SHAPE_CLIP_PATH:
+    case SHAPE_MASK:
+    case SHAPE_DEFS:
+    case SHAPE_MARKER:
+    case SHAPE_TEXT:
+    case SHAPE_TSPAN:
+    case SHAPE_SVG:
+    case SHAPE_SYMBOL:
+    case SHAPE_SWITCH:
+    case SHAPE_USE:
+    case SHAPE_LINEAR_GRADIENT:
+    case SHAPE_RADIAL_GRADIENT:
+    case SHAPE_PATTERN:
+    case SHAPE_IMAGE:
+    case SHAPE_FILTER:
+      return FALSE;
+    default:
+      g_assert_not_reached ();
+    }
+}
+
+gboolean
+shape_has_ancestor (Shape *shape,
+                    Shape *ancestor)
+{
+  for (Shape *p = shape->parent; p; p = p->parent)
+    if (p == ancestor)
+      return TRUE;
+
+  return FALSE;
+}
+
+GdkPaintable *
+shape_get_path_image (Shape  *shape,
+                      GtkSvg *orig)
+{
+  GtkSvg *svg = gtk_svg_new ();
+  g_autoptr (GBytes) bytes = NULL;
+
+  svg->width = orig->width;
+  svg->height = orig->width;
+
+  svg_shape_attr_set (svg->content, SHAPE_ATTR_WIDTH, svg_value_ref (orig->content->base[SHAPE_ATTR_WIDTH]));
+  svg_shape_attr_set (svg->content, SHAPE_ATTR_HEIGHT, svg_value_ref (orig->content->base[SHAPE_ATTR_WIDTH]));
+  svg_shape_attr_set (svg->content, SHAPE_ATTR_VIEW_BOX, svg_value_ref (orig->content->base[SHAPE_ATTR_VIEW_BOX]));
+
+  if (shape_is_graphical (shape))
+    {
+      Shape *clone = shape_duplicate (shape, svg->content);
+      svg_shape_attr_set (clone, SHAPE_ATTR_VISIBILITY, NULL);
+      svg_shape_attr_set (clone, SHAPE_ATTR_DISPLAY, NULL);
+      g_ptr_array_add (svg->content->shapes, clone);
+    }
+  bytes = gtk_svg_serialize (svg);
+  g_object_unref (svg);
+  svg = gtk_svg_new_from_bytes (bytes);
+  gtk_svg_play (svg);
+
+  return GDK_PAINTABLE (svg);
+}
+
 static Shape *
 get_shape_by_id (Shape      *shape,
                  const char *id)
@@ -1255,7 +1333,7 @@ get_shape_by_id (Shape      *shape,
 
       if (g_strcmp0 (sh->id, id) == 0)
         return sh;
-      else if (shape_is_group (sh))
+      else if (shape_has_children (sh))
         {
           Shape *sh2 = get_shape_by_id (sh, id);
           if (sh2)
@@ -1384,6 +1462,21 @@ GtkSvg *
 path_paintable_get_svg (PathPaintable *self)
 {
   return self->svg;
+}
+
+char *
+path_paintable_find_unused_id (PathPaintable *self,
+                               const char    *prefix)
+{
+  for (unsigned int i = 1; i < 256; i++)
+    {
+      char id[64];
+      g_snprintf (id, sizeof (id), "%s%u", prefix, i);
+      if (path_paintable_get_shape_by_id (self, id) == NULL)
+        return g_strdup (id);
+    }
+
+  return NULL;
 }
 
 /* }}} */

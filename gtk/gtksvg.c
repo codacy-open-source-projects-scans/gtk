@@ -4463,7 +4463,7 @@ DEFINE_ENUM_PUBLIC (FILL_RULE, fill_rule, GskFillRule,
   DEFINE_ENUM_VALUE (FILL_RULE, GSK_FILL_RULE_EVEN_ODD, "evenodd")
 )
 
-DEFINE_ENUM (MASK_TYPE, mask_type, GskMaskMode,
+DEFINE_ENUM_PUBLIC (MASK_TYPE, mask_type, GskMaskMode,
   DEFINE_ENUM_VALUE (MASK_TYPE, GSK_MASK_MODE_ALPHA, "alpha"),
   DEFINE_ENUM_VALUE (MASK_TYPE, GSK_MASK_MODE_LUMINANCE, "luminance")
 )
@@ -8538,7 +8538,7 @@ svg_clip_new_path (const char   *string,
   return svg_clip_new_from_data (svg_path_data_parse (string), fill_rule);
 }
 
-static SvgValue *
+SvgValue *
 svg_clip_new_ref (const char *ref)
 {
   SvgClip *result;
@@ -8773,14 +8773,14 @@ static const SvgValueClass SVG_MASK_CLASS = {
   svg_value_default_resolve,
 };
 
-static SvgValue *
+SvgValue *
 svg_mask_new_none (void)
 {
   static SvgMask none = { { &SVG_MASK_CLASS, 0 }, MASK_NONE };
   return (SvgValue *) &none;
 }
 
-static SvgValue *
+SvgValue *
 svg_mask_new_ref (const char *ref)
 {
   SvgMask *result;
@@ -12334,6 +12334,11 @@ shape_new (Shape     *parent,
     {
       shape->text = g_array_new (FALSE, FALSE, sizeof (TextNode));
       g_array_set_clear_func (shape->text, (GDestroyNotify) text_node_clear);
+    }
+
+  if (shape_type_has_gpa_attrs (type))
+    {
+      shape->gpa.states = ALL_STATES;
     }
 
   shape->styles = g_ptr_array_new_with_free_func (style_elt_free);
@@ -25918,6 +25923,23 @@ timeline_dump (Timeline *timeline)
 /* }}} */
 /* {{{ Private API */
 
+void
+svg_foreach_shape (Shape         *shape,
+                   ShapeCallback  callback,
+                   gpointer       user_data)
+{
+  callback (shape, user_data);
+
+  if (shape->shapes)
+    {
+      for (unsigned int i = 0; i < shape->shapes->len; i++)
+        {
+          Shape *sh = g_ptr_array_index (shape->shapes, i);
+          svg_foreach_shape (sh, callback, user_data);
+        }
+    }
+}
+
 GtkSvg *
 gtk_svg_copy (GtkSvg *orig)
 {
@@ -26853,9 +26875,10 @@ svg_shape_get_path (Shape                 *shape,
 }
 
 ClipKind
-svg_shape_attr_get_clip (Shape      *shape,
-                         ShapeAttr   attr,
-                         GskPath   **path)
+svg_shape_attr_get_clip (Shape       *shape,
+                         ShapeAttr    attr,
+                         GskPath    **path,
+                         const char **ref)
 {
   g_return_val_if_fail (shape_has_attr (shape->type, attr), CLIP_NONE);
   SvgValue *value;
@@ -26867,11 +26890,23 @@ svg_shape_attr_get_clip (Shape      *shape,
     value = shape_attr_ref_initial_value (attr, shape->type, shape->parent != NULL);
 
   clip = (SvgClip *) value;
-
-  if (clip->kind == CLIP_PATH)
-    *path = clip->path.path;
-  else
-    *path = NULL;
+  switch (clip->kind)
+    {
+    case CLIP_NONE:
+      *path = NULL;
+      *ref = NULL;
+      break;
+    case CLIP_PATH:
+      *path = clip->path.path;
+      *ref = NULL;
+      break;
+    case CLIP_REF:
+      *path = NULL;
+      *ref = clip->ref.ref;
+      break;
+    default:
+      g_assert_not_reached ();
+    }
 
   svg_value_unref (value);
 
@@ -26916,6 +26951,29 @@ svg_shape_attr_get_filter (Shape     *shape,
   return g_string_free (s, FALSE);
 }
 
+const char *
+svg_shape_attr_get_mask (Shape     *shape,
+                         ShapeAttr  attr)
+{
+  g_return_val_if_fail (shape_has_attr (shape->type, attr), NULL);
+  SvgMask *mask;
+  const char *ref;
+
+  if (_gtk_bitmask_get (shape->attrs, attr))
+    mask = (SvgMask *) shape_ref_base_value (shape, NULL, attr, 0);
+  else
+    mask = (SvgMask *) shape_attr_ref_initial_value (attr, shape->type, shape->parent != NULL);
+
+  if (mask->kind == MASK_NONE)
+    ref = NULL;
+  else
+    ref = mask->ref;
+
+  svg_value_unref ((SvgValue *) mask);
+
+  return ref;
+}
+
 void
 svg_shape_attr_set (Shape     *shape,
                     ShapeAttr  attr,
@@ -26927,6 +26985,13 @@ svg_shape_attr_set (Shape     *shape,
   else
     shape->base[attr] = shape_attr_ref_initial_value (attr, shape->type, shape->parent != NULL);
   shape->attrs = _gtk_bitmask_set (shape->attrs, attr, value != NULL);
+}
+
+gboolean
+svg_shape_has_attr (Shape     *shape,
+                    ShapeAttr  attr)
+{
+  return shape_has_attr (shape->type, attr);
 }
 
 Shape *
@@ -26964,6 +27029,12 @@ svg_shape_delete (Shape *shape)
       }
 
   g_ptr_array_remove (shape->parent->shapes, shape);
+}
+
+const char *
+svg_shape_get_name (ShapeType type)
+{
+  return shape_types[type].name;
 }
 
 /* }}} */

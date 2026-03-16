@@ -89,8 +89,11 @@ append_shape_editor (PaintableEditor *self,
   ShapeEditor *pe;
 
   pe = shape_editor_new (self->paintable, shape);
-  gtk_box_append (self->path_elts, GTK_WIDGET (pe));
-  gtk_box_append (self->path_elts, gtk_separator_new (GTK_ORIENTATION_HORIZONTAL));
+  if (pe)
+    {
+      gtk_box_append (self->path_elts, GTK_WIDGET (pe));
+      gtk_box_append (self->path_elts, gtk_separator_new (GTK_ORIENTATION_HORIZONTAL));
+    }
 }
 
 static void
@@ -104,11 +107,6 @@ create_shape_editors (PaintableEditor *self)
   for (unsigned int i = 0; i < content->shapes->len; i++)
     {
       Shape *shape = g_ptr_array_index (content->shapes, i);
-
-      if (!shape_is_graphical (shape) &&
-          shape->type != SHAPE_GROUP)
-        continue;
-
       append_shape_editor (self, shape);
     }
 }
@@ -124,6 +122,34 @@ update_size (PaintableEditor *self)
   gtk_editable_set_text (GTK_EDITABLE (self->height), text);
 }
 
+typedef struct
+{
+  unsigned int all;
+  unsigned int graphical;
+  unsigned int current;
+
+  unsigned int state;
+} ShapeCountData;
+
+static void
+count_shapes (Shape    *shape,
+              gpointer  data)
+{
+  ShapeCountData *d = data;
+
+  d->all++;
+
+  if (!shape_is_graphical (shape))
+    return;
+
+  d->graphical++;
+
+  if ((shape->gpa.states & (G_GUINT64_CONSTANT (1) << d->state)) == 0)
+    return;
+
+  d->current++;
+}
+
 static void
 update_summary (PaintableEditor *self)
 {
@@ -132,27 +158,14 @@ update_summary (PaintableEditor *self)
       unsigned int state = path_paintable_get_state (self->paintable);
       g_autofree char *summary1 = NULL;
       g_autofree char *summary2 = NULL;
-      unsigned int n;
+      ShapeCountData counts;
 
+      counts.state = state;
+      counts.all = counts.graphical = counts.current = 0;
+      svg_foreach_shape (path_paintable_get_svg (self->paintable)->content, count_shapes, &counts);
 
-      n = 0;
-      for (size_t i = 0; i < path_paintable_get_n_paths (self->paintable); i++)
-        {
-          uint64_t states = path_paintable_get_path_states (self->paintable, i);
-          if (states & (1ul << state))
-            n++;
-        }
-
-      if (state == STATE_UNSET)
-        {
-          summary1 = g_strdup ("Current state: -1");
-          summary2 = g_strdup_printf ("%" G_GSIZE_FORMAT " path elements", path_paintable_get_n_paths (self->paintable));
-        }
-      else
-        {
-          summary1 = g_strdup_printf ("Current state: %u", state);
-          summary2 = g_strdup_printf ("%" G_GSIZE_FORMAT " path elements, %u in current state", path_paintable_get_n_paths (self->paintable), n);
-        }
+      summary1 = g_strdup_printf ("Current state: %u", state);
+      summary2 = g_strdup_printf ("%u graphical shapes, %u in current state", counts.graphical, counts.current);
 
       gtk_label_set_label (self->summary1, summary1);
       gtk_label_set_label (self->summary2, summary2);
@@ -509,6 +522,7 @@ paintable_editor_add_path (PaintableEditor *self)
   char buffer[128];
   Shape *content;
   size_t idx;
+  Shape *shape;
 
   if (path_paintable_get_n_paths (self->paintable) == 0)
     path_paintable_set_size (self->paintable, 100.f, 100.f);
@@ -524,19 +538,8 @@ paintable_editor_add_path (PaintableEditor *self)
   g_signal_handlers_block_by_func (self->paintable, paths_changed, self);
   idx = path_paintable_add_path (self->paintable, path);
 
-  for (unsigned int i = 1; i < 100; i++)
-    {
-      char id[64];
-      g_snprintf (id, sizeof (id), "path%u", i);
-      if (path_paintable_get_shape_by_id (self->paintable, id) == NULL)
-        {
-          Shape *shape;
-
-          shape = path_paintable_get_shape (self->paintable, idx);
-          g_set_str (&shape->id, id);
-          break;
-        }
-    }
+  shape = path_paintable_get_shape (self->paintable, idx);
+  shape->id = path_paintable_find_unused_id (self->paintable, "path");
 
   content = path_paintable_get_content (self->paintable);
   append_shape_editor (self, g_ptr_array_index (content->shapes, content->shapes->len - 1));
