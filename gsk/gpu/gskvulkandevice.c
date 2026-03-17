@@ -3,6 +3,7 @@
 #include "gskvulkandeviceprivate.h"
 
 #include "gskgpuglobalsopprivate.h"
+#include "gskgpushaderflagsprivate.h"
 #include "gskgpushaderopprivate.h"
 #include "gskvulkanbufferprivate.h"
 #include "gskvulkanimageprivate.h"
@@ -257,7 +258,7 @@ gsk_vulkan_device_create_download_image (GskGpuDevice   *device,
 #ifdef HAVE_DMABUF
   image = gsk_vulkan_image_new_dmabuf (self,
                                        gdk_memory_depth_get_format (depth),
-                                       gdk_memory_depth_is_srgb (depth),
+                                       FALSE,
                                        width,
                                        height);
   if (image != NULL)
@@ -267,7 +268,7 @@ gsk_vulkan_device_create_download_image (GskGpuDevice   *device,
   image = gsk_vulkan_image_new_for_offscreen (self,
                                               FALSE,
                                               gdk_memory_depth_get_format (depth),
-                                              gdk_memory_depth_is_srgb (depth),
+                                              FALSE,
                                               width,
                                               height);
 
@@ -917,6 +918,7 @@ gsk_vulkan_device_get_vk_pipeline (GskVulkanDevice           *self,
                                     NULL);
   fragment_shader_name = g_strconcat ("/org/gtk/libgsk/shaders/vulkan/",
                                       op_class->shader_name,
+                                      gsk_gpu_shader_flags_has_clip_mask (flags) ? "-clipmask" : "",
                                       ".frag.spv",
                                       NULL);
 

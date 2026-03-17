@@ -112,8 +112,7 @@
  * In animation elements, the parsing of `begin` and `end` attributes
  * is limited, and the `min` and `max` attributes are not supported.
  *
- * Lastly, there is only minimal CSS support (the style attribute,
- * but not `<style>`), and no interactivity.
+ * Lastly, there is no interactivity.
  *
  *
  * ## SVG Extensions
@@ -17647,8 +17646,9 @@ parse_shape_attrs (Shape                *shape,
         }
     }
 
-  if (((data->svg->features & GTK_SVG_TRADITIONAL_SYMBOLIC) != 0) ||
-      (((data->svg->features & GTK_SVG_EXTENSIONS) != 0) && shape->classes))
+  if (data->svg->gpa_version == 0 &&
+      (((data->svg->features & GTK_SVG_TRADITIONAL_SYMBOLIC) != 0) ||
+       (((data->svg->features & GTK_SVG_EXTENSIONS) != 0) && shape->classes)))
     {
       SvgValue *value;
       gboolean has_stroke;
@@ -17823,9 +17823,15 @@ parse_svg_gpa_attrs (GtkSvg               *svg,
       unsigned int state;
 
       if (parse_number (state_attr, 0, 63, &v))
-        gtk_svg_set_state (svg, (unsigned int) v);
+        {
+          svg->initial_state = (unsigned int) v;
+          gtk_svg_set_state (svg, (unsigned int) v);
+        }
       else if (find_named_state (svg, state_attr, &state))
-        gtk_svg_set_state (svg, state);
+        {
+          svg->initial_state = state;
+          gtk_svg_set_state (svg, state);
+        }
       else
         gtk_svg_invalid_attribute (svg, context, "gpa:state", NULL);
     }
@@ -20469,6 +20475,15 @@ indent_for_attr (GString *s,
 }
 
 static void
+g_markup_append (GString    *s,
+                 const char *text)
+{
+  char *escaped = g_markup_escape_text (text, strlen (text));
+  g_string_append (s, escaped);
+  g_free (escaped);
+}
+
+static void
 serialize_shape_attrs (GString              *s,
                        GtkSvg               *svg,
                        int                   indent,
@@ -20478,10 +20493,12 @@ serialize_shape_attrs (GString              *s,
   if (shape->id)
     {
       indent_for_attr (s, indent);
-      g_string_append_printf (s, "id='%s'", shape->id);
+      g_string_append (s, "id='");
+      g_markup_append (s, shape->id);
+      g_string_append_c (s, '\'');
     }
 
-  if (shape->classes)
+  if (shape->classes && shape->classes[0])
     {
       indent_for_attr (s, indent);
       g_string_append (s, "class='");
@@ -20489,7 +20506,7 @@ serialize_shape_attrs (GString              *s,
         {
           if (i > 0)
             g_string_append_c (s, ' ');
-          g_string_append (s, shape->classes[i]);
+          g_markup_append (s, shape->classes[i]);
         }
       g_string_append_c (s, '\'');
     }
@@ -20497,7 +20514,9 @@ serialize_shape_attrs (GString              *s,
   if (shape->style)
     {
       indent_for_attr (s, indent);
-      g_string_append_printf (s, "style='%s'", shape->style);
+      g_string_append (s, "style='");
+      g_markup_append (s, shape->style);
+      g_string_append_c (s, '\'');
     }
 
   for (ShapeAttr attr = FIRST_SHAPE_ATTR; attr <= LAST_SHAPE_ATTR; attr++)
@@ -20507,10 +20526,17 @@ serialize_shape_attrs (GString              *s,
           shape_type_has_gpa_attrs (shape->type) &&
           attr == SHAPE_ATTR_VISIBILITY)
         {
-          if ((shape->gpa.states & BIT (svg->state)) == 0)
+          unsigned int state;
+
+          if (flags & GTK_SVG_SERIALIZE_AT_CURRENT_TIME)
+            state = svg->state;
+          else
+            state = svg->initial_state;
+
+          if ((shape->gpa.states & BIT (state)) == 0)
             {
               indent_for_attr (s, indent);
-              g_string_append_printf (s, "visibility='hidden'");
+              g_string_append (s, "visibility='hidden'");
               continue;
             }
         }
@@ -25414,7 +25440,8 @@ gtk_svg_snapshot_with_weight (GtkSymbolicPaintable  *paintable,
        * alpha. To work around that, we always draw them with
        * solid colors and apply foreground opacity globally.
        */
-      if ((self->features & GTK_SVG_TRADITIONAL_SYMBOLIC) != 0 &&
+      if (self->gpa_version == 0 &&
+          (self->features & GTK_SVG_TRADITIONAL_SYMBOLIC) != 0 &&
           colors[GTK_SYMBOLIC_COLOR_FOREGROUND].alpha < 1)
         {
           used_opacity = colors[GTK_SYMBOLIC_COLOR_FOREGROUND].alpha;
@@ -25448,7 +25475,8 @@ gtk_svg_snapshot_with_weight (GtkSymbolicPaintable  *paintable,
 
       gtk_snapshot_push_collect (snapshot);
 
-      if ((self->features & GTK_SVG_TRADITIONAL_SYMBOLIC) != 0 &&
+      if (self->gpa_version == 0 &&
+          (self->features & GTK_SVG_TRADITIONAL_SYMBOLIC) != 0 &&
           colors[GTK_SYMBOLIC_COLOR_FOREGROUND].alpha < 1)
         {
           gtk_snapshot_push_opacity (snapshot, used_opacity);
@@ -25484,7 +25512,8 @@ gtk_svg_snapshot_with_weight (GtkSymbolicPaintable  *paintable,
       g_assert (paint_context.ctx_shape_stack == NULL);
       g_assert (paint_context.transforms == NULL);
 
-      if ((self->features & GTK_SVG_TRADITIONAL_SYMBOLIC) != 0 &&
+      if (self->gpa_version == 0 &&
+          (self->features & GTK_SVG_TRADITIONAL_SYMBOLIC) != 0 &&
           colors[GTK_SYMBOLIC_COLOR_FOREGROUND].alpha < 1)
         {
           gtk_snapshot_pop (snapshot);
@@ -25623,6 +25652,7 @@ gtk_svg_init (GtkSvg *self)
 {
   self->weight = -1;
   self->overflow = GTK_OVERFLOW_HIDDEN;
+  self->initial_state = 0;
   self->state = 0;
   self->load_time = INDEFINITE;
   self->state_change_delay = 0;
@@ -26477,7 +26507,10 @@ gtk_svg_serialize_full (GtkSvg               *self,
         }
 
       indent_for_attr (s, 0);
-      g_string_append_printf (s, "gpa:state='%u'", self->state);
+      if (flags & GTK_SVG_SERIALIZE_AT_CURRENT_TIME)
+        g_string_append_printf (s, "gpa:state='%u'", self->state);
+      else
+        g_string_append_printf (s, "gpa:state='%u'", self->initial_state);
     }
 
   if (flags & GTK_SVG_SERIALIZE_INCLUDE_STATE)
@@ -26974,6 +27007,28 @@ svg_shape_attr_get_mask (Shape     *shape,
   return ref;
 }
 
+gboolean
+svg_shape_attr_get_viewbox (Shape           *shape,
+                            ShapeAttr        attr,
+                            graphene_rect_t *rect)
+{
+  g_return_val_if_fail (shape_has_attr (shape->type, attr), FALSE);
+  SvgViewBox *viewbox;
+  gboolean result;
+
+  if (_gtk_bitmask_get (shape->attrs, attr))
+    viewbox = (SvgViewBox *) shape_ref_base_value (shape, NULL, attr, 0);
+  else
+    viewbox = (SvgViewBox *) shape_attr_ref_initial_value (attr, shape->type, shape->parent != NULL);
+
+  result = !viewbox->unset;
+  graphene_rect_init_from_rect (rect, &viewbox->view_box);
+
+  svg_value_unref ((SvgValue *) viewbox);
+
+  return result;
+}
+
 void
 svg_shape_attr_set (Shape     *shape,
                     ShapeAttr  attr,
@@ -27133,6 +27188,7 @@ gtk_svg_clear_content (GtkSvg *self)
   self->height = 0;
   self->current_width = 0;
   self->current_height = 0;
+  self->initial_state = 0;
   self->state = 0;
   self->max_state = 0;
   self->state_change_delay = 0;

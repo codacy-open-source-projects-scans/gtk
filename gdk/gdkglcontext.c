@@ -663,12 +663,14 @@ gdk_gl_context_ensure_egl_surface (GdkGLContext   *self,
       egl_config = gdk_display_get_egl_config (display, depth),
 
       i = 0;
-      if (depth == GDK_MEMORY_U8_SRGB && display->have_egl_gl_colorspace)
+/*
+      if (display->have_egl_gl_colorspace)
         {
           attribs[i++] = EGL_GL_COLORSPACE_KHR;
           attribs[i++] = EGL_GL_COLORSPACE_SRGB_KHR;
           surface->is_srgb = TRUE;
         }
+*/
       g_assert (i < G_N_ELEMENTS (attribs));
       attribs[i++] = EGL_NONE;
 
@@ -718,18 +720,12 @@ gdk_gl_context_real_begin_frame (GdkDrawContext  *draw_context,
 
   depth = gdk_memory_depth_merge (depth, gdk_color_state_get_depth (color_state));
 
-  g_assert (depth != GDK_MEMORY_U8_SRGB || gdk_color_state_get_no_srgb_tf (color_state) != NULL);
-
 #ifdef HAVE_EGL
   if (priv->egl_context)
     gdk_gl_context_ensure_egl_surface (context, depth);
   
   *out_depth = priv->egl_surface_depth;
-
-  if (*out_depth == GDK_MEMORY_U8_SRGB)
-    *out_color_state = gdk_color_state_get_no_srgb_tf (color_state);
-  else
-    *out_color_state = color_state;
+  *out_color_state = color_state;
 #else
   *out_color_state = gdk_color_state_get_srgb ();
   *out_depth = GDK_MEMORY_U8;
@@ -1709,6 +1705,9 @@ gdk_gl_context_init_memory_flags (GdkGLContext *self)
   priv->memory_flags[GDK_MEMORY_R32G32B32A32_FLOAT_PREMULTIPLIED] |= GDK_GL_FORMAT_USABLE;
   priv->memory_flags[GDK_MEMORY_R32G32B32A32_FLOAT] |= GDK_GL_FORMAT_USABLE;
   priv->memory_flags[GDK_MEMORY_A32_FLOAT] |= GDK_GL_FORMAT_USABLE;
+  priv->memory_flags[GDK_MEMORY_ABGR2101010_PREMULTIPLIED] |= GDK_GL_FORMAT_USABLE | GDK_GL_FORMAT_RENDERABLE | GDK_GL_FORMAT_FILTERABLE;
+  priv->memory_flags[GDK_MEMORY_ABGR2101010] |= GDK_GL_FORMAT_USABLE | GDK_GL_FORMAT_RENDERABLE | GDK_GL_FORMAT_FILTERABLE;
+  priv->memory_flags[GDK_MEMORY_XBGR2101010] |= GDK_GL_FORMAT_USABLE | GDK_GL_FORMAT_RENDERABLE | GDK_GL_FORMAT_FILTERABLE;
 
   /* no changes in GLES 3.1 spec, table 8.13 */
 
@@ -2563,7 +2562,7 @@ gdk_gl_context_download (GdkGLContext          *self,
             }
           else
             {
-              actual_format = gdk_memory_depth_get_format (gdk_memory_format_get_depth (tex_format, FALSE));
+              actual_format = gdk_memory_depth_get_format (gdk_memory_format_get_depth (tex_format));
               if (gdk_memory_format_alpha (tex_format) == GDK_MEMORY_ALPHA_STRAIGHT)
                 actual_format = gdk_memory_format_get_straight (actual_format);
 
@@ -2579,7 +2578,7 @@ gdk_gl_context_download (GdkGLContext          *self,
         }
       else
         {
-          actual_format = gdk_memory_depth_get_format (gdk_memory_format_get_depth (tex_format, FALSE));
+          actual_format = gdk_memory_depth_get_format (gdk_memory_format_get_depth (tex_format));
           if (gdk_memory_format_alpha (tex_format) == GDK_MEMORY_ALPHA_STRAIGHT)
             actual_format = gdk_memory_format_get_straight (actual_format);
 
