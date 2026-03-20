@@ -327,7 +327,9 @@ gtk_svg_location_init (GtkSvgLocation      *location,
   location->lines = lines;
   location->line_chars = chars;
 #if GLIB_CHECK_VERSION (2, 88, 0)
+G_GNUC_BEGIN_IGNORE_DEPRECATIONS
   location->bytes = g_markup_parse_context_get_offset (context);
+G_GNUC_END_IGNORE_DEPRECATIONS
 #else
   location->bytes = 0;
 #endif
@@ -13466,17 +13468,9 @@ time_spec_update_for_state (TimeSpec     *spec,
 {
   if (spec->type == TIME_SPEC_TYPE_STATES && previous_state != state)
     {
-      int64_t time;
-
-      time = spec->time;
-
       if (state_match (spec->states.from & ~spec->states.to, previous_state) &&
           state_match (spec->states.to & ~spec->states.from, state))
-        time = state_start_time + spec->offset;
-      else
-        time = INDEFINITE;
-
-      time_spec_set_time (spec, time);
+        time_spec_set_time (spec, state_start_time + spec->offset);
     }
 }
 
@@ -14711,7 +14705,7 @@ animation_update_for_spec (Animation *a,
 
           if (a->current.begin != time)
             {
-              dbg_print ("times", "Current start time of %s now %s\n", a->id, format_time (time));
+              dbg_print ("times", "current start time of %s now %s\n", a->id, format_time (time));
               a->current.begin = time;
               changed = TRUE;
 
@@ -15719,7 +15713,7 @@ create_path_length (Shape    *shape,
 
   a->attr = SHAPE_ATTR_PATH_LENGTH;
 
-  a->id = g_strdup_printf ("gpa:path-length");
+  a->id = g_strdup_printf ("gpa:path-length:%s", shape->id);
   begin = animation_add_begin (a, timeline_get_start_of_time (timeline));
   end = animation_add_end (a, timeline_get_end_of_time (timeline));
   time_spec_add_animation (begin, a);
@@ -18328,15 +18322,27 @@ start_element_cb (GMarkupParseContext  *context,
 
       data->shape_stack = g_slist_prepend (data->shape_stack, data->current_shape);
 
-      if (data->current_shape &&
-          shape_type_has_text (data->current_shape->type) &&
-          shape->type == SHAPE_TSPAN)
+
+      if (shape->type == SHAPE_TSPAN)
         {
-          TextNode node = {
-            .type = TEXT_NODE_SHAPE,
-            .shape = { .shape = shape },
-          };
-          g_array_append_val (data->current_shape->text, node);
+          Shape *text_parent = NULL;
+
+          if (data->current_shape &&
+              shape_type_has_text (data->current_shape->type))
+            text_parent = data->current_shape;
+          else if (data->current_shape && data->current_shape->parent &&
+                   data->current_shape->type == SHAPE_LINK &&
+                   shape_type_has_text (data->current_shape->parent->type))
+            text_parent = data->current_shape->parent;
+
+          if (text_parent)
+            {
+              TextNode node = {
+                .type = TEXT_NODE_SHAPE,
+                .shape = { .shape = shape },
+              };
+              g_array_append_val (text_parent->text, node);
+            }
         }
 
       data->current_shape = shape;
@@ -18877,14 +18883,25 @@ text_cb (GMarkupParseContext  *context,
          GError              **error)
 {
   ParserData *data = user_data;
+  Shape *text_parent = NULL;
 
-  if (data->current_shape && shape_type_has_text (data->current_shape->type))
+  if (!data->current_shape)
+    return;
+
+  if (shape_type_has_text (data->current_shape->type))
+    text_parent = data->current_shape;
+  else if (data->current_shape->parent &&
+           data->current_shape->type == SHAPE_LINK &&
+           shape_type_has_text (data->current_shape->parent->type))
+    text_parent = data->current_shape->parent;
+
+  if (text_parent)
     {
       TextNode node = {
         .type = TEXT_NODE_CHARACTERS,
         .characters = { .text = g_strndup (text, len) }
       };
-      g_array_append_val (data->current_shape->text, node);
+      g_array_append_val (text_parent->text, node);
       return;
     }
 
@@ -20120,9 +20137,9 @@ apply_styles_here (Shape        *shape,
 
   set = _gtk_bitmask_new ();
 
-  for (unsigned int i = data->rulesets->len; i > 0; i--)
+  for (unsigned int i = 0; i < data->rulesets->len; i++)
     {
-      SvgCssRuleset *r = &g_array_index (data->rulesets, SvgCssRuleset, i - 1);
+      SvgCssRuleset *r = &g_array_index (data->rulesets, SvgCssRuleset, i);
       if (gtk_css_selector_matches (r->selector, node))
         apply_ruleset_to_shape (r, shape, idx, set, data);
     }
@@ -27094,13 +27111,25 @@ svg_shape_add (Shape     *parent,
 
   g_ptr_array_add (parent->shapes, shape);
 
-  if (shape_type_has_text (parent->type) && type == SHAPE_TSPAN)
+  if (type == SHAPE_TSPAN)
     {
-      TextNode node = {
-        .type = TEXT_NODE_SHAPE,
-        .shape = { .shape = shape }
-      };
-      g_array_append_val (parent->text, node);
+      Shape *text_parent = NULL;
+
+      if (shape_type_has_text (parent->type))
+        text_parent = parent;
+      else if (parent->parent &&
+               parent->type == SHAPE_LINK &&
+               shape_type_has_text (parent->parent->type))
+        text_parent = parent->parent;
+
+      if (text_parent)
+        {
+          TextNode node = {
+            .type = TEXT_NODE_SHAPE,
+            .shape = { .shape = shape }
+          };
+          g_array_append_val (parent->text, node);
+        }
     }
 
   return shape;
