@@ -38,6 +38,7 @@ typedef struct
   char *ref;
   SvgElement *shape;
   GdkTexture *texture;
+  SvgAnimation *animation;
 } SvgHref;
 
 static void
@@ -47,6 +48,9 @@ svg_href_free (SvgValue *value)
 
   if (r->kind != HREF_NONE)
     g_free (r->ref);
+
+  if (r->texture)
+    g_object_unref (r->texture);
 
   g_free (value);
 }
@@ -175,9 +179,21 @@ svg_href_get_id (const SvgValue *value)
   if (href->ref[0] == '#')
     return href->ref + 1;
   else
-    return href->ref;
+    return NULL;
 }
 
+const char *
+svg_href_get_ref (const SvgValue *value)
+{
+  const SvgHref *href = (const SvgHref *) value;
+
+  g_assert (value->class == &SVG_HREF_CLASS);
+
+  if (href->kind == HREF_NONE)
+    return NULL;
+
+  return href->ref;
+}
 HrefKind
 svg_href_get_kind (const SvgValue *value)
 {
@@ -228,4 +244,25 @@ svg_href_set_texture (SvgValue   *value,
   g_assert (value->class == &SVG_HREF_CLASS);
 
   href->texture = texture;
+}
+
+SvgAnimation *
+svg_href_get_animation (const SvgValue *value)
+{
+  const SvgHref *href = (const SvgHref *) value;
+
+  g_assert (value->class == &SVG_HREF_CLASS);
+
+  return href->animation;
+}
+
+void
+svg_href_set_animation (SvgValue     *value,
+                        SvgAnimation *animation)
+{
+  SvgHref *href = (SvgHref *) value;
+
+  g_assert (value->class == &SVG_HREF_CLASS);
+
+  href->animation = animation;
 }

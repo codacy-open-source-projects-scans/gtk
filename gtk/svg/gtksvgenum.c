@@ -128,31 +128,34 @@ svg_ ## class_name ## _new (EnumType value) \
   g_assert_not_reached (); \
 } \
 
-#define DEF_E_PARSE(class_name) \
+#define DEF_E_PARSE(class_name, EnumType) \
+SvgValue * \
+svg_ ## class_name ## _try_parse (GtkCssParser *parser) \
+{ \
+  return svg_enum_try_parse (class_name ## _values, \
+                             G_N_ELEMENTS (class_name ## _values), \
+                             parser); \
+} \
+\
 SvgValue * \
 svg_ ## class_name ## _parse (GtkCssParser *parser) \
 { \
-  SvgValue *value; \
-\
-  value = svg_enum_try_parse (class_name ## _values, \
-                              G_N_ELEMENTS (class_name ## _values), \
-                              parser); \
+  SvgValue *value = svg_ ## class_name ## _try_parse (parser); \
   if (value == NULL) \
-    gtk_css_parser_error_syntax (parser, "Unknown #EnumType value"); \
-\
+    gtk_css_parser_error_syntax (parser, "Unknown " #EnumType " value"); \
   return value; \
 }
 
 #define DEFINE_ENUM(CLASS_NAME, class_name, EnumType, ...) \
   DEF_E(CLASS_NAME, class_name, EnumType, svg_value_default_resolve, __VA_ARGS__) \
-  DEF_E_PARSE(class_name)
+  DEF_E_PARSE(class_name, EnumType)
 
 #define DEFINE_ENUM_NO_PARSE(CLASS_NAME, class_name, EnumType, ...) \
   DEF_E(CLASS_NAME, class_name, EnumType, svg_value_default_resolve, __VA_ARGS__)
 
 #define DEFINE_ENUM_CUSTOM_RESOLVE(CLASS_NAME, class_name, EnumType, resolve, ...) \
   DEF_E(CLASS_NAME, class_name, EnumType, resolve, __VA_ARGS__) \
-  DEF_E_PARSE(class_name)
+  DEF_E_PARSE(class_name, EnumType)
 
 DEFINE_ENUM (FILL_RULE, fill_rule, GskFillRule,
   DEFINE_ENUM_VALUE (FILL_RULE, GSK_FILL_RULE_WINDING, "nonzero"),
@@ -627,4 +630,18 @@ DEFINE_ENUM (IMAGE_RENDERING, image_rendering, ImageRendering,
   DEFINE_ENUM_VALUE (IMAGE_RENDERING, IMAGE_RENDERING_AUTO, "auto"),
   DEFINE_ENUM_VALUE (IMAGE_RENDERING, IMAGE_RENDERING_OPTIMIZE_QUALITY, "optimizeQuality"),
   DEFINE_ENUM_VALUE (IMAGE_RENDERING, IMAGE_RENDERING_OPTIMIZE_SPEED, "optimizeSpeed")
+)
+
+DEFINE_ENUM (POINTER_EVENTS, pointer_events, PointerEvents,
+  DEFINE_ENUM_VALUE (POINTER_EVENTS, POINTER_EVENTS_AUTO, "auto"),
+  DEFINE_ENUM_VALUE (POINTER_EVENTS, POINTER_EVENTS_BOUNDING_BOX, "bounding-box"),
+  DEFINE_ENUM_VALUE (POINTER_EVENTS, POINTER_EVENTS_VISIBLE_PAINTED, "visiblePainted"),
+  DEFINE_ENUM_VALUE (POINTER_EVENTS, POINTER_EVENTS_VISIBLE_FILL, "visibleFill"),
+  DEFINE_ENUM_VALUE (POINTER_EVENTS, POINTER_EVENTS_VISIBLE_STROKE, "visibleStroke"),
+  DEFINE_ENUM_VALUE (POINTER_EVENTS, POINTER_EVENTS_VISIBLE, "visible"),
+  DEFINE_ENUM_VALUE (POINTER_EVENTS, POINTER_EVENTS_PAINTED, "painted"),
+  DEFINE_ENUM_VALUE (POINTER_EVENTS, POINTER_EVENTS_FILL, "fill"),
+  DEFINE_ENUM_VALUE (POINTER_EVENTS, POINTER_EVENTS_STROKE, "stroke"),
+  DEFINE_ENUM_VALUE (POINTER_EVENTS, POINTER_EVENTS_ALL, "all"),
+  DEFINE_ENUM_VALUE (POINTER_EVENTS, POINTER_EVENTS_NONE, "none")
 )
