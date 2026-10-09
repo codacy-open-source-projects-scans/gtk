@@ -183,7 +183,7 @@ struct _GtkTextViewClass
 };
 
 GDK_AVAILABLE_IN_ALL
-GType          gtk_text_view_get_type              (void) G_GNUC_CONST;
+GType          gtk_text_view_get_type              (void);
 GDK_AVAILABLE_IN_ALL
 GtkWidget *    gtk_text_view_new                   (void);
 GDK_AVAILABLE_IN_ALL
@@ -430,12 +430,11 @@ void             gtk_text_view_set_extra_menu         (GtkTextView      *text_vi
                                                        GMenuModel       *model);
 GDK_AVAILABLE_IN_ALL
 GMenuModel *     gtk_text_view_get_extra_menu         (GtkTextView      *text_view);
-GDK_AVAILABLE_IN_ALL
+GDK_AVAILABLE_IN_4_4
 PangoContext    *gtk_text_view_get_rtl_context        (GtkTextView      *text_view);
-GDK_AVAILABLE_IN_ALL
+GDK_AVAILABLE_IN_4_4
 PangoContext    *gtk_text_view_get_ltr_context        (GtkTextView      *text_view);
 
 G_DEFINE_AUTOPTR_CLEANUP_FUNC(GtkTextView, g_object_unref)
 
 G_END_DECLS
-

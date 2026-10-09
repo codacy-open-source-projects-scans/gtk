@@ -34,11 +34,17 @@
 
 G_BEGIN_DECLS
 
-#define GDK_VULKAN_CONTEXT_CLASS(klass) 	(G_TYPE_CHECK_CLASS_CAST ((klass), GDK_TYPE_VULKAN_CONTEXT, GdkVulkanContextClass))
-#define GDK_IS_VULKAN_CONTEXT_CLASS(klass)	(G_TYPE_CHECK_CLASS_TYPE ((klass), GDK_TYPE_VULKAN_CONTEXT))
-#define GDK_VULKAN_CONTEXT_GET_CLASS(obj)	(G_TYPE_INSTANCE_GET_CLASS ((obj), GDK_TYPE_VULKAN_CONTEXT, GdkVulkanContextClass))
+typedef struct _GdkVulkanContextFrame GdkVulkanContextFrame;
+typedef struct _GdkVulkanPresent GdkVulkanPresent;
 
-typedef struct _GdkVulkanContextClass GdkVulkanContextClass;
+struct _GdkVulkanContextFrame
+{
+  GdkDrawContextFrame parent;
+
+  GdkVulkanPresent *present;
+  GSource *completion_source;
+  int completion_fd;
+};
 
 struct _GdkVulkanContext
 {
@@ -94,9 +100,9 @@ GdkMemoryFormat         gdk_vulkan_context_get_memory_format            (GdkVulk
 uint32_t                gdk_vulkan_context_get_n_images                 (GdkVulkanContext      *context);
 VkImage                 gdk_vulkan_context_get_image                    (GdkVulkanContext      *context,
                                                                          guint                  id);
-uint32_t                gdk_vulkan_context_get_draw_index               (GdkVulkanContext      *context);
 VkSemaphore             gdk_vulkan_context_get_present_semaphore        (GdkVulkanContext      *context);
 
+uint32_t                gdk_vulkan_context_frame_get_image_index        (GdkVulkanContextFrame *frame);
 #else /* !GDK_RENDERING_VULKAN */
 
 

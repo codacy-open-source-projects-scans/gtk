@@ -212,7 +212,7 @@ struct _GtkTextLineDisplay
 extern G_GNUC_INTERNAL PangoAttrType gtk_text_attr_appearance_type;
 #endif
 
-GType         gtk_text_layout_get_type    (void) G_GNUC_CONST;
+GType         gtk_text_layout_get_type    (void);
 
 GtkTextLayout*     gtk_text_layout_new                   (void);
 void               gtk_text_layout_set_buffer            (GtkTextLayout     *layout,
@@ -245,9 +245,6 @@ gboolean gtk_text_layout_get_cursor_visible (GtkTextLayout     *layout);
 void    gtk_text_layout_get_size  (GtkTextLayout  *layout,
                                    int            *width,
                                    int            *height);
-
-void gtk_text_layout_wrap_loop_start (GtkTextLayout *layout);
-void gtk_text_layout_wrap_loop_end   (GtkTextLayout *layout);
 
 GtkTextLineDisplay* gtk_text_layout_get_line_display  (GtkTextLayout      *layout,
                                                        GtkTextLine        *line,

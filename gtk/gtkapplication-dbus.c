@@ -225,9 +225,9 @@ request_restore (GtkApplicationImplDBus *dbus)
 {
   GtkApplicationImpl *impl = (GtkApplicationImpl*) dbus;
   const char *app_id;
-  g_autoptr (GError) error = NULL;
-  g_autoptr (GVariant) reply = NULL;
-  g_autoptr (GVariantIter) discard_iter = NULL;
+  GError *error = NULL;
+  GVariant *reply;
+  GVariantIter *discard_iter;
   gboolean discarded_any = FALSE;
   GVariantBuilder discarded;
   const char *discard = NULL;
@@ -247,10 +247,13 @@ request_restore (GtkApplicationImplDBus *dbus)
                                        &error);
   if (!reply)
     {
-      if (g_error_matches (error, G_DBUS_ERROR, G_DBUS_ERROR_UNKNOWN_METHOD))
+      if (g_error_matches (error, G_DBUS_ERROR, G_DBUS_ERROR_SERVICE_UNKNOWN))
+        GTK_DEBUG (SESSION, "gnome-session isn't running");
+      else if (g_error_matches (error, G_DBUS_ERROR, G_DBUS_ERROR_UNKNOWN_METHOD))
         GTK_DEBUG (SESSION, "gnome-session does not support session saving");
       else
         g_warning ("Failed to register restore: %s", error->message);
+      g_clear_error (&error);
       return FALSE;
     }
 
@@ -284,6 +287,7 @@ request_restore (GtkApplicationImplDBus *dbus)
       g_variant_builder_add (&discarded, "s", discard);
     }
   g_variant_builder_close (&discarded);
+  g_variant_iter_free (discard_iter);
 
   if (discarded_any)
     g_dbus_connection_call_sync (dbus->session,
@@ -299,6 +303,8 @@ request_restore (GtkApplicationImplDBus *dbus)
                                  NULL);
   else
     g_variant_builder_clear (&discarded);
+
+  g_variant_unref (reply);
 
   return TRUE;
 }
@@ -496,8 +502,7 @@ gtk_application_impl_dbus_publish_menu (GtkApplicationImplDBus  *dbus,
   if (*id)
     {
       g_dbus_connection_unexport_menu_model (dbus->session, *id);
-      g_free (*path);
-      *path = NULL;
+      g_clear_pointer (path, g_free);
       *id = 0;
     }
 

@@ -7,6 +7,7 @@
 
 
 static char *arg_output_dir = NULL;
+static int arg_tolerance = 0;
 
 extern void
 replay_node (GskRenderNode *node, GtkSnapshot *snapshot);
@@ -135,10 +136,12 @@ save_node (GskRenderNode *node,
            const char    *extension)
 {
   char *filename = get_output_file (test_name, variant_name, ".node", extension);
+  GError *error = NULL;
   gboolean result;
 
   g_print ("Storing modified nodes at %s\n", filename);
-  result = gsk_render_node_write_to_file (node, filename, NULL);
+  result = gsk_render_node_write_to_file (node, filename, &error);
+  g_assert_no_error (error);
   g_assert_true (result);
   g_free (filename);
 }
@@ -835,7 +838,7 @@ run_single_test (const TestSetup *setup,
   if (setup->free)
     setup->free (test_data);
 
-  diff = reftest_compare_textures (reference, rendered);
+  diff = reftest_compare_textures_with_tolerance (reference, rendered, arg_tolerance);
   if (diff)
     {
       g_test_fail ();
@@ -931,6 +934,7 @@ int
 main (int argc, char **argv)
 {
   GOptionEntry options[] = {
+    { "tolerance", 't', 0, G_OPTION_ARG_INT, &arg_tolerance, "Tolerance to allow in comparisons", "NUM" },
     { "output", 0, 0, G_OPTION_ARG_FILENAME, &arg_output_dir, "Directory to save image files to", "DIR" },
     { test_setups[0].name, 0, 0, G_OPTION_ARG_NONE, &test_enabled[0], test_setups[0].description, NULL },
     { test_setups[1].name, 0, 0, G_OPTION_ARG_NONE, &test_enabled[1], test_setups[1].description, NULL },

@@ -40,7 +40,7 @@ G_BEGIN_DECLS
 typedef struct _GtkCssSection GtkCssSection;
 
 GDK_AVAILABLE_IN_ALL
-GType              gtk_css_section_get_type            (void) G_GNUC_CONST;
+GType              gtk_css_section_get_type            (void);
 
 GDK_AVAILABLE_IN_ALL
 GtkCssSection *    gtk_css_section_new                 (GFile                *file,
@@ -74,6 +74,8 @@ const GtkCssLocation *
 GDK_AVAILABLE_IN_ALL
 const GtkCssLocation *
                    gtk_css_section_get_end_location    (const GtkCssSection  *section);
+
+G_DEFINE_AUTOPTR_CLEANUP_FUNC(GtkCssSection, gtk_css_section_unref)
 
 G_END_DECLS
 

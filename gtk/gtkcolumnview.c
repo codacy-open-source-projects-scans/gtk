@@ -330,6 +330,22 @@ gtk_column_view_update_cell_factories (GtkColumnView *self,
     }
 }
 
+static GtkSizeRequestMode
+gtk_column_view_get_request_mode (GtkWidget *widget)
+{
+  GtkColumnView *self = GTK_COLUMN_VIEW (widget);
+  GtkSizeRequestMode header_mode, listview_mode;
+
+  header_mode = gtk_widget_get_request_mode (GTK_WIDGET (self->header));
+  listview_mode = gtk_widget_get_request_mode (GTK_WIDGET (self->listview));
+
+  if (header_mode == GTK_SIZE_REQUEST_CONSTANT_SIZE &&
+      listview_mode == GTK_SIZE_REQUEST_CONSTANT_SIZE)
+    return GTK_SIZE_REQUEST_CONSTANT_SIZE;
+  else
+    return GTK_SIZE_REQUEST_HEIGHT_FOR_WIDTH;
+}
+
 static void
 gtk_column_view_measure (GtkWidget      *widget,
                          GtkOrientation  orientation,
@@ -797,6 +813,7 @@ gtk_column_view_class_init (GtkColumnViewClass *klass)
 
   widget_class->focus = gtk_widget_focus_child;
   widget_class->grab_focus = gtk_widget_grab_focus_child;
+  widget_class->get_request_mode = gtk_column_view_get_request_mode;
   widget_class->measure = gtk_column_view_measure;
   widget_class->size_allocate = gtk_column_view_allocate;
   widget_class->root = gtk_column_view_root;
@@ -832,7 +849,7 @@ gtk_column_view_class_init (GtkColumnViewClass *klass)
   properties[PROP_COLUMNS] =
     g_param_spec_object ("columns", NULL, NULL,
                          G_TYPE_LIST_MODEL,
-                         G_PARAM_READABLE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_STRINGS);
+                         G_PARAM_READABLE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_NAME);
 
   /**
    * GtkColumnView:enable-rubberband:
@@ -852,7 +869,7 @@ gtk_column_view_class_init (GtkColumnViewClass *klass)
   properties[PROP_MODEL] =
     g_param_spec_object ("model", NULL, NULL,
                          GTK_TYPE_SELECTION_MODEL,
-                         G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_STRINGS);
+                         G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_NAME);
 
   /**
    * GtkColumnView:reorderable:
@@ -862,7 +879,7 @@ gtk_column_view_class_init (GtkColumnViewClass *klass)
   properties[PROP_REORDERABLE] =
     g_param_spec_boolean ("reorderable", NULL, NULL,
                           TRUE,
-                          G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_STRINGS);
+                          G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_NAME);
 
   /**
    * GtkColumnView:row-factory:
@@ -876,7 +893,7 @@ gtk_column_view_class_init (GtkColumnViewClass *klass)
   properties[PROP_ROW_FACTORY] =
     g_param_spec_object ("row-factory", NULL, NULL,
                          GTK_TYPE_LIST_ITEM_FACTORY,
-                         G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_STRINGS);
+                         G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_NAME);
 
   /**
    * GtkColumnView:show-row-separators:
@@ -906,7 +923,7 @@ gtk_column_view_class_init (GtkColumnViewClass *klass)
   properties[PROP_SORTER] =
     g_param_spec_object ("sorter", NULL, NULL,
                          GTK_TYPE_SORTER,
-                         G_PARAM_READABLE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_STRINGS);
+                         G_PARAM_READABLE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_NAME);
 
   /**
    * GtkColumnView:single-click-activate:
@@ -943,7 +960,7 @@ gtk_column_view_class_init (GtkColumnViewClass *klass)
   properties[PROP_HEADER_FACTORY] =
     g_param_spec_object ("header-factory", NULL, NULL,
                          GTK_TYPE_LIST_ITEM_FACTORY,
-                         G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_STRINGS);
+                         G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_NAME);
 
   g_object_class_install_properties (gobject_class, N_PROPS, properties);
 

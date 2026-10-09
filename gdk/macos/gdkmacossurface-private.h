@@ -36,13 +36,20 @@ G_BEGIN_DECLS
 #define GDK_IS_MACOS_SURFACE_CLASS(klass) (G_TYPE_CHECK_CLASS_TYPE ((klass), GDK_TYPE_MACOS_SURFACE))
 #define GDK_MACOS_SURFACE_GET_CLASS(obj)  (G_TYPE_INSTANCE_GET_CLASS ((obj), GDK_TYPE_MACOS_SURFACE, GdkMacosSurfaceClass))
 
+typedef struct _GdkMacosSurfaceFrame GdkMacosSurfaceFrame;
+
+struct _GdkMacosSurfaceFrame
+{
+  GdkMonitor *monitor;
+  GList throttle;
+};
+
 struct _GdkMacosSurface
 {
   GdkSurface parent_instance;
 
   GList main;
   GList sorted;
-  GList frame;
 
   GdkMacosWindow *window;
   GdkMacosBuffer *buffer;
@@ -63,15 +70,12 @@ struct _GdkMacosSurface
 
   cairo_rectangle_int_t next_frame;
 
-  gint64 pending_frame_counter;
-
   guint did_initial_present : 1;
   guint geometry_dirty : 1;
   guint next_frame_set : 1;
   guint show_on_next_swap : 1;
   guint in_change_monitor : 1;
-  guint in_frame : 1;
-  guint awaiting_frame : 1;
+  guint popup_grab : 1;
 };
 
 struct _GdkMacosSurfaceClass
@@ -87,9 +91,6 @@ const char        *_gdk_macos_surface_get_title               (GdkMacosSurface  
 void               _gdk_macos_surface_set_title               (GdkMacosSurface      *self,
                                                                const char           *title);
 NSView            *_gdk_macos_surface_get_view                (GdkMacosSurface      *self);
-gboolean           _gdk_macos_surface_get_modal_hint          (GdkMacosSurface      *self);
-void               _gdk_macos_surface_set_modal_hint          (GdkMacosSurface      *self,
-                                                               gboolean              modal_hint);
 void               _gdk_macos_surface_set_geometry_hints      (GdkMacosSurface      *self,
                                                                const GdkGeometry    *geometry,
                                                                GdkSurfaceHints       geom_mask);
@@ -97,8 +98,7 @@ void               _gdk_macos_surface_resize                  (GdkMacosSurface  
                                                                int                   width,
                                                                int                   height);
 void               _gdk_macos_surface_update_fullscreen_state (GdkMacosSurface      *self);
-void               _gdk_macos_surface_request_frame           (GdkMacosSurface      *self);
-void               _gdk_macos_surface_frame_presented         (GdkMacosSurface      *self,
+void               gdk_macos_surface_frame_presented          (GdkDrawContextFrame  *frame,
                                                                gint64                predicted_presentation_time,
                                                                gint64                refresh_interval);
 void               _gdk_macos_surface_show                    (GdkMacosSurface      *self);

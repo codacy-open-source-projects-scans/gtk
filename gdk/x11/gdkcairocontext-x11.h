@@ -41,7 +41,6 @@ struct _GdkX11CairoContext
   GdkCairoContext parent_instance;
 
   cairo_surface_t *window_surface;
-  cairo_surface_t *paint_surface;
 };
 
 struct _GdkX11CairoContextClass
@@ -50,7 +49,7 @@ struct _GdkX11CairoContextClass
 };
 
 GDK_AVAILABLE_IN_ALL
-GType gdk_x11_cairo_context_get_type (void) G_GNUC_CONST;
+GType gdk_x11_cairo_context_get_type (void);
 
 G_END_DECLS
 

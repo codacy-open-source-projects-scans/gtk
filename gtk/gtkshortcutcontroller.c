@@ -493,6 +493,21 @@ update_accel (GtkShortcut    *shortcut,
     return;
 
   trigger = gtk_shortcut_get_trigger (shortcut);
+  while (GTK_IS_ALTERNATIVE_TRIGGER (trigger))
+    {
+      for (unsigned int i = 0; i < g_list_model_get_n_items (G_LIST_MODEL (trigger)); i++)
+        {
+          GtkShortcutTrigger *child = g_list_model_get_item (G_LIST_MODEL (trigger), i);
+
+          g_object_unref (child);
+          if (GTK_IS_KEYVAL_TRIGGER (child) || GTK_IS_ALTERNATIVE_TRIGGER (child))
+            {
+              trigger = child;
+              break;
+            }
+        }
+    }
+
   if (!GTK_IS_KEYVAL_TRIGGER (trigger))
     return;
 
@@ -591,7 +606,7 @@ gtk_shortcut_controller_class_init (GtkShortcutControllerClass *klass)
   properties[PROP_ITEM_TYPE] =
     g_param_spec_gtype ("item-type", NULL, NULL,
                         G_TYPE_OBJECT,
-                        G_PARAM_READABLE | G_PARAM_STATIC_STRINGS);
+                        G_PARAM_READABLE | G_PARAM_STATIC_NAME);
 
   /**
    * GtkShortcutController:mnemonic-modifiers: (getter get_mnemonics_modifiers) (setter set_mnemonics_modifiers)
@@ -602,7 +617,7 @@ gtk_shortcut_controller_class_init (GtkShortcutControllerClass *klass)
       g_param_spec_flags ("mnemonic-modifiers", NULL, NULL,
                           GDK_TYPE_MODIFIER_TYPE,
                           GDK_ALT_MASK,
-                          G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_STRINGS);
+                          G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_NAME);
 
   /**
    * GtkShortcutController:model:
@@ -612,7 +627,7 @@ gtk_shortcut_controller_class_init (GtkShortcutControllerClass *klass)
   properties[PROP_MODEL] =
       g_param_spec_object ("model", NULL, NULL,
                            G_TYPE_LIST_MODEL,
-                           G_PARAM_WRITABLE | G_PARAM_CONSTRUCT_ONLY | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_STRINGS);
+                           G_PARAM_WRITABLE | G_PARAM_CONSTRUCT_ONLY | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_NAME);
 
   /**
    * GtkShortcutController:n-items:
@@ -624,7 +639,7 @@ gtk_shortcut_controller_class_init (GtkShortcutControllerClass *klass)
   properties[PROP_N_ITEMS] =
     g_param_spec_uint ("n-items", NULL, NULL,
                        0, G_MAXUINT, 0,
-                       G_PARAM_READABLE | G_PARAM_STATIC_STRINGS);
+                       G_PARAM_READABLE | G_PARAM_STATIC_NAME);
 
   /**
    * GtkShortcutController:scope:
@@ -635,7 +650,7 @@ gtk_shortcut_controller_class_init (GtkShortcutControllerClass *klass)
       g_param_spec_enum ("scope", NULL, NULL,
                          GTK_TYPE_SHORTCUT_SCOPE,
                          GTK_SHORTCUT_SCOPE_LOCAL,
-                         G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_STRINGS);
+                         G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_NAME);
 
   g_object_class_install_properties (object_class, N_PROPS, properties);
 }

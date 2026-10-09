@@ -81,6 +81,7 @@
 #include "gtkmarshalers.h"
 #include "gtkpopovermenu.h"
 #include "gtkprivate.h"
+#include "gtkshortcuttrigger.h"
 #include "gtksizerequest.h"
 #include "gtktooltip.h"
 #include "gtkurilauncher.h"
@@ -114,8 +115,11 @@ enum
 {
   PROP_0,
   PROP_URI,
-  PROP_VISITED
+  PROP_VISITED,
+  N_PROPS
 };
+
+static GParamSpec *props[N_PROPS] = { NULL, };
 
 enum
 {
@@ -176,6 +180,7 @@ gtk_link_button_class_init (GtkLinkButtonClass *klass)
   GObjectClass *gobject_class = G_OBJECT_CLASS (klass);
   GtkWidgetClass *widget_class = GTK_WIDGET_CLASS (klass);
   GtkButtonClass *button_class = GTK_BUTTON_CLASS (klass);
+  GtkShortcut *shortcut;
 
   gobject_class->set_property = gtk_link_button_set_property;
   gobject_class->get_property = gtk_link_button_get_property;
@@ -190,11 +195,9 @@ gtk_link_button_class_init (GtkLinkButtonClass *klass)
    *
    * The URI bound to this button.
    */
-  g_object_class_install_property (gobject_class,
-                                   PROP_URI,
-                                   g_param_spec_string ("uri", NULL, NULL,
-                                                        NULL,
-                                                        GTK_PARAM_READWRITE));
+  props[PROP_URI] = g_param_spec_string ("uri", NULL, NULL,
+                                         NULL,
+                                         G_PARAM_READWRITE | G_PARAM_STATIC_NAME);
 
   /**
    * GtkLinkButton:visited:
@@ -203,11 +206,11 @@ gtk_link_button_class_init (GtkLinkButtonClass *klass)
    *
    * A visited link is drawn in a different color.
    */
-  g_object_class_install_property (gobject_class,
-                                   PROP_VISITED,
-                                   g_param_spec_boolean ("visited", NULL, NULL,
-                                                         FALSE,
-                                                         GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY));
+  props[PROP_VISITED] = g_param_spec_boolean ("visited", NULL, NULL,
+                                              FALSE,
+                                              G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
+
+  g_object_class_install_properties (gobject_class, N_PROPS, props);
 
   /**
    * GtkLinkButton::activate-link:
@@ -255,14 +258,10 @@ gtk_link_button_class_init (GtkLinkButtonClass *klass)
    */
   gtk_widget_class_install_action (widget_class, "menu.popup", NULL, gtk_link_button_popup_menu);
 
-  gtk_widget_class_add_binding_action (widget_class,
-                                       GDK_KEY_F10, GDK_SHIFT_MASK,
-                                       "menu.popup",
-                                       NULL);
-  gtk_widget_class_add_binding_action (widget_class,
-                                       GDK_KEY_Menu, 0,
-                                       "menu.popup",
-                                       NULL);
+  shortcut = gtk_shortcut_new (gtk_shortcut_trigger_create_for_menu (),
+                               gtk_named_action_new ("menu.popup"));
+  gtk_widget_class_add_shortcut (widget_class, shortcut);
+  g_object_unref (shortcut);
 }
 
 static GMenuModel *
@@ -297,7 +296,7 @@ struct _GtkLinkContentClass
   GdkContentProviderClass parent_class;
 };
 
-GType gtk_link_content_get_type (void) G_GNUC_CONST;
+GType gtk_link_content_get_type (void);
 
 G_DEFINE_TYPE (GtkLinkContent, gtk_link_content, GDK_TYPE_CONTENT_PROVIDER)
 
@@ -691,7 +690,7 @@ gtk_link_button_set_uri (GtkLinkButton *link_button,
   g_free (link_button->uri);
   link_button->uri = g_strdup (uri);
 
-  g_object_notify (G_OBJECT (link_button), "uri");
+  g_object_notify_by_pspec (G_OBJECT (link_button), props[PROP_URI]);
 
   gtk_link_button_set_visited (link_button, FALSE);
 }
@@ -749,7 +748,7 @@ gtk_link_button_set_visited (GtkLinkButton *link_button,
           gtk_widget_set_state_flags (GTK_WIDGET (link_button), GTK_STATE_FLAG_LINK, FALSE);
         }
 
-      g_object_notify (G_OBJECT (link_button), "visited");
+      g_object_notify_by_pspec (G_OBJECT (link_button), props[PROP_VISITED]);
     }
 }
 

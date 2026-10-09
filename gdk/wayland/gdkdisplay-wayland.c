@@ -51,7 +51,7 @@
 #include "gdkshm-private.h"
 #include "gdksettings-wayland.h"
 #include "gdkapplaunchcontext-wayland.h"
-#include "gdkeventsource.h"
+#include "gdkeventsourceprivate.h"
 #include "gdkwaylandprivate.h"
 
 #include <wayland/pointer-gestures-unstable-v1-client-protocol.h>
@@ -65,8 +65,6 @@
 #include "color-management-v1-client-protocol.h"
 #include "color-representation-v1-client-protocol.h"
 #include "xdg-session-management-v1-client-protocol.h"
-
-#include "wm-button-layout-translation.h"
 
 #include "gdk/gdkprivate.h"
 
@@ -99,39 +97,44 @@
 
 #define MIN_SYSTEM_BELL_DELAY_MS 20
 
+#define ACTIVATION_VERSION              1
+#define BACKGROUND_EFFECT_VERSION       1
 #define COMPOSITOR_VERSION              6
-#define SHM_VERSION                     1
-#define LINUX_DMABUF_MIN_VERSION        4
-#define LINUX_DMABUF_VERSION            5
+#define CURSOR_SHAPE_VERSION            2
 #define DATA_DEVICE_MANAGER_VERSION     3
-#define SUBCOMPOSITOR_VERSION           1
-#define SEAT_VERSION                    10
-#define POINTER_GESTURES_VERSION        3
-#define PRIMARY_SELECTION_VERSION       1
-#define OUTPUT_MIN_VERSION              2
-#define OUTPUT_VERSION                  4
-#define XDG_OUTPUT_MIN_VERSION          3
-#define XDG_OUTPUT_VERSION              3
-#define TABLET_VERSION                  2
 #define EXPORTER_V1_VERSION             1
 #define EXPORTER_V2_VERSION             1
+#define FRACTIONAL_SCALE_VERSION        1
+#define GTK_SHELL1_VERSION              7
+#define IDLE_INHIBIT_VERSION            1
 #define IMPORTER_V1_VERSION             1
 #define IMPORTER_V2_VERSION             1
-#define SHORTCUTS_INHIBIT_VERSION       1
-#define SERVER_DECORATION_VERSION       1
-#define XDG_OUTPUT_VERSION              3
-#define IDLE_INHIBIT_VERSION            1
-#define ACTIVATION_VERSION              1
-#define FRACTIONAL_SCALE_VERSION        1
-#define VIEWPORTER_VERSION              1
+#define LINUX_DMABUF_MIN_VERSION        4
+#define LINUX_DMABUF_VERSION            5
+#define OUTPUT_MIN_VERSION              2
+#define OUTPUT_VERSION                  4
+#define POINTER_GESTURES_VERSION        3
 #define PRESENTATION_VERSION            1
+#define PRIMARY_SELECTION_VERSION       1
+#define SEAT_VERSION                    10
+#define SERVER_DECORATION_VERSION       1
+#define SHM_VERSION                     1
+#define SHORTCUTS_INHIBIT_VERSION       1
 #define SINGLE_PIXEL_BUFFER_VERSION     1
 #define SYSTEM_BELL_VERSION             1
-#define CURSOR_SHAPE_VERSION            2
-#define GTK_SHELL1_VERSION              7
-#define XDG_WM_DIALOG_VERSION           1
+#define SUBCOMPOSITOR_VERSION           1
+#define TABLET_VERSION                  2
+#define VIEWPORTER_VERSION              1
+#define XDG_OUTPUT_MIN_VERSION          3
+#define XDG_OUTPUT_VERSION              3
 #define XDG_TOPLEVEL_ICON_VERSION       1
 #define XDG_WM_BASE_VERSION             7
+#ifdef WL_FIXES_ACK_GLOBAL_REMOVE
+#define WL_FIXES_VERSION                2
+#else
+#define WL_FIXES_VERSION                1
+#endif
+#define XDG_WM_DIALOG_VERSION           1
 
 G_DEFINE_TYPE (GdkWaylandDisplay, gdk_wayland_display, GDK_TYPE_DISPLAY)
 
@@ -743,6 +746,18 @@ gdk_registry_handle_global (void               *data,
         wl_registry_bind (display_wayland->wl_registry, id,
                           &xdg_toplevel_icon_manager_v1_interface, XDG_TOPLEVEL_ICON_VERSION);
     }
+  else if (match_global (display_wayland, interface, version, wl_fixes_interface.name, 0))
+    {
+      display_wayland->wl_fixes =
+        wl_registry_bind (display_wayland->wl_registry, id,
+                          &wl_fixes_interface, MIN (version, WL_FIXES_VERSION));
+    }
+  else if (match_global (display_wayland, interface, version, ext_background_effect_manager_v1_interface.name, 0))
+    {
+      display_wayland->ext_background_effect_manager =
+        wl_registry_bind (display_wayland->wl_registry, id,
+                          &ext_background_effect_manager_v1_interface, BACKGROUND_EFFECT_VERSION);
+    }
 
   g_hash_table_insert (display_wayland->known_globals,
                        GUINT_TO_POINTER (id), g_strdup (interface));
@@ -763,6 +778,11 @@ gdk_registry_handle_global_remove (void               *data,
   g_hash_table_remove (display_wayland->known_globals, GUINT_TO_POINTER (id));
 
   /* FIXME: the object needs to be destroyed here, we're leaking */
+
+#ifdef WL_FIXES_ACK_GLOBAL_REMOVE
+  if (display_wayland->wl_fixes && wl_fixes_get_version (display_wayland->wl_fixes) >= WL_FIXES_ACK_GLOBAL_REMOVE_SINCE_VERSION)
+    wl_fixes_ack_global_remove (display_wayland->wl_fixes, registry, id);
+#endif
 }
 
 static const struct wl_registry_listener registry_listener = {
@@ -907,11 +927,7 @@ gdk_wayland_display_dispose (GObject *object)
   g_clear_list (&display_wayland->async_roundtrips,
                 (GDestroyNotify) wl_callback_destroy);
 
-  if (display_wayland->known_globals)
-    {
-      g_hash_table_destroy (display_wayland->known_globals);
-      display_wayland->known_globals = NULL;
-    }
+  g_clear_pointer (&display_wayland->known_globals, g_hash_table_destroy);
 
   g_clear_list (&display_wayland->on_has_globals_closures, g_free);
 
@@ -946,6 +962,12 @@ gdk_wayland_display_dispose (GObject *object)
   g_clear_pointer (&display_wayland->session_manager, xdg_session_manager_v1_destroy);
 
   g_clear_pointer (&display_wayland->shm, wl_shm_destroy);
+
+  if (display_wayland->wl_fixes)
+    {
+      wl_fixes_destroy_registry (display_wayland->wl_fixes, display_wayland->wl_registry);
+      g_clear_pointer (&display_wayland->wl_fixes, wl_fixes_destroy);
+    }
   g_clear_pointer (&display_wayland->wl_registry, wl_registry_destroy);
 
   g_list_store_remove_all (display_wayland->monitors);
@@ -1017,8 +1039,7 @@ gdk_wayland_display_make_default (GdkDisplay *display)
   GdkWaylandDisplay *display_wayland = GDK_WAYLAND_DISPLAY (display);
   const char *startup_id;
 
-  g_free (display_wayland->startup_notification_id);
-  display_wayland->startup_notification_id = NULL;
+  g_clear_pointer (&display_wayland->startup_notification_id, g_free);
 
   startup_id = gdk_get_startup_notification_id ();
   if (startup_id)
@@ -1071,8 +1092,7 @@ _gdk_wayland_display_get_keymap (GdkDisplay *display)
 
   if (core_keyboard && tmp_keymap)
     {
-      g_object_unref (tmp_keymap);
-      tmp_keymap = NULL;
+      g_clear_object (&tmp_keymap);
     }
 
   if (core_keyboard)
@@ -1171,13 +1191,13 @@ G_GNUC_END_IGNORE_DEPRECATIONS
 }
 
 static void
-gdk_wayland_display_init (GdkWaylandDisplay *display)
+gdk_wayland_display_init (GdkWaylandDisplay *self)
 {
-  GdkWaylandDisplay *display_wayland = GDK_WAYLAND_DISPLAY (display);
+  self->cursor_theme_size = 24;
+  self->xkb_context = xkb_context_new (0);
+  self->monitors = g_list_store_new (GDK_TYPE_MONITOR);
 
-  display_wayland->cursor_theme_size = 24;
-  display->xkb_context = xkb_context_new (0);
-  display->monitors = g_list_store_new (GDK_TYPE_MONITOR);
+  gdk_display_set_prefer_vulkan (GDK_DISPLAY (self), TRUE);
 }
 
 /* }}} */

@@ -30,6 +30,7 @@
 #include <gdk/gdkdebugprivate.h>
 
 #include "gtkcsstypesprivate.h"
+#include "gtkenumsprivate.h"
 #include "gtktexthandleprivate.h"
 #include "gtkplacessidebarprivate.h"
 #include "gtkeventcontrollerprivate.h"
@@ -37,10 +38,6 @@
 #include "gtkdebug.h"
 
 G_BEGIN_DECLS
-
-#define GTK_PARAM_READABLE G_PARAM_READABLE|G_PARAM_STATIC_NAME|G_PARAM_STATIC_NICK|G_PARAM_STATIC_BLURB
-#define GTK_PARAM_WRITABLE G_PARAM_WRITABLE|G_PARAM_STATIC_NAME|G_PARAM_STATIC_NICK|G_PARAM_STATIC_BLURB
-#define GTK_PARAM_READWRITE G_PARAM_READWRITE|G_PARAM_STATIC_NAME|G_PARAM_STATIC_NICK|G_PARAM_STATIC_BLURB
 
 #define OPPOSITE_ORIENTATION(_orientation) (1 - (_orientation))
 
@@ -54,11 +51,11 @@ G_BEGIN_DECLS
 #define gtk_internal_return_val_if_fail(__expr, __val) g_return_val_if_fail(__expr, __val)
 #endif
 
-const char * _gtk_get_datadir            (void) G_GNUC_CONST;
-const char * _gtk_get_libdir             (void) G_GNUC_CONST;
-const char * _gtk_get_sysconfdir         (void) G_GNUC_CONST;
-const char * _gtk_get_localedir          (void) G_GNUC_CONST;
-const char * _gtk_get_data_prefix        (void) G_GNUC_CONST;
+const char * _gtk_get_datadir            (void);
+const char * _gtk_get_libdir             (void);
+const char * _gtk_get_sysconfdir         (void);
+const char * _gtk_get_localedir          (void);
+const char * _gtk_get_data_prefix        (void);
 
 gboolean      _gtk_fnmatch                (const char *pattern,
                                            const char *string,
@@ -129,7 +126,6 @@ void            gtk_set_display_debug_flags        (GdkDisplay    *display,
 GtkDebugFlags   gtk_get_display_debug_flags        (GdkDisplay    *display);
 gboolean        gtk_get_any_display_debug_flag_set (void);
 
-GBytes *get_emoji_data (void);
 
 #define GTK_DISPLAY_DEBUG_CHECK(display,type)                   \
   (gtk_get_any_display_debug_flag_set () &&                     \

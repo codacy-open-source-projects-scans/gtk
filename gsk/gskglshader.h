@@ -122,7 +122,7 @@ void     gsk_gl_shader_get_arg_vec4  (GskGLShader     *shader,
                                       graphene_vec4_t *out_value);
 
 GDK_DEPRECATED_IN_4_16_FOR(GtkGLArea)
-GType   gsk_shader_args_builder_get_type  (void) G_GNUC_CONST;
+GType   gsk_shader_args_builder_get_type  (void);
 
 GDK_DEPRECATED_IN_4_16_FOR(GtkGLArea)
 GskShaderArgsBuilder *gsk_shader_args_builder_new           (GskGLShader *shader,
@@ -165,6 +165,8 @@ void    gsk_shader_args_builder_set_vec4  (GskShaderArgsBuilder *builder,
                                            int                    idx,
                                            const graphene_vec4_t *value);
 
+
+G_DEFINE_AUTOPTR_CLEANUP_FUNC(GskShaderArgsBuilder, gsk_shader_args_builder_unref)
 
 G_END_DECLS
 

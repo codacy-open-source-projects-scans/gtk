@@ -36,9 +36,9 @@
 
 G_BEGIN_DECLS
 
-GType gdk_x11_toplevel_get_type (void) G_GNUC_CONST;
-GType gdk_x11_popup_get_type (void) G_GNUC_CONST;
-GType gdk_x11_drag_surface_get_type (void) G_GNUC_CONST;
+GType gdk_x11_toplevel_get_type (void);
+GType gdk_x11_popup_get_type (void);
+GType gdk_x11_drag_surface_get_type (void);
 
 #define GDK_TYPE_X11_TOPLEVEL (gdk_x11_toplevel_get_type ())
 #define GDK_TYPE_X11_POPUP (gdk_x11_popup_get_type ())
@@ -46,6 +46,7 @@ GType gdk_x11_drag_surface_get_type (void) G_GNUC_CONST;
 
 typedef struct _GdkToplevelX11 GdkToplevelX11;
 typedef struct _GdkXPositionInfo GdkXPositionInfo;
+typedef struct _GdkX11SurfaceFrame GdkX11SurfaceFrame;
 
 struct _GdkX11Surface
 {
@@ -62,6 +63,7 @@ struct _GdkX11Surface
   guint frame_clock_connected : 1;
   guint frame_sync_enabled : 1;
   guint tracking_damage: 1;
+  guint popup_grab : 1;
 
   int surface_scale;
 
@@ -104,6 +106,7 @@ struct _GdkX11Surface
   guint64 map_time;
 
   GList *surface_is_on_monitor;
+  GSList *pending_frames;
 };
  
 struct _GdkX11SurfaceClass 
@@ -156,9 +159,6 @@ struct _GdkToplevelX11
   /* If we're waiting for damage from the X server after painting a frame */
   guint frame_still_painting : 1;
 
-  /* If we're expecting a response from the compositor after painting a frame */
-  guint frame_pending : 1;
-
   /* Whether pending_counter_value/configure_counter_value are updates
    * to the extended update counter */
   guint pending_counter_value_is_extended : 1;
@@ -194,11 +194,13 @@ struct _GdkToplevelX11
 				 * ConfigureNotify
 				 */
   gint64 current_counter_value;
-
-  /* After a _NET_WM_FRAME_DRAWN message, this is the soonest that we think
-   * frame after will be presented */
-  gint64 throttled_presentation_time;
 #endif
+};
+
+struct _GdkX11SurfaceFrame
+{
+  guint64 serial;
+  gint64 drawn_time;
 };
 
 GdkSurface     *gdk_x11_drag_surface_new             (GdkDisplay *display);
@@ -210,6 +212,9 @@ GdkCursor      *_gdk_x11_surface_get_cursor          (GdkSurface *window);
 void            _gdk_x11_surface_set_surface_scale   (GdkSurface *window,
                                                       int        scale);
 gboolean        _gdk_x11_surface_syncs_frames        (GdkSurface *surface);
+GdkDrawContextFrame *
+                gdk_x11_surface_find_frame           (GdkSurface *surface,
+                                                      guint64     serial);
 
 void            gdk_x11_surface_pre_damage           (GdkSurface *surface);
 

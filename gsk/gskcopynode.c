@@ -213,6 +213,7 @@ gsk_copy_node_analyze_child (GskCopyNode   *self,
     case GSK_ISOLATION_NODE:
     case GSK_DISPLACEMENT_NODE:
     case GSK_ARITHMETIC_NODE:
+    case GSK_TURBULENCE_NODE:
       for (i = 0; i < n_children; i++)
         {
           gsk_copy_node_analyze_child (self, children[i], depth);
@@ -248,6 +249,7 @@ gsk_copy_node_new (GskRenderNode *child)
   self = gsk_render_node_alloc (GSK_TYPE_COPY_NODE);
   node = (GskRenderNode *) self;
   node->fully_opaque = child->fully_opaque;
+  node->bilevel_opacity = gsk_render_node_is_bilevel_opacity (child);
 
   self->child = gsk_render_node_ref (child);
 

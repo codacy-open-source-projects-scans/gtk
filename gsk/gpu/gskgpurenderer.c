@@ -142,18 +142,23 @@ gsk_gpu_renderer_dmabuf_downloader_download (GdkDmabufDownloader   *downloader,
                                              GdkColorState         *color_state)
 {
   GskGpuRenderer *self = GSK_GPU_RENDERER (downloader);
+  GskGpuRendererPrivate *priv = gsk_gpu_renderer_get_instance_private (self);
   GskGpuFrame *frame;
   gpointer previous;
   gboolean retval = FALSE;
+  gint64 timestamp;
 
   previous = gsk_gpu_renderer_save_current (self);
+
+  timestamp = g_get_monotonic_time ();
+  gsk_gpu_device_maybe_gc (priv->device, timestamp);
 
   gsk_gpu_renderer_make_current (self);
 
   frame = gsk_gpu_renderer_get_frame (self);
 
   if (gsk_gpu_frame_download_texture (frame,
-                                      g_get_monotonic_time (),
+                                      timestamp,
                                       GDK_TEXTURE (texture),
                                       data,
                                       layout,
@@ -173,6 +178,8 @@ gsk_gpu_renderer_dmabuf_downloader_download (GdkDmabufDownloader   *downloader,
     }
 
   gsk_gpu_renderer_restore_current (self, previous);
+
+  gsk_gpu_device_queue_gc (priv->device);
 
   return retval;
 }
@@ -440,13 +447,11 @@ gsk_gpu_renderer_render (GskRenderer          *renderer,
 {
   GskGpuRenderer *self = GSK_GPU_RENDERER (renderer);
   GskGpuRendererPrivate *priv = gsk_gpu_renderer_get_instance_private (self);
+  GdkDrawContextFrame *draw_frame;
   GskGpuFrame *frame;
   GskGpuImage *backbuffer;
   cairo_region_t *render_region;
-  graphene_rect_t opaque_tmp;
-  const graphene_rect_t *opaque;
   double scale;
-  GdkMemoryDepth depth;
   gint64 timestamp;
 
   if (cairo_region_is_empty (region))
@@ -460,19 +465,14 @@ gsk_gpu_renderer_render (GskRenderer          *renderer,
 
   gsk_gpu_renderer_make_current (self);
 
-  depth = gsk_render_node_get_preferred_depth (root);
   frame = gsk_gpu_renderer_get_frame (self);
   scale = gdk_surface_get_scale (gdk_draw_context_get_surface (priv->context));
 
-  if (gsk_render_node_get_opaque_rect (root, &opaque_tmp))
-    opaque = &opaque_tmp;
-  else
-    opaque = NULL;
-  gsk_gpu_frame_begin (frame, priv->context, depth, region, opaque);
+  draw_frame = gsk_gpu_frame_begin (frame, priv->context, root, region);
 
-  backbuffer = GSK_GPU_RENDERER_GET_CLASS (self)->get_backbuffer (self);
+  backbuffer = GSK_GPU_RENDERER_GET_CLASS (self)->get_backbuffer (self, draw_frame);
 
-  render_region = cairo_region_copy (gdk_draw_context_get_render_region (priv->context));
+  render_region = cairo_region_copy (gdk_draw_context_frame_get_damage (draw_frame));
 
   if (!(priv->optimizations & GSK_GPU_OPTIMIZE_DAMAGE))
     {
@@ -486,7 +486,7 @@ gsk_gpu_renderer_render (GskRenderer          *renderer,
   gsk_gpu_frame_render (frame,
                         timestamp,
                         backbuffer,
-                        gdk_draw_context_get_color_state (priv->context),
+                        gdk_draw_context_frame_get_color_state (draw_frame),
                         render_region,
                         root,
                         &GRAPHENE_RECT_INIT (

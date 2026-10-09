@@ -120,7 +120,7 @@ struct _GtkTreeExpander
   GtkWidget *child;
 
   GtkWidget *expander_icon;
-  guint notify_handler;
+  gulong notify_handler;
 
   gboolean hide_expander;
   gboolean indent_for_depth;
@@ -362,8 +362,7 @@ gtk_tree_expander_clear_list_row (GtkTreeExpander *self)
   if (self->list_row == NULL)
     return;
 
-  g_signal_handler_disconnect (self->list_row, self->notify_handler);
-  self->notify_handler = 0;
+  g_clear_signal_handler (&self->notify_handler, self->list_row);
   g_clear_object (&self->list_row);
 }
 
@@ -372,11 +371,7 @@ gtk_tree_expander_dispose (GObject *object)
 {
   GtkTreeExpander *self = GTK_TREE_EXPANDER (object);
 
-  if (self->expand_timer)
-    {
-      g_source_remove (self->expand_timer);
-      self->expand_timer = 0;
-    }
+  g_clear_handle_id (&self->expand_timer, g_source_remove);
 
   gtk_tree_expander_clear_list_row (self);
   gtk_tree_expander_update_for_list_row (self);
@@ -560,7 +555,7 @@ gtk_tree_expander_class_init (GtkTreeExpanderClass *klass)
   properties[PROP_CHILD] =
     g_param_spec_object ("child", NULL, NULL,
                          GTK_TYPE_WIDGET,
-                         G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_STRINGS);
+                         G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_NAME);
 
   /**
    * GtkTreeExpander:hide-expander:
@@ -611,7 +606,7 @@ gtk_tree_expander_class_init (GtkTreeExpanderClass *klass)
   properties[PROP_ITEM] =
       g_param_spec_object ("item", NULL, NULL,
                            G_TYPE_OBJECT,
-                           G_PARAM_READABLE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_STRINGS);
+                           G_PARAM_READABLE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_NAME);
 
   /**
    * GtkTreeExpander:list-row:
@@ -621,7 +616,7 @@ gtk_tree_expander_class_init (GtkTreeExpanderClass *klass)
   properties[PROP_LIST_ROW] =
     g_param_spec_object ("list-row", NULL, NULL,
                          GTK_TYPE_TREE_LIST_ROW,
-                         G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_STRINGS);
+                         G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_NAME);
 
   g_object_class_install_properties (gobject_class, N_PROPS, properties);
 
@@ -656,21 +651,21 @@ gtk_tree_expander_class_init (GtkTreeExpanderClass *klass)
                                    NULL,
                                    gtk_tree_expander_toggle_expand);
 
-  gtk_widget_class_add_binding_action (widget_class, GDK_KEY_plus, 0,
+  gtk_widget_class_add_binding_action (widget_class, GDK_KEY_plus, GDK_NO_MODIFIER_MASK,
                                        "listitem.expand", NULL);
-  gtk_widget_class_add_binding_action (widget_class, GDK_KEY_KP_Add, 0,
+  gtk_widget_class_add_binding_action (widget_class, GDK_KEY_KP_Add, GDK_NO_MODIFIER_MASK,
                                        "listitem.expand", NULL);
-  gtk_widget_class_add_binding_action (widget_class, GDK_KEY_asterisk, 0,
+  gtk_widget_class_add_binding_action (widget_class, GDK_KEY_asterisk, GDK_NO_MODIFIER_MASK,
                                        "listitem.expand", NULL);
-  gtk_widget_class_add_binding_action (widget_class, GDK_KEY_KP_Multiply, 0,
+  gtk_widget_class_add_binding_action (widget_class, GDK_KEY_KP_Multiply, GDK_NO_MODIFIER_MASK,
                                        "listitem.expand", NULL);
-  gtk_widget_class_add_binding_action (widget_class, GDK_KEY_minus, 0,
+  gtk_widget_class_add_binding_action (widget_class, GDK_KEY_minus, GDK_NO_MODIFIER_MASK,
                                        "listitem.collapse", NULL);
-  gtk_widget_class_add_binding_action (widget_class, GDK_KEY_KP_Subtract, 0,
+  gtk_widget_class_add_binding_action (widget_class, GDK_KEY_KP_Subtract, GDK_NO_MODIFIER_MASK,
                                        "listitem.collapse", NULL);
-  gtk_widget_class_add_binding_action (widget_class, GDK_KEY_slash, 0,
+  gtk_widget_class_add_binding_action (widget_class, GDK_KEY_slash, GDK_NO_MODIFIER_MASK,
                                        "listitem.collapse", NULL);
-  gtk_widget_class_add_binding_action (widget_class, GDK_KEY_KP_Divide, 0,
+  gtk_widget_class_add_binding_action (widget_class, GDK_KEY_KP_Divide, GDK_NO_MODIFIER_MASK,
                                        "listitem.collapse", NULL);
 
   gtk_widget_class_add_binding (widget_class, GDK_KEY_Right, GDK_SHIFT_MASK,
@@ -697,7 +692,7 @@ gtk_tree_expander_class_init (GtkTreeExpanderClass *klass)
 
 #if 0
   /* These can't be implements yet. */
-  gtk_widget_class_add_binding (widget_class, GDK_KEY_BackSpace, 0, go_to_parent_row, NULL, NULL);
+  gtk_widget_class_add_binding (widget_class, GDK_KEY_BackSpace, GDK_NO_MODIFIER_MASK, go_to_parent_row, NULL, NULL);
   gtk_widget_class_add_binding (widget_class, GDK_KEY_BackSpace, GDK_CONTROL_MASK, go_to_parent_row, NULL, NULL);
 #endif
 
@@ -706,7 +701,7 @@ gtk_tree_expander_class_init (GtkTreeExpanderClass *klass)
   gtk_widget_class_set_accessible_role (widget_class, GTK_ACCESSIBLE_ROLE_BUTTON);
 }
 
-static gboolean
+static void
 gtk_tree_expander_expand_timeout (gpointer data)
 {
   GtkTreeExpander *self = GTK_TREE_EXPANDER (data);
@@ -715,8 +710,6 @@ gtk_tree_expander_expand_timeout (gpointer data)
     gtk_tree_list_row_set_expanded (self->list_row, TRUE);
 
   self->expand_timer = 0;
-
-  return G_SOURCE_REMOVE;
 }
 
 #define TIMEOUT_EXPAND 500
@@ -733,7 +726,7 @@ gtk_tree_expander_drag_enter (GtkDropControllerMotion *motion,
   if (!gtk_tree_list_row_get_expanded (self->list_row) &&
       !self->expand_timer)
     {
-      self->expand_timer = g_timeout_add (TIMEOUT_EXPAND, (GSourceFunc) gtk_tree_expander_expand_timeout, self);
+      self->expand_timer = g_timeout_add_once (TIMEOUT_EXPAND, (GSourceOnceFunc) gtk_tree_expander_expand_timeout, self);
       gdk_source_set_static_name_by_id (self->expand_timer, "[gtk] gtk_tree_expander_expand_timeout");
     }
 }
@@ -742,11 +735,7 @@ static void
 gtk_tree_expander_drag_leave (GtkDropControllerMotion *motion,
                               GtkTreeExpander         *self)
 {
-  if (self->expand_timer)
-    {
-      g_source_remove (self->expand_timer);
-      self->expand_timer = 0;
-    }
+  g_clear_handle_id (&self->expand_timer, g_source_remove);
 }
 
 static void

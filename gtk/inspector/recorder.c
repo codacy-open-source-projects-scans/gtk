@@ -51,6 +51,7 @@
 #include <gsk/gskcolornodeprivate.h>
 #include <gsk/gskcomponenttransfernodeprivate.h>
 #include <gsk/gskcopypasteutilsprivate.h>
+#include <gsk/gskdisplacementnodeprivate.h>
 #include <gsk/gskinsetshadownodeprivate.h>
 #include <gsk/gskoutsetshadownodeprivate.h>
 #include <gsk/gskrendererprivate.h>
@@ -59,6 +60,7 @@
 #include <gsk/gskshadownodeprivate.h>
 #include <gsk/gsktextnodeprivate.h>
 #include <gsk/gsktransformprivate.h>
+#include <gsk/gskturbulencenodeprivate.h>
 #include <gsk/gskcomponenttransferprivate.h>
 #include <gsk/gskdisplacementnodeprivate.h>
 
@@ -108,6 +110,8 @@ enum {
   OBJECT_PROPERTY_PROP_TEXTURE,
   OBJECT_PROPERTY_NUM_PROPERTIES
 };
+
+static GParamSpec *obj_props[OBJECT_PROPERTY_NUM_PROPERTIES] = { NULL, };
 
 G_DEFINE_TYPE (ObjectProperty, object_property, G_TYPE_OBJECT);
 
@@ -161,31 +165,29 @@ static void
 object_property_class_init (ObjectPropertyClass *class)
 {
   GObjectClass *object_class = G_OBJECT_CLASS (class);
-  GParamSpec *pspec;
 
   object_class->finalize = object_property_finalize;
   object_class->get_property = object_property_get_property;
 
-  pspec = g_param_spec_string ("name", NULL, NULL,
-                               NULL,
-                               G_PARAM_READABLE |
-                               G_PARAM_STATIC_STRINGS);
+  obj_props[OBJECT_PROPERTY_PROP_NAME] = g_param_spec_string ("name", NULL, NULL,
+                                                              NULL,
+                                                              G_PARAM_READABLE |
+                                                              G_PARAM_STATIC_NAME);
 
-  g_object_class_install_property (object_class, OBJECT_PROPERTY_PROP_NAME, pspec);
 
-  pspec = g_param_spec_string ("value", NULL, NULL,
-                               NULL,
-                               G_PARAM_READABLE |
-                               G_PARAM_STATIC_STRINGS);
+  obj_props[OBJECT_PROPERTY_PROP_VALUE] = g_param_spec_string ("value", NULL, NULL,
+                                                               NULL,
+                                                               G_PARAM_READABLE |
+                                                               G_PARAM_STATIC_NAME);
 
-  g_object_class_install_property (object_class, OBJECT_PROPERTY_PROP_VALUE, pspec);
 
-  pspec = g_param_spec_object ("texture", NULL, NULL,
-                               GDK_TYPE_TEXTURE,
-                               G_PARAM_READABLE |
-                               G_PARAM_STATIC_STRINGS);
+  obj_props[OBJECT_PROPERTY_PROP_TEXTURE] = g_param_spec_object ("texture", NULL, NULL,
+                                                                 GDK_TYPE_TEXTURE,
+                                                                 G_PARAM_READABLE |
+                                                                 G_PARAM_STATIC_NAME);
 
-  g_object_class_install_property (object_class, OBJECT_PROPERTY_PROP_TEXTURE, pspec);
+
+  g_object_class_install_properties (object_class, OBJECT_PROPERTY_NUM_PROPERTIES, obj_props);
 }
 
 static ObjectProperty *
@@ -362,6 +364,8 @@ node_type_name (GskRenderNodeType type)
       return "Displacement";
     case GSK_ARITHMETIC_NODE:
       return "Arithmetic";
+    case GSK_TURBULENCE_NODE:
+      return "Turbulence";
     }
 }
 
@@ -406,6 +410,7 @@ node_name (GskRenderNode *node)
     case GSK_ISOLATION_NODE:
     case GSK_DISPLACEMENT_NODE:
     case GSK_ARITHMETIC_NODE:
+    case GSK_TURBULENCE_NODE:
       return g_strdup (node_type_name (gsk_render_node_get_node_type (node)));
 
     case GSK_DEBUG_NODE:
@@ -1016,6 +1021,23 @@ add_rect_row (GListStore            *store,
                        rect->size.height);
 }
 
+static void G_GNUC_UNUSED
+add_snap_row (GListStore *store,
+              const char *name,
+              GskRectSnap snap)
+{
+  char *names[4];
+  gsize i;
+
+  for (i = 0; i < 4; i++)
+    names[i] = g_enum_to_string (GSK_TYPE_SNAP_DIRECTION, gsk_rect_snap_get_direction (snap, i));
+
+  add_text_row (store, name, "%s %s %s %s", names[0], names[1], names[2], names[3]);
+
+  for (i = 0; i < 4; i++)
+    g_free (names[i]);
+}
+
 static void
 populate_render_node_properties (GListStore            *store,
                                  GskRenderNode         *node,
@@ -1072,6 +1094,7 @@ populate_render_node_properties (GListStore            *store,
         GdkTexture *texture = gsk_texture_node_get_texture (node);
 
         add_texture_rows (store, texture);
+        add_snap_row (store, "Snap", gsk_texture_node_get_snap (node));
       }
       break;
 
@@ -1082,6 +1105,7 @@ populate_render_node_properties (GListStore            *store,
         gchar *tmp;
 
         add_texture_rows (store, texture);
+        add_snap_row (store, "Snap", gsk_texture_scale_node_get_snap (node));
 
         tmp = g_enum_to_string (GSK_TYPE_SCALING_FILTER, filter);
         add_text_row (store, "Filter", "%s", tmp);
@@ -1091,6 +1115,7 @@ populate_render_node_properties (GListStore            *store,
 
     case GSK_COLOR_NODE:
       add_color_row (store, "Color", gsk_color_node_get_gdk_color (node));
+      add_snap_row (store, "Snap", gsk_color_node_get_snap (node));
       break;
 
     case GSK_LINEAR_GRADIENT_NODE:
@@ -1108,6 +1133,7 @@ populate_render_node_properties (GListStore            *store,
         GString *s;
         GdkTexture *texture;
 
+        add_snap_row (store, "Snap", gsk_linear_gradient_node_get_snap (node));
         add_text_row (store, "Direction", "%.2f %.2f ⟶ %.2f %.2f", start->x, start->y, end->x, end->y);
         add_text_row (store, "Interpolation", "%s", gdk_color_state_get_name (interpolation));
         add_text_row (store, "Hue Interpolation", "%s", hue_interpolation_to_string (hue_interpolation));
@@ -1150,6 +1176,7 @@ populate_render_node_properties (GListStore            *store,
         GString *s;
         GdkTexture *texture;
 
+        add_snap_row (store, "Snap", gsk_radial_gradient_node_get_snap (node));
         add_text_row (store, "Center", "%.2f, %.2f", center->x, center->y);
         add_text_row (store, "Direction", "%.2f ⟶  %.2f", start, end);
         add_text_row (store, "Radius", "%.2f, %.2f", hradius, vradius);
@@ -1189,6 +1216,7 @@ populate_render_node_properties (GListStore            *store,
         GString *s;
         GdkTexture *texture;
 
+        add_snap_row (store, "Snap", gsk_conic_gradient_node_get_snap (node));
         add_text_row (store, "Center", "%.2f, %.2f", center->x, center->y);
         add_text_row (store, "Rotation", "%.2f", rotation);
         add_text_row (store, "Interpolation", "%s", gdk_color_state_get_name (interpolation));
@@ -1262,6 +1290,7 @@ populate_render_node_properties (GListStore            *store,
         const GdkColor *colors = gsk_border_node_get_gdk_colors (node);
         int i;
 
+        add_snap_row (store, "Snap", gsk_border_node_get_snap (node));
         for (i = 0; i < 4; i++)
           {
             GdkTexture *texture;
@@ -1276,6 +1305,7 @@ populate_render_node_properties (GListStore            *store,
             g_free (text);
             g_free (tmp);
           }
+        add_snap_row (store, "Border Snap", gsk_border_node_get_border_snap (node));
       }
       break;
 
@@ -1305,7 +1335,14 @@ populate_render_node_properties (GListStore            *store,
       break;
 
     case GSK_BLUR_NODE:
-      add_float_row (store, "Radius", gsk_blur_node_get_radius (node));
+      {
+        const graphene_size_t *sigma = gsk_blur_node_get_blur_radius (node);
+
+        if (sigma->width == sigma->height)
+          add_float_row (store, "Standard deviation", sigma->width);
+        else
+          add_text_row (store, "Standard deviation", "%f %f", sigma->width, sigma->height);
+      }
       break;
 
     case GSK_GL_SHADER_NODE:
@@ -1401,6 +1438,7 @@ G_GNUC_END_IGNORE_DEPRECATIONS
         add_color_row (store, "Color", color);
 
         add_text_row (store, "Offset", "%.2f %.2f", dx, dy);
+        add_snap_row (store, "Snap", gsk_inset_shadow_node_get_snap (node));
 
         add_float_row (store, "Spread", spread);
         add_float_row (store, "Radius", radius);
@@ -1419,6 +1457,7 @@ G_GNUC_END_IGNORE_DEPRECATIONS
 
         gsk_rounded_rect_to_float (outline, graphene_point_zero (), rect);
         add_rect_row (store, "Outline", &outline->bounds);
+        add_snap_row (store, "Snap", gsk_outset_shadow_node_get_snap (node));
 
         add_color_row (store, "Color", color);
 
@@ -1431,9 +1470,10 @@ G_GNUC_END_IGNORE_DEPRECATIONS
 
     case GSK_REPEAT_NODE:
       {
-        const graphene_rect_t *child_bounds = gsk_repeat_node_get_child_bounds (node);
 
-        add_rect_row (store, "Child Bounds", child_bounds);
+        add_snap_row (store, "Snap", gsk_repeat_node_get_snap (node));
+        add_rect_row (store, "Child Bounds", gsk_repeat_node_get_child_bounds (node));
+        add_snap_row (store, "Child Snap", gsk_repeat_node_get_child_snap (node));
       }
       break;
 
@@ -1442,6 +1482,7 @@ G_GNUC_END_IGNORE_DEPRECATIONS
         const graphene_matrix_t *matrix = gsk_color_matrix_node_get_color_matrix (node);
         const graphene_vec4_t *offset = gsk_color_matrix_node_get_color_offset (node);
 
+        add_snap_row (store, "Snap", gsk_color_matrix_node_get_snap (node));
         add_text_row (store, "Matrix",
                              "% .2f % .2f % .2f % .2f\n"
                              "% .2f % .2f % .2f % .2f\n"
@@ -1477,6 +1518,7 @@ G_GNUC_END_IGNORE_DEPRECATIONS
       {
         const graphene_rect_t *clip = gsk_clip_node_get_clip (node);
         add_rect_row (store, "Clip", clip);
+        add_snap_row (store, "Snap", gsk_clip_node_get_snap (node));
       }
       break;
 
@@ -1484,6 +1526,7 @@ G_GNUC_END_IGNORE_DEPRECATIONS
       {
         const GskRoundedRect *clip = gsk_rounded_clip_node_get_clip (node);
         add_rect_row (store, "Clip", &clip->bounds);
+        add_snap_row (store, "Snap", gsk_rounded_clip_node_get_snap (node));
 
         add_text_row (store, "Top Left Corner Size", "%.2f x %.2f", clip->corner[0].width, clip->corner[0].height);
         add_text_row (store, "Top Right Corner Size", "%.2f x %.2f", clip->corner[1].width, clip->corner[1].height);
@@ -1609,6 +1652,7 @@ G_GNUC_END_IGNORE_DEPRECATIONS
       break;
 
     case GSK_PASTE_NODE:
+      add_snap_row (store, "Snap", gsk_paste_node_get_snap (node));
       add_uint_row (store, "Copy to paste", gsk_paste_node_get_depth (node));
       break;
 
@@ -1642,19 +1686,51 @@ G_GNUC_END_IGNORE_DEPRECATIONS
 
     case GSK_DISPLACEMENT_NODE:
       {
+        const graphene_size_t *s;
+        const graphene_point_t *p;
+        const GdkColorChannel *channels;
+
+        add_snap_row (store, "Snap", gsk_displacement_node_get_snap (node));
+
+        s = gsk_displacement_node_get_max (node);
+        add_text_row (store, "Max", "%f %f", s->width, s->height);
+        s = gsk_displacement_node_get_scale (node);
+        add_text_row (store, "Scale", "%f %f", s->width, s->height);
+        p = gsk_displacement_node_get_offset (node);
+        add_text_row (store, "Offset", "%f %f", p->x, p->y);
+        channels = gsk_displacement_node_get_channels (node);
+        add_text_row (store, "Channels", "%s %s",
+                      enum_to_nick (GDK_TYPE_COLOR_CHANNEL, channels[0]),
+                      enum_to_nick (GDK_TYPE_COLOR_CHANNEL, channels[1]));
       }
       break;
 
     case GSK_ARITHMETIC_NODE:
       {
-        float k1, k2, k3, k4;
+        const float *k;
         char *tmp;
 
-        gsk_arithmetic_node_get_factors (node, &k1, &k2, &k3, &k4);
-        tmp = g_strdup_printf ("%f %f %f %f", k1, k2, k3, k4);
+        add_snap_row (store, "Snap", gsk_arithmetic_node_get_snap (node));
+        k = gsk_arithmetic_node_get_factors (node);
+        tmp = g_strdup_printf ("%f %f %f %f", k[0], k[1], k[2], k[3]);
         add_text_row (store, "Factors", "%s", tmp);
         add_text_row (store, "Color State", "%s", gdk_color_state_get_name (gsk_arithmetic_node_get_color_state (node)));
         g_free (tmp);
+      }
+      break;
+
+    case GSK_TURBULENCE_NODE:
+      {
+        const graphene_size_t *s;
+        const char *noise_types[] = { "Fractal Noise", "Turbulence" };
+
+        s = gsk_turbulence_node_get_frequency (node);
+        add_text_row (store, "Base Frequency", "%f %f", s->width, s->height);
+        add_int_row (store, "Octaves", gsk_turbulence_node_get_octaves (node));
+        add_int_row (store, "Seed", gsk_turbulence_node_get_seed (node));
+
+        add_text_row (store, "Noise Type", "%s", noise_types[gsk_turbulence_node_get_noise_type (node)]);
+        add_boolean_row (store, "Stitch Tiles", gsk_turbulence_node_get_stitch_tiles (node));
       }
       break;
 
@@ -2368,7 +2444,7 @@ bind_widget_for_recording (GtkListItemFactory *factory,
 
   if (GTK_INSPECTOR_IS_RENDER_RECORDING (recording))
     {
-      gtk_label_set_label (GTK_LABEL (label), "Frame");
+      gtk_label_set_label (GTK_LABEL (label), _("Frame"));
       gtk_label_set_use_markup (GTK_LABEL (label), FALSE);
 
       text = g_strdup_printf ("%.3f", gtk_inspector_recording_get_timestamp (recording) / 1000.0);
@@ -2391,7 +2467,7 @@ bind_widget_for_recording (GtkListItemFactory *factory,
     }
   else
     {
-      gtk_label_set_label (GTK_LABEL (label), "<b>Start of Recording</b>");
+      gtk_label_set_label (GTK_LABEL (label), _("<b>Start of Recording</b>"));
       gtk_label_set_use_markup (GTK_LABEL (label), TRUE);
       gtk_label_set_label (GTK_LABEL (label2), "");
     }

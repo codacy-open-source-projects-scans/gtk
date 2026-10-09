@@ -103,12 +103,12 @@ The `width` and `height` attributes on the `<svg>` element determine the size of
 
 The following attributes are allowed on elements that specify a path:
 
-- `fill`: ignored. The fill paint is determined based on the `gtk:fill` attribute
+- `fill`: ignored. The fill paint is determined based on the `gpa:fill` attribute
 - `fill-opacity`: opacity for filled paths, in addition to the alpha value of the fill paint
 - `fill-rule`: the fill rule used when filling
-- `stroke`: ignored. The stroke paint is determined based on the `gtk:stroke` attribute
+- `stroke`: ignored. The stroke paint is determined based on the `gpa:stroke` attribute
 - `stroke-opacity`: opacity for stroked paths, in addition to the alpha value of the stroke paint
-- `stroke-width`: line width used when stroking, ignored when `gtk:stroke-width` is set
+- `stroke-width`: line width used when stroking, ignored when `gpa:stroke-width` is set
 - `stroke-linecap`: the line cap value used when stroking
 - `stroke-linejoin`: the line join value used when stroking
 - `id`: used when attaching paths
@@ -126,6 +126,8 @@ The following attributes can be set on the `<svg>` element:
 - `gpa:version`: The format version. Must be 1 if specified, currently.
 - `gpa:state-names`: A space-separated list of strings. The n-th string serves as name for state n. The strings 'all' and 'none' may not be used as state names, and state names cannot start with digits
 - `gpa:state`: The initial state, as an integer between 0 and 63 or as state name
+- `gpa:rendering`: Whether to follow SVG semantics, or use mask-based symbolic rendering to
+  avoid path overlaps showing through when using foreground alpha. Possible values: 'svg' or 'symbolic'. Default: 'svg'
 
 The following attributes can be set on elements that specify a path:
 

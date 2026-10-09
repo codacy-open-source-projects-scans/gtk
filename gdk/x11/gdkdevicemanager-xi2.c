@@ -24,7 +24,7 @@
 #include "gdkdevicetoolprivate.h"
 #include "gdkdisplayprivate.h"
 #include "gdkeventsprivate.h"
-#include "gdkeventtranslator.h"
+#include "gdkeventtranslatorprivate.h"
 #include "gdkkeys-x11.h"
 #include "gdkprivate-x11.h"
 #include "gdkdisplay-x11.h"
@@ -130,8 +130,11 @@ enum {
   PROP_DISPLAY,
   PROP_OPCODE,
   PROP_MAJOR,
-  PROP_MINOR
+  PROP_MINOR,
+  N_PROPS
 };
+
+static GParamSpec *props[N_PROPS] = { NULL, };
 
 static void
 gdk_x11_device_manager_xi2_class_init (GdkX11DeviceManagerXI2Class *klass)
@@ -143,30 +146,24 @@ gdk_x11_device_manager_xi2_class_init (GdkX11DeviceManagerXI2Class *klass)
   object_class->set_property = gdk_x11_device_manager_xi2_set_property;
   object_class->get_property = gdk_x11_device_manager_xi2_get_property;
 
-  g_object_class_install_property (object_class,
-                                   PROP_DISPLAY,
-                                   g_param_spec_object ("display", NULL, NULL,
-                                                        GDK_TYPE_DISPLAY,
-                                                        G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY |
-                                                        G_PARAM_STATIC_STRINGS));
-  g_object_class_install_property (object_class,
-                                   PROP_OPCODE,
-                                   g_param_spec_int ("opcode", NULL, NULL,
-                                                     0, G_MAXINT, 0,
-                                                     G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY |
-                                                     G_PARAM_STATIC_STRINGS));
-  g_object_class_install_property (object_class,
-                                   PROP_MAJOR,
-                                   g_param_spec_int ("major", NULL, NULL,
-                                                     0, G_MAXINT, 0,
-                                                     G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY |
-                                                     G_PARAM_STATIC_STRINGS));
-  g_object_class_install_property (object_class,
-                                   PROP_MINOR,
-                                   g_param_spec_int ("minor", NULL, NULL,
-                                                     0, G_MAXINT, 0,
-                                                     G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY |
-                                                     G_PARAM_STATIC_STRINGS));
+  props[PROP_DISPLAY] = g_param_spec_object ("display", NULL, NULL,
+                                             GDK_TYPE_DISPLAY,
+                                             G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY |
+                                             G_PARAM_STATIC_NAME);
+  props[PROP_OPCODE] = g_param_spec_int ("opcode", NULL, NULL,
+                                         0, G_MAXINT, 0,
+                                         G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY |
+                                         G_PARAM_STATIC_NAME);
+  props[PROP_MAJOR] = g_param_spec_int ("major", NULL, NULL,
+                                        0, G_MAXINT, 0,
+                                        G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY |
+                                        G_PARAM_STATIC_NAME);
+  props[PROP_MINOR] = g_param_spec_int ("minor", NULL, NULL,
+                                        0, G_MAXINT, 0,
+                                        G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY |
+                                        G_PARAM_STATIC_NAME);
+
+  g_object_class_install_properties (object_class, N_PROPS, props);
 }
 
 static void
@@ -605,7 +602,7 @@ ensure_logical_touch_device (gpointer key,
   Display *xdisplay;
   int logical_pointer_id;
   int ndevices;
-  g_autofree char *name = NULL;
+  char *name;
 
   device_manager = user_data;
   physical = g_hash_table_lookup (device_manager->id_table, key);
@@ -634,6 +631,7 @@ ensure_logical_touch_device (gpointer key,
   device_manager->devices = g_list_append (device_manager->devices, logical_touch);
 
   XIFreeDeviceInfo (info);
+  g_free (name);
 }
 
 static void
@@ -686,7 +684,7 @@ add_device (GdkX11DeviceManagerXI2 *device_manager,
           _gdk_device_add_physical_device (logical, device);
 
           seat = gdk_device_get_seat (logical);
-          gdk_seat_default_add_physical_device (GDK_SEAT_DEFAULT (seat), device);
+          gdk_x11_seat_xi2_add_physical_device (GDK_X11_SEAT_XI2 (seat), device);
 
           ensure_logical_touch_device (GINT_TO_POINTER (dev->deviceid),
                                        GINT_TO_POINTER (dev->attachment),
@@ -723,7 +721,7 @@ detach_from_seat (GdkDevice *device)
   if (gdk_x11_device_xi2_get_device_type (device_xi2) == GDK_X11_DEVICE_TYPE_LOGICAL)
     gdk_display_remove_seat (gdk_device_get_display (device), seat);
   else if (gdk_x11_device_xi2_get_device_type (device_xi2) == GDK_X11_DEVICE_TYPE_PHYSICAL)
-    gdk_seat_default_remove_physical_device (GDK_SEAT_DEFAULT (seat), device);
+    gdk_x11_seat_xi2_remove_physical_device (GDK_X11_SEAT_XI2 (seat), device);
 }
 
 static void
@@ -783,7 +781,7 @@ relate_physical_devices (gpointer key,
   _gdk_device_add_physical_device (logical, physical);
 
   seat = gdk_device_get_seat (logical);
-  gdk_seat_default_add_physical_device (GDK_SEAT_DEFAULT (seat), physical);
+  gdk_x11_seat_xi2_add_physical_device (GDK_X11_SEAT_XI2 (seat), physical);
 }
 
 static void
@@ -868,14 +866,9 @@ gdk_x11_device_manager_xi2_dispose (GObject *object)
 
   device_manager = GDK_X11_DEVICE_MANAGER_XI2 (object);
 
-  g_list_free_full (device_manager->devices, g_object_unref);
-  device_manager->devices = NULL;
+  g_clear_list (&device_manager->devices, g_object_unref);
 
-  if (device_manager->id_table)
-    {
-      g_hash_table_destroy (device_manager->id_table);
-      device_manager->id_table = NULL;
-    }
+  g_clear_pointer (&device_manager->id_table, g_hash_table_destroy);
 
   G_OBJECT_CLASS (gdk_x11_device_manager_xi2_parent_class)->dispose (object);
 }
@@ -990,7 +983,7 @@ handle_hierarchy_changed (GdkX11DeviceManagerXI2 *device_manager,
             continue;
 
           seat = gdk_device_get_seat (physical);
-          gdk_seat_default_remove_physical_device (GDK_SEAT_DEFAULT (seat), physical);
+          gdk_x11_seat_xi2_remove_physical_device (GDK_X11_SEAT_XI2 (seat), physical);
 
           /* Add new logical device if it's an attachment event */
           if (ev->info[i].flags & XISlaveAttached)
@@ -1012,7 +1005,7 @@ handle_hierarchy_changed (GdkX11DeviceManagerXI2 *device_manager,
                   _gdk_device_add_physical_device (logical, physical);
 
                   seat = gdk_device_get_seat (logical);
-                  gdk_seat_default_add_physical_device (GDK_SEAT_DEFAULT (seat), physical);
+                  gdk_x11_seat_xi2_add_physical_device (GDK_X11_SEAT_XI2 (seat), physical);
                   ensure_logical_touch_device (GINT_TO_POINTER (ev->info[i].deviceid), GINT_TO_POINTER (logical_id), device_manager);
                 }
             }
@@ -1176,7 +1169,7 @@ handle_property_change (GdkX11DeviceManagerXI2 *device_manager,
               if (!tool && serial_id > 0)
                 {
                   tool = gdk_device_tool_new (serial_id, tool_id, tool_type, 0);
-                  gdk_seat_default_add_tool (GDK_SEAT_DEFAULT (seat), tool);
+                  gdk_x11_seat_xi2_add_tool (GDK_X11_SEAT_XI2 (seat), tool);
                 }
             }
         }
@@ -1321,36 +1314,6 @@ get_event_surface (GdkEventTranslator *translator,
         XIDeviceEvent *xev = (XIDeviceEvent *) ev;
 
         surface = gdk_x11_surface_lookup_for_display (display, xev->event);
-
-        /* Apply keyboard grabs to non-native windows */
-        if (ev->evtype == XI_KeyPress || ev->evtype == XI_KeyRelease)
-          {
-            GdkDeviceGrabInfo *info;
-            GdkDevice *device;
-            GdkSeat *seat;
-            gulong serial;
-
-            device = g_hash_table_lookup (device_manager->id_table,
-                                          GUINT_TO_POINTER (((XIDeviceEvent *) ev)->deviceid));
-
-            if ((ev->evtype == XI_TouchUpdate ||
-                 ev->evtype == XI_TouchBegin ||
-                 ev->evtype == XI_TouchEnd) &&
-                gdk_device_get_source (device) == GDK_SOURCE_TOUCHSCREEN)
-              {
-                seat = gdk_device_get_seat (device);
-                device = gdk_x11_seat_xi2_get_logical_touch (GDK_X11_SEAT_XI2 (seat));
-              }
-
-            serial = _gdk_display_get_next_serial (display);
-            info = _gdk_display_has_device_grab (display, device, serial);
-
-            if (info && !info->owner_events)
-              {
-                /* Report key event against grab surface */
-                surface = info->surface;
-              }
-          }
       }
       break;
 #ifdef XINPUT_2_4

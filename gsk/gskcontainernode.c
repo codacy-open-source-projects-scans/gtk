@@ -84,6 +84,7 @@ static GskDiffResult
 gsk_container_node_keep_func (gconstpointer elem1, gconstpointer elem2, gpointer user_data)
 {
   GskDiffData *data = user_data;
+
   gsk_render_node_diff ((GskRenderNode *) elem1, (GskRenderNode *) elem2, data);
   if (cairo_region_num_rectangles (data->region) > MAX_RECTS_IN_DIFF)
     return GSK_DIFF_ABORTED;
@@ -119,6 +120,7 @@ gsk_container_node_get_diff_settings (void)
                                     gsk_container_node_change_func,
                                     gsk_container_node_change_func);
   gsk_diff_settings_set_allow_abort (settings, TRUE);
+  gsk_diff_settings_set_defer_callbacks (settings, TRUE);
 
   return settings;
 }
@@ -298,6 +300,7 @@ gsk_container_node_new (GskRenderNode **children,
     {
       gsk_rect_init_from_rect (&node->bounds, graphene_rect_zero ());
       node->preferred_depth = GDK_MEMORY_NONE;
+      node->bilevel_opacity = TRUE;
     }
   else
     {
@@ -307,6 +310,7 @@ gsk_container_node_new (GskRenderNode **children,
       node->preferred_depth = children[0]->preferred_depth;
       gsk_rect_init_from_rect (&node->bounds, &(children[0]->bounds));
       node->is_hdr = gsk_render_node_is_hdr (children[0]);
+      node->bilevel_opacity = gsk_render_node_is_bilevel_opacity (children[0]);
       node->clears_background = gsk_render_node_clears_background (children[0]);
       node->copy_mode = gsk_render_node_get_copy_mode (children[0]);
       node->contains_subsurface_node = gsk_render_node_contains_subsurface_node (children[0]);
@@ -319,6 +323,7 @@ gsk_container_node_new (GskRenderNode **children,
           self->disjoint = self->disjoint && !gsk_rect_intersects (&node->bounds, &(children[i]->bounds));
           graphene_rect_union (&node->bounds, &(children[i]->bounds), &node->bounds);
           node->preferred_depth = gdk_memory_depth_merge (node->preferred_depth, children[i]->preferred_depth);
+          node->bilevel_opacity &= gsk_render_node_is_bilevel_opacity (children[i]);
           node->clears_background |= gsk_render_node_clears_background (children[i]);
           node->is_hdr |= gsk_render_node_is_hdr (children[i]);
           node->copy_mode = MAX (node->copy_mode, gsk_render_node_get_copy_mode (children[i]));
@@ -397,4 +402,3 @@ gsk_container_node_is_disjoint (const GskRenderNode *node)
 
   return self->disjoint;
 }
-

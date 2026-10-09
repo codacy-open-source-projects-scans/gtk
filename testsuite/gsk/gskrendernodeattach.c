@@ -20,6 +20,7 @@
 #include "gsk/gskrendernodeprivate.h"
 #include "gsk/gskarithmeticnodeprivate.h"
 #include "gsk/gskblendnodeprivate.h"
+#include "gsk/gskblurnodeprivate.h"
 #include "gsk/gskcolormatrixnodeprivate.h"
 #include "gsk/gskcomponenttransfernodeprivate.h"
 #include "gsk/gskdisplacementnodeprivate.h"
@@ -50,6 +51,7 @@ node_attach (const GskRenderNode *node,
     case GSK_OUTSET_SHADOW_NODE:
     case GSK_TEXT_NODE:
     case GSK_PASTE_NODE:
+    case GSK_TURBULENCE_NODE:
       return gsk_render_node_ref ((GskRenderNode *)node);
 
     case GSK_TRANSFORM_NODE:
@@ -67,6 +69,7 @@ node_attach (const GskRenderNode *node,
     case GSK_COLOR_MATRIX_NODE:
       child = node_attach (gsk_color_matrix_node_get_child (node), surface, idx);
       res = gsk_color_matrix_node_new2 (&child->bounds,
+                                        gsk_color_matrix_node_get_snap (node),
                                         child,
                                         gsk_color_matrix_node_get_color_state (node),
                                         gsk_color_matrix_node_get_color_matrix (node),
@@ -138,7 +141,7 @@ node_attach (const GskRenderNode *node,
 
     case GSK_BLUR_NODE:
       child = node_attach (gsk_blur_node_get_child (node), surface, idx);
-      res = gsk_blur_node_new (child, gsk_blur_node_get_radius (node));
+      res = gsk_blur_node_new2 (child, gsk_blur_node_get_blur_radius (node));
       gsk_render_node_unref (child);
       return res;
 
@@ -255,6 +258,7 @@ G_GNUC_END_IGNORE_DEPRECATIONS
         child = node_attach (gsk_displacement_node_get_child (node), surface, idx);
         displacement = node_attach (gsk_displacement_node_get_displacement (node), surface, idx);
         res = gsk_displacement_node_new (&bounds,
+                                         gsk_displacement_node_get_snap (node),
                                          child,
                                          displacement,
                                          gsk_displacement_node_get_channels (node),
@@ -269,18 +273,20 @@ G_GNUC_END_IGNORE_DEPRECATIONS
     case GSK_ARITHMETIC_NODE:
       {
         GskRenderNode *first, *second;
-        float k1, k2, k3, k4;
+        const float *k;
         graphene_rect_t bounds;
         GdkColorState *color_state;
+        GskRectSnap snap;
 
         gsk_render_node_get_bounds ((GskRenderNode *) node, &bounds);
 
         first = node_attach (gsk_arithmetic_node_get_first_child (node), surface, idx);
         second = node_attach (gsk_arithmetic_node_get_second_child (node), surface, idx);
-        gsk_arithmetic_node_get_factors (node, &k1, &k2, &k3, &k4);
+        k = gsk_arithmetic_node_get_factors (node);
         color_state = gsk_arithmetic_node_get_color_state (node);
+        snap = gsk_arithmetic_node_get_snap (node);
 
-        res = gsk_arithmetic_node_new (&bounds, first, second, color_state, k1, k2, k3, k4);
+        res = gsk_arithmetic_node_new (&bounds, snap, first, second, color_state, k);
         gsk_render_node_unref (first);
         gsk_render_node_unref (second);
         return res;

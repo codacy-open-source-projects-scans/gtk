@@ -14,6 +14,8 @@
               flood-color='rgb(255,0,0)'>
       </feFlood>
       <feGaussianBlur
+              id='gauss'
+              class='gauss'
               width='50%'
               height='50%'
               result='blurred_source'
@@ -106,6 +108,11 @@
                 offset='1'>
         </feFuncB>
       </feComponentTransfer>
+      <feTurbulence
+              baseFrequency='0.5'
+              numOctaves='2'
+              seed='10'>
+      </feTurbulence>
     </filter>
   </defs>
   <circle

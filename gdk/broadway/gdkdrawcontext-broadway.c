@@ -33,22 +33,21 @@ gdk_broadway_draw_context_dispose (GObject *object)
 }
 
 static void
-gdk_broadway_draw_context_begin_frame (GdkDrawContext  *draw_context,
-                                       gpointer         context_data,
-                                       GdkMemoryDepth   depth,
-                                       cairo_region_t  *region,
-                                       GdkColorState  **out_color_state,
-                                       GdkMemoryDepth  *out_depth)
+gdk_broadway_draw_context_begin_frame (GdkDrawContext      *draw_context,
+                                       GdkDrawContextFrame *frame,
+                                       gpointer             context_data)
 {
   GdkBroadwayDrawContext *self = GDK_BROADWAY_DRAW_CONTEXT (draw_context);
-  GdkSurface *surface = gdk_draw_context_get_surface (GDK_DRAW_CONTEXT (self));
+  guint width, height;
+  cairo_region_t *region;
 
-  cairo_region_union_rectangle (region,
-                                &(cairo_rectangle_int_t) {
-                                    0, 0,
-                                    gdk_surface_get_width (surface),
-                                    gdk_surface_get_height (surface)
-                                 });
+  gdk_draw_context_get_buffer_size (draw_context, &width, &height);
+  region = cairo_region_create_rectangle (&(cairo_rectangle_int_t) {
+                                              0, 0,
+                                              width, height
+                                          });
+  gdk_draw_context_frame_add_damage (frame, region);
+  cairo_region_destroy (region);
 
   g_assert (self->nodes == NULL);
   g_assert (self->node_textures == NULL);
@@ -56,26 +55,23 @@ gdk_broadway_draw_context_begin_frame (GdkDrawContext  *draw_context,
   self->nodes = g_array_new (FALSE, FALSE, sizeof(guint32));
   self->node_textures = g_ptr_array_new_with_free_func (g_object_unref);
 
-  *out_color_state = GDK_COLOR_STATE_SRGB;
-  *out_depth = gdk_color_state_get_depth (GDK_COLOR_STATE_SRGB);
+  gdk_draw_context_frame_gpu_complete (frame, 0);
 }
 
 static void
-gdk_broadway_draw_context_end_frame (GdkDrawContext *draw_context,
-                                     gpointer        context_data,
-                                     cairo_region_t *painted)
+gdk_broadway_draw_context_end_frame (GdkDrawContext      *draw_context,
+                                     GdkDrawContextFrame *frame,
+                                     gpointer             context_data)
 {
   GdkBroadwayDrawContext *self = GDK_BROADWAY_DRAW_CONTEXT (draw_context);
   GdkSurface *surface = gdk_draw_context_get_surface (draw_context);
 
   gdk_broadway_surface_set_nodes (surface, self->nodes, self->node_textures);
 
-  g_array_unref (self->nodes);
-  self->nodes = NULL;
+  g_clear_pointer (&self->nodes, g_array_unref);
 
   /* We now sent all new texture refs to the daemon via the nodes, so we can drop them here */
-  g_ptr_array_unref (self->node_textures);
-  self->node_textures = NULL;
+  g_clear_pointer (&self->node_textures, g_ptr_array_unref);
 }
 
 static void

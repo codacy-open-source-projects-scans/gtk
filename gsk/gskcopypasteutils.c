@@ -33,6 +33,9 @@
 
 #ifdef GTK_COMPILATION
 #include "gskrendernodeprivate.h"
+#include "gskclipnodeprivate.h"
+#else
+#include "gtk/gtksnapshot.h"
 #endif
 
 typedef struct _PartialNode PartialNode;
@@ -131,6 +134,7 @@ replay_partial_node (const PartialNode *replay)
         case GSK_ISOLATION_NODE:
         case GSK_DISPLACEMENT_NODE:
         case GSK_ARITHMETIC_NODE:
+        case GSK_TURBULENCE_NODE:
           /* These all don't record anything, so we never
            * encounter them */
         case GSK_NOT_A_RENDER_NODE:
@@ -199,10 +203,7 @@ replace_copy_paste_node_record (GskRenderReplay *replay,
     case GSK_DEBUG_NODE:
     case GSK_TEXTURE_SCALE_NODE:
     case GSK_SUBSURFACE_NODE:
-      /* keep recording */
-      result = gsk_render_replay_default (replay, node);
-      break;
-
+    case GSK_TURBULENCE_NODE:
     case GSK_OPACITY_NODE:
     case GSK_COLOR_MATRIX_NODE:
     case GSK_REPEAT_NODE:
@@ -215,17 +216,23 @@ replace_copy_paste_node_record (GskRenderReplay *replay,
     case GSK_COMPOSITE_NODE:
     case GSK_DISPLACEMENT_NODE:
     case GSK_ARITHMETIC_NODE:
-      /* record a new background for each child */
-      {
-        const PartialNode *saved = recording->nodes;
-        recording->nodes = NULL;
-        result = gsk_render_replay_default (replay, node);
-        recording->nodes = saved;
-      }
+      if (gsk_render_node_isolates_background (node))
+        {
+          /* record a new background for each child */
+          const PartialNode *saved = recording->nodes;
+          recording->nodes = NULL;
+          result = gsk_render_replay_default (replay, node);
+          recording->nodes = saved;
+        }
+      else
+        {
+          /* keep recording */
+          result = gsk_render_replay_default (replay, node);
+        }
       break;
 
     case GSK_ISOLATION_NODE:
-      /* Do either of the 2 above, depending on flags */
+      /* Handle the spacial cases */
       {
         GskIsolation isolations = gsk_isolation_node_get_isolations (node);
         Recording saved = *recording;
@@ -326,8 +333,19 @@ replace_copy_paste_node_record (GskRenderReplay *replay,
               {
                 graphene_rect_t bounds;
                 gsk_render_node_get_bounds (node, &bounds);
-                result = gsk_clip_node_new (child, &bounds);
+#ifdef GTK_COMPILATION
+                result = gsk_clip_node_new2 (child,
+                                             &bounds,
+                                             gsk_paste_node_get_snap (node));
                 gsk_render_node_unref (child);
+#else
+                GtkSnapshot *snapshot = gtk_snapshot_new ();
+                gtk_snapshot_set_snap (snapshot, gsk_paste_node_get_snap (node));
+                gtk_snapshot_push_clip (snapshot, &bounds);
+                gtk_snapshot_append_node (snapshot, child);
+                gtk_snapshot_pop (snapshot);
+                result = gtk_snapshot_free_to_node (snapshot);
+#endif
               }
             else
               result = gsk_container_node_new (NULL, 0);

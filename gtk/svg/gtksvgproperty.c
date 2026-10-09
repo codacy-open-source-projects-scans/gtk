@@ -49,6 +49,12 @@ parse_points (GtkCssParser *parser)
 }
 
 static SvgValue *
+parse_multiple_numbers (GtkCssParser *parser)
+{
+  return svg_numbers_parse2 (parser, SVG_PARSE_NUMBER|SVG_PARSE_PERCENTAGE|SVG_PARSE_LENGTH);
+}
+
+static SvgValue *
 parse_language (GtkCssParser *parser)
 {
   if (gtk_css_parser_has_token (parser, GTK_CSS_TOKEN_IDENT))
@@ -205,6 +211,17 @@ parse_any_number (GtkCssParser *parser)
 }
 
 static SvgValue *
+parse_integer (GtkCssParser *parser)
+{
+  int num;
+
+  if (!gtk_css_parser_consume_integer (parser, &num))
+    return NULL;
+
+  return svg_number_new ((double) num);
+}
+
+static SvgValue *
 parse_font_weight (GtkCssParser *parser)
 {
   SvgValue *v;
@@ -214,6 +231,18 @@ parse_font_weight (GtkCssParser *parser)
     return v;
 
   return svg_number_parse (parser, 1, 1000, SVG_PARSE_NUMBER);
+}
+
+static SvgValue *
+parse_font_width (GtkCssParser *parser)
+{
+  SvgValue *v;
+
+  v = svg_font_width_try_parse (parser);
+  if (v)
+    return v;
+
+  return svg_number_parse (parser, 0, DBL_MAX, SVG_PARSE_PERCENTAGE);
 }
 
 static SvgValue *
@@ -235,6 +264,18 @@ parse_letter_spacing (GtkCssParser *parser)
     return svg_number_new (0.);
 
   return svg_number_parse (parser, -DBL_MAX, DBL_MAX, SVG_PARSE_NUMBER|SVG_PARSE_LENGTH);
+}
+
+static SvgValue *
+parse_baseline_shift (GtkCssParser *parser)
+{
+  SvgValue *v;
+
+  v = svg_baseline_shift_try_parse (parser);
+  if (v)
+    return v;
+
+  return svg_number_parse (parser, -DBL_MAX, DBL_MAX, SVG_PARSE_NUMBER|SVG_PARSE_PERCENTAGE|SVG_PARSE_LENGTH);
 }
 
 static SvgValue *
@@ -352,8 +393,22 @@ parse_transform_origin (GtkCssParser *parser)
         }
     }
 
-  if (set[0] == set[1] && set[0] != NEUTRAL)
-    return NULL;
+  if (set[0] == set[1])
+    {
+      if (set[0] != NEUTRAL)
+        return NULL;
+
+      set[0] = HORIZONTAL;
+      set[1] = VERTICAL;
+    }
+
+  if (set[0] == NEUTRAL)
+    set[0] = 1 - set[1];
+
+  if (set[1] == NEUTRAL)
+    set[1] = 1 - set[0];
+
+  /* by now, set[0] and set[1] are h,v or v,h */
 
   if (set[0] == HORIZONTAL)
     return svg_numbers_new2 (d[0], u[0], d[1], u[1]);
@@ -540,7 +595,7 @@ static SvgPropertyInfo shape_attrs[] = {
     .applies_to = ELEMENT_CONTAINERS | ELEMENT_GRAPHICS | ELEMENT_GRADIENTS | BIT (SVG_ELEMENT_USE),
     .parse_value = svg_color_interpolation_parse,
   },
-  [SVG_PROPERTY_COLOR_INTERPOLATION_FILTERS] = {
+  [SVG_PROPERTY_FE_COLOR_INTERPOLATION] = {
     .flags = SVG_PROPERTY_IS_INHERITED,
     .applies_to = BIT (SVG_ELEMENT_FILTER),
     .parse_value = svg_color_interpolation_parse,
@@ -580,10 +635,10 @@ static SvgPropertyInfo shape_attrs[] = {
     .applies_to = ELEMENT_ANY,
     .parse_value = parse_font_weight,
   },
-  [SVG_PROPERTY_FONT_STRETCH] = {
+  [SVG_PROPERTY_FONT_WIDTH] = {
     .flags = SVG_PROPERTY_IS_INHERITED,
     .applies_to = ELEMENT_ANY,
-    .parse_value = svg_font_stretch_parse,
+    .parse_value = parse_font_width,
   },
   [SVG_PROPERTY_FILTER] = {
     .applies_to = (ELEMENT_CONTAINERS & ~BIT (SVG_ELEMENT_DEFS)) | ELEMENT_GRAPHICS | BIT (SVG_ELEMENT_USE),
@@ -856,6 +911,11 @@ static SvgPropertyInfo shape_attrs[] = {
     .applies_to = BIT (SVG_ELEMENT_MARKER),
     .parse_value = svg_orient_parse,
   },
+  [SVG_PROPERTY_SPACE] = {
+    .flags = SVG_PROPERTY_IS_INHERITED | SVG_PROPERTY_IS_DISCRETE | SVG_PROPERTY_NO_CSS,
+    .applies_to = ELEMENT_ANY,
+    .parse_value = svg_xml_space_parse,
+  },
   [SVG_PROPERTY_LANG] = {
     .flags = SVG_PROPERTY_IS_INHERITED | SVG_PROPERTY_IS_DISCRETE | SVG_PROPERTY_NO_CSS,
     .applies_to = ELEMENT_ANY,
@@ -871,39 +931,54 @@ static SvgPropertyInfo shape_attrs[] = {
     .applies_to = ELEMENT_TEXTS,
     .parse_value = svg_dominant_baseline_parse,
   },
-  [SVG_PROPERTY_DX] = {
+  [SVG_PROPERTY_TEXT_X] = {
     .flags = SVG_PROPERTY_NO_CSS,
     .applies_to = ELEMENT_TEXTS,
-    .parse_value = parse_length_percentage,
+    .parse_value = parse_multiple_numbers,
   },
-  [SVG_PROPERTY_DY] = {
+  [SVG_PROPERTY_TEXT_Y] = {
     .flags = SVG_PROPERTY_NO_CSS,
     .applies_to = ELEMENT_TEXTS,
-    .parse_value = parse_length_percentage,
+    .parse_value = parse_multiple_numbers,
+  },
+  [SVG_PROPERTY_TEXT_DX] = {
+    .flags = SVG_PROPERTY_NO_CSS,
+    .applies_to = ELEMENT_TEXTS,
+    .parse_value = parse_multiple_numbers,
+  },
+  [SVG_PROPERTY_TEXT_DY] = {
+    .flags = SVG_PROPERTY_NO_CSS,
+    .applies_to = ELEMENT_TEXTS,
+    .parse_value = parse_multiple_numbers,
   },
   [SVG_PROPERTY_UNICODE_BIDI] = {
-    .flags = SVG_PROPERTY_IS_INHERITED | SVG_PROPERTY_IS_DISCRETE,
-    .applies_to = ELEMENT_TEXTS,
+    .flags = SVG_PROPERTY_IS_DISCRETE,
+    .applies_to = ELEMENT_ANY,
     .parse_value = svg_unicode_bidi_parse,
   },
   [SVG_PROPERTY_DIRECTION] = {
     .flags = SVG_PROPERTY_IS_INHERITED | SVG_PROPERTY_IS_DISCRETE,
-    .applies_to = ELEMENT_TEXTS,
+    .applies_to = ELEMENT_ANY,
     .parse_value = svg_direction_parse,
   },
   [SVG_PROPERTY_WRITING_MODE] = {
     .flags = SVG_PROPERTY_IS_INHERITED | SVG_PROPERTY_IS_DISCRETE,
-    .applies_to = ELEMENT_TEXTS,
+    .applies_to = ELEMENT_ANY,
     .parse_value = svg_writing_mode_parse,
   },
   [SVG_PROPERTY_LETTER_SPACING] = {
     .flags = SVG_PROPERTY_IS_INHERITED | SVG_PROPERTY_IS_DISCRETE,
-    .applies_to = ELEMENT_TEXTS,
+    .applies_to = ELEMENT_ANY,
     .parse_value = parse_letter_spacing,
+  },
+  [SVG_PROPERTY_BASELINE_SHIFT] = {
+    .flags = SVG_PROPERTY_IS_DISCRETE,
+    .applies_to = ELEMENT_ANY,
+    .parse_value = parse_baseline_shift,
   },
   [SVG_PROPERTY_TEXT_DECORATION] = {
     .flags = SVG_PROPERTY_IS_INHERITED | SVG_PROPERTY_IS_DISCRETE,
-    .applies_to = ELEMENT_TEXTS,
+    .applies_to = ELEMENT_ANY,
     .parse_value = svg_text_decoration_parse,
   },
   [SVG_PROPERTY_REQUIRED_EXTENSIONS] = {
@@ -1114,6 +1189,31 @@ static SvgPropertyInfo shape_attrs[] = {
     .applies_to = BIT (SVG_ELEMENT_FILTER),
     .parse_value = parse_any_number,
   },
+  [SVG_PROPERTY_FE_TURBULENCE_BASE_FREQ] = {
+    .flags = SVG_PROPERTY_NO_CSS,
+    .applies_to = BIT (SVG_ELEMENT_FILTER),
+    .parse_value = parse_number_optional_number,
+  },
+  [SVG_PROPERTY_FE_TURBULENCE_NUM_OCTAVES] = {
+    .flags = SVG_PROPERTY_NO_CSS,
+    .applies_to = BIT (SVG_ELEMENT_FILTER),
+    .parse_value = parse_integer,
+  },
+  [SVG_PROPERTY_FE_TURBULENCE_SEED] = {
+    .flags = SVG_PROPERTY_NO_CSS,
+    .applies_to = BIT (SVG_ELEMENT_FILTER),
+    .parse_value = parse_any_number,
+  },
+  [SVG_PROPERTY_FE_TURBULENCE_TYPE] = {
+    .flags = SVG_PROPERTY_NO_CSS | SVG_PROPERTY_IS_DISCRETE,
+    .applies_to = BIT (SVG_ELEMENT_FILTER),
+    .parse_value = svg_turbulence_type_parse,
+  },
+  [SVG_PROPERTY_FE_TURBULENCE_STITCH_TILES] = {
+    .flags = SVG_PROPERTY_IS_DISCRETE | SVG_PROPERTY_NO_CSS,
+    .applies_to = BIT (SVG_ELEMENT_FILTER),
+    .parse_value = svg_stitch_tiles_parse,
+  },
 };
 
 gboolean
@@ -1148,28 +1248,11 @@ svg_property_applies_to (SvgProperty      attr,
          (shape_attrs[attr].applies_to & BIT (type)) != 0;
 }
 
-gboolean
-svg_property_for_element (SvgProperty attr)
-{
-  return attr <= SVG_PROPERTY_STROKE_MAXWIDTH;
-}
-
-gboolean
-svg_property_for_color_stop (SvgProperty attr)
-{
-  return SVG_PROPERTY_STOP_OFFSET <= attr && attr <= SVG_PROPERTY_STOP_OPACITY;
-}
-
-gboolean
-svg_property_for_filter (SvgProperty attr)
-{
-  return SVG_PROPERTY_FE_X <= attr;
-}
-
 static void
 shape_attrs_init_default_values (void)
 {
   shape_attrs[SVG_PROPERTY_LANG].initial_value = svg_language_new_default ();
+  shape_attrs[SVG_PROPERTY_SPACE].initial_value = svg_xml_space_new (XML_SPACE_DEFAULT);
   shape_attrs[SVG_PROPERTY_DISPLAY].initial_value = svg_display_new (DISPLAY_INLINE);
   shape_attrs[SVG_PROPERTY_VISIBILITY].initial_value = svg_visibility_new (VISIBILITY_VISIBLE);
   shape_attrs[SVG_PROPERTY_FONT_SIZE].initial_value = svg_font_size_new (FONT_SIZE_MEDIUM);
@@ -1179,7 +1262,7 @@ shape_attrs_init_default_values (void)
   shape_attrs[SVG_PROPERTY_OPACITY].initial_value = svg_number_new (1);
   shape_attrs[SVG_PROPERTY_COLOR].initial_value = svg_color_new_black ();
   shape_attrs[SVG_PROPERTY_COLOR_INTERPOLATION].initial_value = svg_color_interpolation_new (COLOR_INTERPOLATION_SRGB);
-  shape_attrs[SVG_PROPERTY_COLOR_INTERPOLATION_FILTERS].initial_value = svg_color_interpolation_new (COLOR_INTERPOLATION_LINEAR);
+  shape_attrs[SVG_PROPERTY_FE_COLOR_INTERPOLATION].initial_value = svg_color_interpolation_new (COLOR_INTERPOLATION_LINEAR);
   shape_attrs[SVG_PROPERTY_OVERFLOW].initial_value = svg_overflow_new (OVERFLOW_VISIBLE);
   shape_attrs[SVG_PROPERTY_VECTOR_EFFECT].initial_value = svg_vector_effect_new (VECTOR_EFFECT_NONE);
   shape_attrs[SVG_PROPERTY_FILTER].initial_value = svg_filter_functions_new_none ();
@@ -1190,7 +1273,7 @@ shape_attrs_init_default_values (void)
   shape_attrs[SVG_PROPERTY_FONT_STYLE].initial_value = svg_font_style_new (PANGO_STYLE_NORMAL);
   shape_attrs[SVG_PROPERTY_FONT_VARIANT].initial_value = svg_font_variant_new (PANGO_VARIANT_NORMAL);
   shape_attrs[SVG_PROPERTY_FONT_WEIGHT].initial_value = svg_font_weight_new (FONT_WEIGHT_NORMAL);
-  shape_attrs[SVG_PROPERTY_FONT_STRETCH].initial_value = svg_font_stretch_new (PANGO_STRETCH_NORMAL);
+  shape_attrs[SVG_PROPERTY_FONT_WIDTH].initial_value = svg_font_width_new (PANGO_WIDTH_NORMAL);
   shape_attrs[SVG_PROPERTY_FILL].initial_value = svg_paint_new_black ();
   shape_attrs[SVG_PROPERTY_FILL_OPACITY].initial_value = svg_number_new (1);
   shape_attrs[SVG_PROPERTY_FILL_RULE].initial_value = svg_fill_rule_new (GSK_FILL_RULE_WINDING);
@@ -1229,11 +1312,14 @@ shape_attrs_init_default_values (void)
   shape_attrs[SVG_PROPERTY_FR].initial_value = svg_percentage_new (0);
   shape_attrs[SVG_PROPERTY_TEXT_ANCHOR].initial_value = svg_text_anchor_new (TEXT_ANCHOR_START);
   shape_attrs[SVG_PROPERTY_DOMINANT_BASELINE].initial_value = svg_dominant_baseline_new (DOMINANT_BASELINE_AUTO);
-  shape_attrs[SVG_PROPERTY_DX].initial_value = svg_number_new (0);
-  shape_attrs[SVG_PROPERTY_DY].initial_value = svg_number_new (0);
+  shape_attrs[SVG_PROPERTY_TEXT_X].initial_value = svg_numbers_new1 (0);
+  shape_attrs[SVG_PROPERTY_TEXT_Y].initial_value = svg_numbers_new1 (0);
+  shape_attrs[SVG_PROPERTY_TEXT_DX].initial_value = svg_numbers_new_none ();
+  shape_attrs[SVG_PROPERTY_TEXT_DY].initial_value = svg_numbers_new_none ();
   shape_attrs[SVG_PROPERTY_UNICODE_BIDI].initial_value = svg_unicode_bidi_new (UNICODE_BIDI_NORMAL);
   shape_attrs[SVG_PROPERTY_DIRECTION].initial_value = svg_direction_new (PANGO_DIRECTION_LTR);
   shape_attrs[SVG_PROPERTY_WRITING_MODE].initial_value = svg_writing_mode_new (WRITING_MODE_HORIZONTAL_TB);
+  shape_attrs[SVG_PROPERTY_BASELINE_SHIFT].initial_value = svg_number_new (0);
   shape_attrs[SVG_PROPERTY_LETTER_SPACING].initial_value = svg_number_new (0);
   shape_attrs[SVG_PROPERTY_TEXT_DECORATION].initial_value = svg_text_decoration_new (TEXT_DECORATION_NONE);
   shape_attrs[SVG_PROPERTY_POINTS].initial_value = svg_numbers_new_none ();
@@ -1292,6 +1378,11 @@ shape_attrs_init_default_values (void)
   shape_attrs[SVG_PROPERTY_FE_FUNC_AMPLITUDE].initial_value = svg_number_new (1);
   shape_attrs[SVG_PROPERTY_FE_FUNC_EXPONENT].initial_value = svg_number_new (1);
   shape_attrs[SVG_PROPERTY_FE_FUNC_OFFSET].initial_value = svg_number_new (0);
+  shape_attrs[SVG_PROPERTY_FE_TURBULENCE_BASE_FREQ].initial_value = svg_numbers_new1 (0);
+  shape_attrs[SVG_PROPERTY_FE_TURBULENCE_NUM_OCTAVES].initial_value = svg_number_new (1);
+  shape_attrs[SVG_PROPERTY_FE_TURBULENCE_SEED].initial_value = svg_number_new (0);
+  shape_attrs[SVG_PROPERTY_FE_TURBULENCE_TYPE].initial_value = svg_turbulence_type_new (TURBULENCE_TYPE_TURBULENCE);
+  shape_attrs[SVG_PROPERTY_FE_TURBULENCE_STITCH_TILES].initial_value = svg_stitch_tiles_new (STITCH_NO_STITCH);
 
   /* We require initial values to immortal for thread-safety
    * reasons. since they are the only objects in the SVG code
@@ -1368,6 +1459,14 @@ svg_property_ref_initial_value (SvgProperty    attr,
       attr == SVG_PROPERTY_DISPLAY)
     return svg_display_new (DISPLAY_NONE);
 
+  if (attr == SVG_PROPERTY_TEXT_X || attr == SVG_PROPERTY_TEXT_Y)
+    {
+      if (shape_type == SVG_ELEMENT_TEXT)
+        return svg_numbers_new1 (0);
+      else if (shape_type == SVG_ELEMENT_TSPAN)
+        return svg_numbers_new_none ();
+    }
+
   return svg_value_ref (shape_attrs[attr].initial_value);
 }
 
@@ -1382,7 +1481,8 @@ typedef struct {
   (BIT (SVG_FILTER_FLOOD) | BIT (SVG_FILTER_BLUR) | BIT (SVG_FILTER_BLEND) | \
    BIT (SVG_FILTER_COLOR_MATRIX) | BIT (SVG_FILTER_COMPOSITE) | BIT (SVG_FILTER_OFFSET) | \
    BIT (SVG_FILTER_DISPLACEMENT) | BIT (SVG_FILTER_TILE) | BIT (SVG_FILTER_IMAGE) | \
-   BIT (SVG_FILTER_MERGE) | BIT (SVG_FILTER_COMPONENT_TRANSFER) | BIT (SVG_FILTER_DROPSHADOW))
+   BIT (SVG_FILTER_MERGE) | BIT (SVG_FILTER_COMPONENT_TRANSFER) | BIT (SVG_FILTER_DROPSHADOW) | \
+   BIT (SVG_FILTER_TURBULENCE))
 
 #define FILTER_FUNCS \
   (BIT (SVG_FILTER_FUNC_R) | BIT (SVG_FILTER_FUNC_G) | BIT (SVG_FILTER_FUNC_B) | BIT (SVG_FILTER_FUNC_A))
@@ -1399,7 +1499,8 @@ static SvgPropertyLookup shape_attr_lookups[] = {
   { "opacity", ELEMENT_ANY, 0, SVG_PROPERTY_OPACITY },
   { "color", ELEMENT_ANY, 0, SVG_PROPERTY_COLOR },
   { "color-interpolation", ELEMENT_CONTAINERS | ELEMENT_GRAPHICS | ELEMENT_GRADIENTS | SVG_ELEMENT_USE, 0, SVG_PROPERTY_COLOR_INTERPOLATION },
-  { "color-interpolation-filters", BIT (SVG_ELEMENT_FILTER), 0, SVG_PROPERTY_COLOR_INTERPOLATION_FILTERS },
+  { "color-interpolation-filters", BIT (SVG_ELEMENT_FILTER), FILTER_ANY, SVG_PROPERTY_FE_COLOR_INTERPOLATION },
+  { "color-interpolation-filters", ELEMENT_ANY, 0, SVG_PROPERTY_FE_COLOR_INTERPOLATION },
   { "clip-path", (ELEMENT_CONTAINERS & ~BIT (SVG_ELEMENT_DEFS)) | ELEMENT_GRAPHICS | BIT (SVG_ELEMENT_USE), 0, SVG_PROPERTY_CLIP_PATH },
   { "clip-rule", ELEMENT_ANY, 0, SVG_PROPERTY_CLIP_RULE },
   { "mask", (ELEMENT_CONTAINERS & ~BIT (SVG_ELEMENT_DEFS)) | ELEMENT_GRAPHICS | BIT (SVG_ELEMENT_USE), 0, SVG_PROPERTY_MASK },
@@ -1407,7 +1508,8 @@ static SvgPropertyLookup shape_attr_lookups[] = {
   { "font-style", ELEMENT_ANY, 0, SVG_PROPERTY_FONT_STYLE },
   { "font-variant", ELEMENT_ANY, 0, SVG_PROPERTY_FONT_VARIANT },
   { "font-weight", ELEMENT_ANY, 0, SVG_PROPERTY_FONT_WEIGHT },
-  { "font-stretch", ELEMENT_ANY, 0, SVG_PROPERTY_FONT_STRETCH },
+  { "font-width", ELEMENT_ANY, 0, SVG_PROPERTY_FONT_WIDTH },
+  { "font-stretch", ELEMENT_ANY, 0, SVG_PROPERTY_FONT_WIDTH },
   { "filter", (ELEMENT_CONTAINERS & ~BIT (SVG_ELEMENT_DEFS)) | ELEMENT_GRAPHICS | BIT (SVG_ELEMENT_USE), 0, SVG_PROPERTY_FILTER },
   { "fill", ELEMENT_ANY, 0, SVG_PROPERTY_FILL },
   { "fill-opacity", ELEMENT_ANY, 0, SVG_PROPERTY_FILL_OPACITY },
@@ -1440,10 +1542,10 @@ static SvgPropertyLookup shape_attr_lookups[] = {
   { "r", BIT (SVG_ELEMENT_CIRCLE) | BIT (SVG_ELEMENT_RADIAL_GRADIENT), 0, SVG_PROPERTY_R },
   { "x",  BIT (SVG_ELEMENT_SVG) | BIT (SVG_ELEMENT_SYMBOL) | BIT (SVG_ELEMENT_RECT) | BIT (SVG_ELEMENT_IMAGE) |
           BIT (SVG_ELEMENT_USE) | BIT (SVG_ELEMENT_FILTER) | BIT (SVG_ELEMENT_PATTERN) |
-          BIT (SVG_ELEMENT_MASK) | ELEMENT_TEXTS, 0, SVG_PROPERTY_X },
+          BIT (SVG_ELEMENT_MASK), 0, SVG_PROPERTY_X },
   { "y",  BIT (SVG_ELEMENT_SVG) | BIT (SVG_ELEMENT_SYMBOL) | BIT (SVG_ELEMENT_RECT) | BIT (SVG_ELEMENT_IMAGE) |
           BIT (SVG_ELEMENT_USE) | BIT (SVG_ELEMENT_FILTER) | BIT (SVG_ELEMENT_PATTERN) |
-          BIT (SVG_ELEMENT_MASK) | ELEMENT_TEXTS, 0, SVG_PROPERTY_Y },
+          BIT (SVG_ELEMENT_MASK), 0, SVG_PROPERTY_Y },
   { "width", BIT (SVG_ELEMENT_SVG) | BIT (SVG_ELEMENT_SYMBOL) | BIT (SVG_ELEMENT_RECT) | BIT (SVG_ELEMENT_IMAGE) |
              BIT (SVG_ELEMENT_USE) | BIT (SVG_ELEMENT_FILTER) | BIT (SVG_ELEMENT_MASK) |
              BIT (SVG_ELEMENT_PATTERN), 0, SVG_PROPERTY_WIDTH },
@@ -1478,15 +1580,19 @@ static SvgPropertyLookup shape_attr_lookups[] = {
   { "refY", BIT (SVG_ELEMENT_MARKER), 0, SVG_PROPERTY_REF_Y },
   { "markerUnits", BIT (SVG_ELEMENT_MARKER), 0, SVG_PROPERTY_MARKER_UNITS },
   { "orient", BIT (SVG_ELEMENT_MARKER), 0, SVG_PROPERTY_MARKER_ORIENT },
+  { "xml:space", ELEMENT_ANY, 0, SVG_PROPERTY_SPACE },
   { "lang", ELEMENT_ANY, 0, SVG_PROPERTY_LANG },
   { "xml:lang", ELEMENT_ANY, 0, SVG_PROPERTY_LANG },
-  { "text-anchor", ELEMENT_ANY, 0, SVG_PROPERTY_TEXT_ANCHOR },
-  { "dominant-baseline", ELEMENT_ANY, 0, SVG_PROPERTY_DOMINANT_BASELINE },
-  { "dx", ELEMENT_TEXTS, 0, SVG_PROPERTY_DX },
-  { "dy", ELEMENT_TEXTS, 0, SVG_PROPERTY_DY },
+  { "text-anchor", ELEMENT_TEXTS, 0, SVG_PROPERTY_TEXT_ANCHOR },
+  { "dominant-baseline", ELEMENT_TEXTS, 0, SVG_PROPERTY_DOMINANT_BASELINE },
+  { "x", ELEMENT_TEXTS, 0, SVG_PROPERTY_TEXT_X },
+  { "y", ELEMENT_TEXTS, 0, SVG_PROPERTY_TEXT_Y },
+  { "dx", ELEMENT_TEXTS, 0, SVG_PROPERTY_TEXT_DX },
+  { "dy", ELEMENT_TEXTS, 0, SVG_PROPERTY_TEXT_DY },
   { "unicode-bidi", ELEMENT_ANY, 0, SVG_PROPERTY_UNICODE_BIDI },
   { "direction", ELEMENT_ANY, 0, SVG_PROPERTY_DIRECTION },
   { "writing-mode", ELEMENT_ANY, 0, SVG_PROPERTY_WRITING_MODE },
+  { "baseline-shift", ELEMENT_ANY, 0, SVG_PROPERTY_BASELINE_SHIFT },
   { "letter-spacing", ELEMENT_ANY, 0, SVG_PROPERTY_LETTER_SPACING },
   { "text-decoration", ELEMENT_ANY, 0, SVG_PROPERTY_TEXT_DECORATION },
   { "requiredExtensions", ELEMENT_ANY, 0, SVG_PROPERTY_REQUIRED_EXTENSIONS },
@@ -1534,6 +1640,11 @@ static SvgPropertyLookup shape_attr_lookups[] = {
   { "amplitude", BIT (SVG_ELEMENT_FILTER), FILTER_FUNCS, SVG_PROPERTY_FE_FUNC_AMPLITUDE },
   { "exponent", BIT (SVG_ELEMENT_FILTER), FILTER_FUNCS, SVG_PROPERTY_FE_FUNC_EXPONENT },
   { "offset", BIT (SVG_ELEMENT_FILTER), FILTER_FUNCS, SVG_PROPERTY_FE_FUNC_OFFSET },
+  { "baseFrequency", BIT (SVG_ELEMENT_FILTER), BIT (SVG_FILTER_TURBULENCE), SVG_PROPERTY_FE_TURBULENCE_BASE_FREQ },
+  { "numOctaves", BIT (SVG_ELEMENT_FILTER), BIT (SVG_FILTER_TURBULENCE), SVG_PROPERTY_FE_TURBULENCE_NUM_OCTAVES },
+  { "seed", BIT (SVG_ELEMENT_FILTER), BIT (SVG_FILTER_TURBULENCE), SVG_PROPERTY_FE_TURBULENCE_SEED },
+  { "type", BIT (SVG_ELEMENT_FILTER), BIT (SVG_FILTER_TURBULENCE), SVG_PROPERTY_FE_TURBULENCE_TYPE },
+  { "stitchTiles", BIT (SVG_ELEMENT_FILTER), BIT (SVG_FILTER_TURBULENCE), SVG_PROPERTY_FE_TURBULENCE_STITCH_TILES },
 };
 
 gboolean

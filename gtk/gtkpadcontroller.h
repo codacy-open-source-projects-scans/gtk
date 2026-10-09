@@ -76,7 +76,7 @@ struct _GtkPadActionEntry {
 };
 
 GDK_AVAILABLE_IN_ALL
-GType gtk_pad_controller_get_type           (void) G_GNUC_CONST;
+GType gtk_pad_controller_get_type           (void);
 
 GDK_AVAILABLE_IN_ALL
 GtkPadController *gtk_pad_controller_new    (GActionGroup     *group,
@@ -93,6 +93,8 @@ void  gtk_pad_controller_set_action         (GtkPadController *controller,
                                              int               mode,
                                              const char       *label,
                                              const char       *action_name);
+
+G_DEFINE_AUTOPTR_CLEANUP_FUNC(GtkPadController, g_object_unref)
 
 G_END_DECLS
 

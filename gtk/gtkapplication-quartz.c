@@ -352,8 +352,7 @@ gtk_application_impl_quartz_shutdown (GtkApplicationImpl *impl)
       quartz->delegate = NULL;
     }
 
-  g_slist_free_full (quartz->inhibitors, (GDestroyNotify) gtk_application_quartz_inhibitor_free);
-  quartz->inhibitors = NULL;
+  g_clear_slist (&quartz->inhibitors, (GDestroyNotify) gtk_application_quartz_inhibitor_free);
 }
 
 static void
@@ -406,6 +405,9 @@ gtk_application_impl_quartz_set_menubar (GtkApplicationImpl *impl,
 
   if (menubar)
     g_menu_append_section (quartz->combined, NULL, menubar);
+
+  /* Trigger an update to the menu, so the menu can be amended with macOS default entries. */
+  gtk_application_impl_quartz_setup_menu (G_MENU_MODEL (quartz->combined), quartz->muxer);
 }
 
 static guint

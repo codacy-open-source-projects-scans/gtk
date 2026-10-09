@@ -4,6 +4,7 @@ demos = files([
   'application_demo.c',
   'aspect_frame.c',
   'assistant.c',
+  'badapple.c',
   'builder.c',
   'clipboard.c',
   'combobox.c',
@@ -97,6 +98,7 @@ demos = files([
   'sidebar.c',
   'sizegroup.c',
   'sliding_puzzle.c',
+  'snapping.c',
   'spinbutton.c',
   'spinner.c',
   'stack.c',
@@ -166,6 +168,14 @@ gtkdemo_resources = gnome.compile_resources('gtkdemo_resources',
   source_dir: meson.current_source_dir()
 )
 
+test('gtk-demo-manifest-check',
+  manifest_check,
+  args: [
+    meson.current_source_dir() / 'demo.gresource.xml',
+    demos,
+  ],
+)
+
 # Use a subset of compiler flags
 demo_cflags = []
 foreach flag: common_cflags
@@ -179,7 +189,7 @@ demo_cflags += [ '-DGTK_COMPILATION=1' ]
 
 gtkdemo_deps += [ profile_conf_h ]
 
-executable('gtk4-demo',
+gtk4_demo = executable('gtk4-demo',
   sources: [demos, demos_h, extra_demo_sources, gtkdemo_resources],
   c_args: demo_cflags,
   dependencies: gtkdemo_deps,

@@ -98,7 +98,7 @@
  *                              "Expression",
  *                              "The expression used by the widget",
  *                              G_PARAM_READWRITE |
- *                              G_PARAM_STATIC_STRINGS |
+ *                              G_PARAM_STATIC_NAME |
  *                              G_PARAM_EXPLICIT_NOTIFY);
  * ```
  *
@@ -1297,8 +1297,7 @@ gtk_property_expression_watch_destroy_closure (GtkPropertyExpressionWatch *pwatc
     return;
 
   g_closure_invalidate (pwatch->closure);
-  g_closure_unref (pwatch->closure);
-  pwatch->closure = NULL;
+  g_clear_pointer (&pwatch->closure, g_closure_unref);
 }
 
 static void

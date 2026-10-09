@@ -25,11 +25,13 @@
 #include "gdktoplevel.h"
 #include <graphene.h>
 
+#include <gsk/gsktypes.h>
+
 G_BEGIN_DECLS
 
+typedef struct _GdkDrawContextFrame GdkDrawContextFrame;
 typedef struct _GdkSubsurface GdkSubsurface;
-
-typedef struct _GskRenderNode GskRenderNode;
+typedef struct _GdkSurfaceFrame GdkSurfaceFrame; /* empty typedef for now */
 
 struct _GdkSurface
 {
@@ -79,8 +81,6 @@ struct _GdkSurface
     GdkGravity rect_anchor;
   } popup;
 
-  guint update_and_descendants_freeze_count;
-
   int width, height;
 
   GdkCursor *cursor;
@@ -91,8 +91,6 @@ struct _GdkSurface
   GList *devices_inside;
 
   GdkFrameClock *frame_clock; /* NULL to use from parent or default */
-
-  GdkDrawContext *paint_context;
 
   GdkSeat *current_shortcuts_inhibited_seat;
 
@@ -108,6 +106,8 @@ struct _GdkSurface
 struct _GdkSurfaceClass
 {
   GObjectClass parent_class;
+
+  gsize                 frame_size;
 
   void         (* hide)                 (GdkSurface      *surface);
   void         (* get_geometry)         (GdkSurface      *surface,
@@ -157,6 +157,10 @@ struct _GdkSurfaceClass
                                            GdkDrawContext  *context,
                                            guint           *out_width,
                                            guint           *out_height);
+  void         (* submit_frame)           (GdkSurface           *surface,
+                                           GdkDrawContextFrame  *frame);
+  void         (* finalize_frame)         (GdkSurface           *surface,
+                                           GdkDrawContextFrame  *frame);
 
   void         (* set_opaque_region)      (GdkSurface      *surface,
                                            cairo_region_t *region);
@@ -170,9 +174,6 @@ struct _GdkSurfaceClass
 #define GDK_SURFACE_DESTROYED(d) (((GdkSurface *)(d))->destroyed)
 
 #define GDK_SURFACE_IS_MAPPED(surface) ((surface)->pending_is_mapped)
-
-void gdk_surface_set_state (GdkSurface      *surface,
-                            GdkToplevelState  new_state);
 
 void gdk_surface_set_is_mapped (GdkSurface *surface,
                                 gboolean    is_mapped);
@@ -267,7 +268,6 @@ void       gdk_surface_invalidate_rect    (GdkSurface            *surface,
                                            const GdkRectangle    *rect);
 void       gdk_surface_invalidate_region  (GdkSurface            *surface,
                                            const cairo_region_t  *region);
-void       _gdk_surface_clear_update_area (GdkSurface            *surface);
 void       _gdk_surface_update_size       (GdkSurface            *surface);
 void       gdk_surface_set_opaque_rect    (GdkSurface            *self,
                                            const graphene_rect_t *rect);
@@ -350,8 +350,6 @@ void       gdk_surface_apply_state_change  (GdkSurface       *surface);
 
 void           gdk_surface_request_motion (GdkSurface *surface);
 
-gboolean       gdk_surface_supports_edge_constraints    (GdkSurface *surface);
-
 GdkSubsurface * gdk_surface_create_subsurface  (GdkSurface          *surface);
 gsize           gdk_surface_get_n_subsurfaces  (GdkSurface          *surface);
 GdkSubsurface * gdk_surface_get_subsurface     (GdkSurface          *surface,
@@ -363,5 +361,8 @@ void                    gdk_surface_set_color_state                     (GdkSurf
 void                    gdk_surface_set_attached_context                (GdkSurface             *self,
                                                                          GdkDrawContext         *context);
 GdkDrawContext *        gdk_surface_get_attached_context                (GdkSurface             *self);
+void                    gdk_surface_set_content                         (GdkSurface             *self,
+                                                                         GskRenderNode          *content);
+GskRenderNode *         gdk_surface_get_content                         (GdkSurface             *self);
 
 G_END_DECLS

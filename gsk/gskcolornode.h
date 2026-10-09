@@ -31,12 +31,14 @@ typedef struct _GskColorNode                    GskColorNode;
 #define GSK_TYPE_COLOR_NODE (gsk_color_node_get_type())
 
 GDK_AVAILABLE_IN_ALL
-GType                   gsk_color_node_get_type                 (void) G_GNUC_CONST;
+GType                   gsk_color_node_get_type                 (void);
 GDK_AVAILABLE_IN_ALL
 GskRenderNode *         gsk_color_node_new                      (const GdkRGBA            *rgba,
                                                                  const graphene_rect_t    *bounds);
 GDK_AVAILABLE_IN_ALL
 const GdkRGBA *         gsk_color_node_get_color                (const GskRenderNode      *node) G_GNUC_PURE;
+GDK_AVAILABLE_IN_4_24
+GskRectSnap             gsk_color_node_get_snap                 (const GskRenderNode      *node) G_GNUC_PURE;
 
 G_END_DECLS
 

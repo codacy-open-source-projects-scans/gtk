@@ -53,8 +53,9 @@
  *
  * Transitions between pages can be animated as slides or fades. This
  * can be controlled with [method@Gtk.Stack.set_transition_type].
+ *
  * These animations respect the [property@Gtk.Settings:gtk-enable-animations]
- * setting.
+ * and [property@Gtk.Settings:gtk-interface-reduced-motion] settings.
  *
  * `GtkStack` maintains a [class@Gtk.StackPage] object for each added
  * child, which holds additional per-child properties. You
@@ -201,9 +202,9 @@ enum
   CHILD_PROP_NEEDS_ATTENTION,
   CHILD_PROP_VISIBLE,
   CHILD_PROP_USE_UNDERLINE,
+  /* GtkAccessible */
+  PROP_ACCESSIBLE_ROLE,
   LAST_CHILD_PROP,
-
-  PROP_ACCESSIBLE_ROLE
 };
 
 struct _GtkStackPage
@@ -488,6 +489,7 @@ static void
 gtk_stack_page_class_init (GtkStackPageClass *class)
 {
   GObjectClass *object_class = G_OBJECT_CLASS (class);
+  gpointer iface;
 
   object_class->finalize = gtk_stack_page_finalize;
   object_class->dispose = gtk_stack_page_dispose;
@@ -503,7 +505,7 @@ gtk_stack_page_class_init (GtkStackPageClass *class)
   stack_page_props[CHILD_PROP_CHILD] =
     g_param_spec_object ("child", NULL, NULL,
                          GTK_TYPE_WIDGET,
-                         GTK_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY);
+                         G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_CONSTRUCT_ONLY);
 
   /**
    * GtkStackPage:name:
@@ -513,7 +515,7 @@ gtk_stack_page_class_init (GtkStackPageClass *class)
   stack_page_props[CHILD_PROP_NAME] =
     g_param_spec_string ("name", NULL, NULL,
                          NULL,
-                         GTK_PARAM_READWRITE);
+                         G_PARAM_READWRITE | G_PARAM_STATIC_NAME);
 
   /**
    * GtkStackPage:title:
@@ -523,7 +525,7 @@ gtk_stack_page_class_init (GtkStackPageClass *class)
   stack_page_props[CHILD_PROP_TITLE] =
     g_param_spec_string ("title", NULL, NULL,
                          NULL,
-                         GTK_PARAM_READWRITE);
+                         G_PARAM_READWRITE | G_PARAM_STATIC_NAME);
 
   /**
    * GtkStackPage:icon-name:
@@ -533,7 +535,7 @@ gtk_stack_page_class_init (GtkStackPageClass *class)
   stack_page_props[CHILD_PROP_ICON_NAME] =
     g_param_spec_string ("icon-name", NULL, NULL,
                          NULL,
-                         GTK_PARAM_READWRITE);
+                         G_PARAM_READWRITE | G_PARAM_STATIC_NAME);
 
   /**
    * GtkStackPage:needs-attention:
@@ -547,7 +549,7 @@ gtk_stack_page_class_init (GtkStackPageClass *class)
   stack_page_props[CHILD_PROP_NEEDS_ATTENTION] =
     g_param_spec_boolean ("needs-attention", NULL, NULL,
                          FALSE,
-                         GTK_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY);
+                         G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkStackPage:visible:
@@ -557,7 +559,7 @@ gtk_stack_page_class_init (GtkStackPageClass *class)
   stack_page_props[CHILD_PROP_VISIBLE] =
     g_param_spec_boolean ("visible", NULL, NULL,
                          TRUE,
-                         GTK_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY);
+                         G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkStackPage:use-underline:
@@ -567,11 +569,15 @@ gtk_stack_page_class_init (GtkStackPageClass *class)
   stack_page_props[CHILD_PROP_USE_UNDERLINE] =
     g_param_spec_boolean ("use-underline", NULL, NULL,
                          FALSE,
-                         GTK_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY);
+                         G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
+
+  /* GtkAccessible */
+  iface = g_type_default_interface_peek (GTK_TYPE_ACCESSIBLE);
+  stack_page_props[PROP_ACCESSIBLE_ROLE] =
+    g_param_spec_override ("accessible-role",
+                           g_object_interface_find_property (iface, "accessible-role"));
 
   g_object_class_install_properties (object_class, LAST_CHILD_PROP, stack_page_props);
-
-  g_object_class_override_property (object_class, PROP_ACCESSIBLE_ROLE, "accessible-role");
 }
 
 #define GTK_TYPE_STACK_PAGES (gtk_stack_pages_get_type ())
@@ -727,12 +733,12 @@ gtk_stack_pages_class_init (GtkStackPagesClass *klass)
   pages_properties[PAGES_PROP_ITEM_TYPE] =
     g_param_spec_gtype ("item-type", NULL, NULL,
                         GTK_TYPE_STACK_PAGE,
-                        G_PARAM_READABLE | G_PARAM_STATIC_STRINGS);
+                        G_PARAM_READABLE | G_PARAM_STATIC_NAME);
 
   pages_properties[PAGES_PROP_N_ITEMS] =
     g_param_spec_uint ("n-items", NULL, NULL,
                        0, G_MAXUINT, 0,
-                       G_PARAM_READABLE | G_PARAM_STATIC_STRINGS);
+                       G_PARAM_READABLE | G_PARAM_STATIC_NAME);
 
   g_object_class_install_properties (object_class, PAGES_N_PROPS, pages_properties);
 }
@@ -974,7 +980,7 @@ gtk_stack_class_init (GtkStackClass *klass)
   stack_props[PROP_HHOMOGENEOUS] =
       g_param_spec_boolean ("hhomogeneous", NULL, NULL,
                             TRUE,
-                            GTK_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY);
+                            G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkStack:vhomogeneous:
@@ -984,7 +990,7 @@ gtk_stack_class_init (GtkStackClass *klass)
   stack_props[PROP_VHOMOGENEOUS] =
       g_param_spec_boolean ("vhomogeneous", NULL, NULL,
                             TRUE,
-                            GTK_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY);
+                            G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkStack:visible-child:
@@ -994,7 +1000,7 @@ gtk_stack_class_init (GtkStackClass *klass)
   stack_props[PROP_VISIBLE_CHILD] =
       g_param_spec_object ("visible-child", NULL, NULL,
                            GTK_TYPE_WIDGET,
-                           GTK_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY);
+                           G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkStack:visible-child-name:
@@ -1004,7 +1010,7 @@ gtk_stack_class_init (GtkStackClass *klass)
   stack_props[PROP_VISIBLE_CHILD_NAME] =
       g_param_spec_string ("visible-child-name", NULL, NULL,
                            NULL,
-                           GTK_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY);
+                           G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkStack:transition-duration:
@@ -1014,7 +1020,7 @@ gtk_stack_class_init (GtkStackClass *klass)
   stack_props[PROP_TRANSITION_DURATION] =
       g_param_spec_uint ("transition-duration", NULL, NULL,
                          0, G_MAXUINT, 200,
-                         GTK_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY);
+                         G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkStack:transition-type:
@@ -1024,7 +1030,7 @@ gtk_stack_class_init (GtkStackClass *klass)
   stack_props[PROP_TRANSITION_TYPE] =
       g_param_spec_enum ("transition-type", NULL, NULL,
                          GTK_TYPE_STACK_TRANSITION_TYPE, GTK_STACK_TRANSITION_TYPE_NONE,
-                         GTK_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY);
+                         G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkStack:transition-running:
@@ -1034,7 +1040,7 @@ gtk_stack_class_init (GtkStackClass *klass)
   stack_props[PROP_TRANSITION_RUNNING] =
       g_param_spec_boolean ("transition-running", NULL, NULL,
                             FALSE,
-                            GTK_PARAM_READABLE);
+                            G_PARAM_READABLE | G_PARAM_STATIC_NAME);
 
   /**
    * GtkStack:interpolate-size:
@@ -1044,7 +1050,7 @@ gtk_stack_class_init (GtkStackClass *klass)
   stack_props[PROP_INTERPOLATE_SIZE] =
       g_param_spec_boolean ("interpolate-size", NULL, NULL,
                             FALSE,
-                            GTK_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY);
+                            G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkStack:pages:
@@ -1054,7 +1060,7 @@ gtk_stack_class_init (GtkStackClass *klass)
   stack_props[PROP_PAGES] =
       g_param_spec_object ("pages", NULL, NULL,
                            GTK_TYPE_SELECTION_MODEL,
-                           GTK_PARAM_READABLE);
+                           G_PARAM_READABLE | G_PARAM_STATIC_NAME);
 
   g_object_class_install_properties (object_class, LAST_PROP, stack_props);
 
@@ -1278,10 +1284,10 @@ gtk_stack_transition_cb (GtkWidget     *widget,
       priv->tick_id = 0;
       g_object_notify_by_pspec (G_OBJECT (stack), stack_props[PROP_TRANSITION_RUNNING]);
 
-      return FALSE;
+      return G_SOURCE_REMOVE;
     }
 
-  return TRUE;
+  return G_SOURCE_CONTINUE;
 }
 
 static void
@@ -1312,9 +1318,28 @@ gtk_stack_unschedule_ticks (GtkStack *stack)
 }
 
 static GtkStackTransitionType
-effective_transition_type (GtkStack               *stack,
-                           GtkStackTransitionType  transition_type)
+get_effective_transition_type (GtkStack               *stack,
+                               GtkStackTransitionType  transition_type)
 {
+  if (transition_type != GTK_STACK_TRANSITION_TYPE_NONE)
+    {
+      GtkStackPrivate *priv = gtk_stack_get_instance_private (stack);
+      GtkReducedMotion reduced_motion;
+
+      g_object_get (gtk_widget_get_settings (GTK_WIDGET (stack)),
+                    "gtk-interface-reduced-motion", &reduced_motion,
+                    NULL);
+
+      if (reduced_motion == GTK_REDUCED_MOTION_REDUCE)
+        {
+          if (priv->homogeneous[GTK_ORIENTATION_VERTICAL] &&
+              priv->homogeneous[GTK_ORIENTATION_HORIZONTAL])
+            return GTK_STACK_TRANSITION_TYPE_CROSSFADE;
+          else
+            return GTK_STACK_TRANSITION_TYPE_NONE;
+        }
+    }
+
   if (_gtk_widget_get_direction (GTK_WIDGET (stack)) == GTK_TEXT_DIR_RTL)
     {
       switch (transition_type)
@@ -1367,14 +1392,17 @@ gtk_stack_start_transition (GtkStack               *stack,
 {
   GtkStackPrivate *priv = gtk_stack_get_instance_private (stack);
   GtkWidget *widget = GTK_WIDGET (stack);
+  GtkStackTransitionType effective_transition_type = GTK_STACK_TRANSITION_TYPE_NONE;
 
   if (gtk_widget_get_mapped (widget) &&
-      gtk_settings_get_enable_animations (gtk_widget_get_settings (widget)) &&
-      transition_type != GTK_STACK_TRANSITION_TYPE_NONE &&
+      gtk_settings_get_enable_animations (gtk_widget_get_settings (widget)))
+    effective_transition_type = get_effective_transition_type (stack, transition_type);
+
+  if (effective_transition_type != GTK_STACK_TRANSITION_TYPE_NONE &&
       transition_duration != 0 &&
       priv->last_visible_child != NULL)
     {
-      priv->active_transition_type = effective_transition_type (stack, transition_type);
+      priv->active_transition_type = effective_transition_type;
       priv->first_frame_skipped = FALSE;
       gtk_stack_schedule_ticks (stack);
       gtk_progress_tracker_start (&priv->tracker,
@@ -2835,12 +2863,16 @@ gtk_stack_measure (GtkWidget      *widget,
         }
 
       /* Work out which for_size we want to pass for measuring our children */
-      if (for_size == -1 || for_size == last_opposite_size ||
-          priv->homogeneous[OPPOSITE_ORIENTATION(orientation)])
+      if (priv->homogeneous[OPPOSITE_ORIENTATION(orientation)])
         child_for_size = for_size;
       else if (t <= 0.0)
-        /* We're going to return last_size anyway */
+        /* We're still reporting our previous size, and the incoming child can
+         * have any size it wants.
+         */
         child_for_size = -1;
+      else if (for_size == -1 || for_size == last_opposite_size)
+        /* Interpolation is a no-op */
+        child_for_size = for_size;
       else
         {
           double d = inverse_lerp (last_opposite_size, for_size, t);
@@ -2869,33 +2901,23 @@ gtk_stack_measure (GtkWidget      *widget,
       child_info = g_ptr_array_index (priv->children, idx);
       child = child_info->widget;
 
+      /* Unless we're homogeneous, skip all but the visible child */
       if (!priv->homogeneous[orientation] &&
           priv->visible_child != child_info)
         continue;
       if (!gtk_widget_get_visible (child))
         continue;
 
-      if (!priv->homogeneous[OPPOSITE_ORIENTATION(orientation)] && priv->visible_child != child_info)
-        {
-          int measure_for_size;
-
-          /* Make sure to measure at least for the minimum size */
-          if (child_for_size == -1)
-            measure_for_size = -1;
-          else
-            {
-              gtk_widget_measure (child, OPPOSITE_ORIENTATION (orientation),
-                                  -1,
-                                  &measure_for_size, NULL,
-                                  NULL, NULL);
-              measure_for_size = MAX (measure_for_size, child_for_size);
-            }
-
-          gtk_widget_measure (child, orientation,
-                              measure_for_size,
-                              &child_min, &child_nat,
-                              NULL, NULL);
-        }
+      if (!priv->homogeneous[OPPOSITE_ORIENTATION(orientation)] &&
+          priv->visible_child != child_info)
+        /* We're homogeneous in the orientation we're measuring for, but
+         * not in the opposite orientation. This is not the visible child;
+         * when we switch to it, it can have any different size in the
+         * opposite orientation.
+         */
+        gtk_widget_measure (child, orientation, -1,
+                            &child_min, &child_nat,
+                            NULL, NULL);
       else
         gtk_widget_measure (child, orientation,
                             child_for_size,
@@ -2912,6 +2934,10 @@ gtk_stack_measure (GtkWidget      *widget,
     {
       *minimum = ceil (lerp (last_size, *minimum, t));
       *natural = ceil (lerp (last_size, *natural, t));
+    }
+  else if (t <= 0.0 && priv->homogeneous[orientation])
+    {
+      *minimum = *natural = last_size;
     }
 }
 

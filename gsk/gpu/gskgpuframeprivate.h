@@ -5,6 +5,8 @@
 
 #include "gskdebugnodeprivate.h" /* GskDebugProfile */
 
+#include "gdk/gdkdrawcontextprivate.h"
+
 G_BEGIN_DECLS
 
 #define GSK_TYPE_GPU_FRAME         (gsk_gpu_frame_get_type ())
@@ -29,11 +31,10 @@ struct _GskGpuFrameClass
   void                  (* wait)                                        (GskGpuFrame            *self);
   void                  (* setup)                                       (GskGpuFrame            *self);
   void                  (* cleanup)                                     (GskGpuFrame            *self);
-  void                  (* begin)                                       (GskGpuFrame            *self,
+  GdkDrawContextFrame * (* begin)                                       (GskGpuFrame            *self,
                                                                          GdkDrawContext         *context,
-                                                                         GdkMemoryDepth          depth,
-                                                                         const cairo_region_t   *region,
-                                                                         const graphene_rect_t  *opaque);
+                                                                         GskRenderNode          *node,
+                                                                         const cairo_region_t   *region);
   void                  (* end)                                         (GskGpuFrame            *self,
                                                                          GdkDrawContext         *context);
   void                  (* sync)                                        (GskGpuFrame            *self);
@@ -65,7 +66,7 @@ struct _GskGpuFrameClass
   GskDebugProfile *     (* get_profile)                                 (GskGpuFrame            *self);
 };
 
-GType                   gsk_gpu_frame_get_type                          (void) G_GNUC_CONST;
+GType                   gsk_gpu_frame_get_type                          (void);
 
 
 void                    gsk_gpu_frame_setup                             (GskGpuFrame            *self,
@@ -77,11 +78,10 @@ void                    gsk_gpu_frame_set_texture_vertex_size           (GskGpuF
 gsize                   gsk_gpu_frame_get_texture_vertex_size           (GskGpuFrame            *self,
                                                                          gsize                   n_textures);
 
-void                    gsk_gpu_frame_begin                             (GskGpuFrame            *self,
+GdkDrawContextFrame *   gsk_gpu_frame_begin                             (GskGpuFrame            *self,
                                                                          GdkDrawContext         *context,
-                                                                         GdkMemoryDepth          depth,
-                                                                         const cairo_region_t   *region,
-                                                                         const graphene_rect_t  *opaque);
+                                                                         GskRenderNode          *node,
+                                                                         const cairo_region_t   *region);
 void                    gsk_gpu_frame_end                               (GskGpuFrame            *self,
                                                                          GdkDrawContext         *context);
 void                    gsk_gpu_frame_sync                              (GskGpuFrame            *self);

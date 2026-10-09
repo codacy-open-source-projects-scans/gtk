@@ -41,6 +41,8 @@ struct _GtkListBaseClass
                                                                  GtkListTile            *tile,
                                                                  guint                   position);
   GtkListHeaderBase *  (* create_header_widget)                 (GtkListBase            *self);
+  void                 (* adjust_anchor_area)                   (GtkListBase            *self,
+                                                                 GdkRectangle           *area);
 
   gboolean             (* get_allocation)                       (GtkListBase            *self,
                                                                  guint                   pos,

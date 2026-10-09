@@ -18,7 +18,7 @@
 
 #include "config.h"
 
-#include "gskroundedclipnode.h"
+#include "gskroundedclipnodeprivate.h"
 
 #include "gskrendernodeprivate.h"
 #include "gskrenderreplay.h"
@@ -38,6 +38,7 @@ struct _GskRoundedClipNode
 
   GskRenderNode *child;
   GskRoundedRect clip;
+  GskRectSnap snap;
 };
 
 static void
@@ -57,10 +58,15 @@ gsk_rounded_clip_node_draw (GskRenderNode *node,
                             GskCairoData  *data)
 {
   GskRoundedClipNode *self = (GskRoundedClipNode *) node;
+  GskRoundedRect clip;
+
+  clip = self->clip;
+  if (!gsk_cairo_rect_snap (cr, &clip.bounds, self->snap, &clip.bounds))
+    return;
 
   cairo_save (cr);
 
-  gsk_rounded_rect_path (&self->clip, cr);
+  gsk_rounded_rect_path (&clip, cr);
   cairo_clip (cr);
 
   gsk_render_node_draw_full (self->child, cr, data);
@@ -76,7 +82,8 @@ gsk_rounded_clip_node_diff (GskRenderNode *node1,
   GskRoundedClipNode *self1 = (GskRoundedClipNode *) node1;
   GskRoundedClipNode *self2 = (GskRoundedClipNode *) node2;
 
-  if (gsk_rounded_rect_equal (&self1->clip, &self2->clip))
+  if (gsk_rounded_rect_equal (&self1->clip, &self2->clip) &&
+      self1->snap == self2->snap)
     {
       cairo_region_t *save;
       cairo_rectangle_int_t clip_rect;
@@ -147,7 +154,7 @@ gsk_rounded_clip_node_replay (GskRenderNode   *node,
   if (child == self->child)
     result = gsk_render_node_ref (node);
   else
-    result = gsk_rounded_clip_node_new (child, &self->clip);
+    result = gsk_rounded_clip_node_new2 (child, &self->clip, self->snap);
 
   gsk_render_node_unref (child);
 
@@ -183,6 +190,50 @@ gsk_rounded_clip_node_class_init (gpointer g_class,
 GSK_DEFINE_RENDER_NODE_TYPE (GskRoundedClipNode, gsk_rounded_clip_node)
 
 /**
+ * gsk_rounded_clip_node_new2:
+ * @child: The node to draw
+ * @clip: The clip to apply
+ * @snap: how to snap the clip rectangle to the pixel grid
+ *
+ * Creates a `GskRenderNode` that will clip the @child to the area
+ * given by @clip using the given snap value.
+ *
+ * Returns: (transfer full) (type GskRoundedClipNode): A new `GskRenderNode`
+ */
+GskRenderNode *
+gsk_rounded_clip_node_new2 (GskRenderNode        *child,
+                            const GskRoundedRect *clip,
+                            GskRectSnap           snap)
+{
+  GskRoundedClipNode *self;
+  GskRenderNode *node;
+
+  g_return_val_if_fail (GSK_IS_RENDER_NODE (child), NULL);
+  g_return_val_if_fail (clip != NULL, NULL);
+
+  self = gsk_render_node_alloc (GSK_TYPE_ROUNDED_CLIP_NODE);
+  node = (GskRenderNode *) self;
+
+  self->child = gsk_render_node_ref (child);
+  gsk_rounded_rect_init_copy (&self->clip, clip);
+  self->snap = snap;
+
+  if (!gsk_rect_intersection (&self->clip.bounds, &child->bounds, &node->bounds))
+    node->bounds = GRAPHENE_RECT_INIT (0, 0, 0, 0);
+
+  node->preferred_depth = gsk_render_node_get_preferred_depth (child);
+  node->is_hdr = gsk_render_node_is_hdr (child);
+  node->bilevel_opacity = gsk_render_node_is_bilevel_opacity (child);
+  node->clears_background = gsk_render_node_clears_background (child);
+  node->copy_mode = gsk_render_node_get_copy_mode (child) ? GSK_COPY_ANY : GSK_COPY_NONE;
+  node->contains_subsurface_node = gsk_render_node_contains_subsurface_node (child);
+  node->contains_paste_node = gsk_render_node_contains_paste_node (child);
+  node->needs_blending = gsk_render_node_needs_blending (child);
+
+  return node;
+}
+
+/**
  * gsk_rounded_clip_node_new:
  * @child: The node to draw
  * @clip: The clip to apply
@@ -196,30 +247,7 @@ GskRenderNode *
 gsk_rounded_clip_node_new (GskRenderNode         *child,
                            const GskRoundedRect  *clip)
 {
-  GskRoundedClipNode *self;
-  GskRenderNode *node;
-
-  g_return_val_if_fail (GSK_IS_RENDER_NODE (child), NULL);
-  g_return_val_if_fail (clip != NULL, NULL);
-
-  self = gsk_render_node_alloc (GSK_TYPE_ROUNDED_CLIP_NODE);
-  node = (GskRenderNode *) self;
-
-  self->child = gsk_render_node_ref (child);
-  gsk_rounded_rect_init_copy (&self->clip, clip);
-
-  if (!gsk_rect_intersection (&self->clip.bounds, &child->bounds, &node->bounds))
-    node->bounds = GRAPHENE_RECT_INIT (0, 0, 0, 0);
-
-  node->preferred_depth = gsk_render_node_get_preferred_depth (child);
-  node->is_hdr = gsk_render_node_is_hdr (child);
-  node->clears_background = gsk_render_node_clears_background (child);
-  node->copy_mode = gsk_render_node_get_copy_mode (child) ? GSK_COPY_ANY : GSK_COPY_NONE;
-  node->contains_subsurface_node = gsk_render_node_contains_subsurface_node (child);
-  node->contains_paste_node = gsk_render_node_contains_paste_node (child);
-  node->needs_blending = gsk_render_node_needs_blending (child);
-
-  return node;
+  return gsk_rounded_clip_node_new2 (child, clip, GSK_RECT_SNAP_NONE);
 }
 
 /**
@@ -253,3 +281,22 @@ gsk_rounded_clip_node_get_clip (const GskRenderNode *node)
 
   return &self->clip;
 }
+
+/**
+ * gsk_rounded_clip_node_get_snap:
+ * @node: (type GskRoundedClipNode): a `GskRoundedClipNode`
+ *
+ * Retrieves the snap value for this node
+ *
+ * Returns: the snap value
+ *
+ * Since: 4.24
+ **/
+GskRectSnap
+gsk_rounded_clip_node_get_snap (const GskRenderNode *node)
+{
+  const GskRoundedClipNode *self = (const GskRoundedClipNode *) node;
+
+  return self->snap;
+}
+

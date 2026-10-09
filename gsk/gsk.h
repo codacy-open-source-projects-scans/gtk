@@ -19,6 +19,8 @@
 
 #define __GSK_H_INSIDE__
 
+#include <gdk/gdk.h>
+
 #include <gsk/gskblendnode.h>
 #include <gsk/gskblurnode.h>
 #include <gsk/gskbordernode.h>
@@ -49,6 +51,7 @@
 #include <gsk/gskpathmeasure.h>
 #include <gsk/gskpathpoint.h>
 #include <gsk/gskradialgradientnode.h>
+#include <gsk/gskrectsnap.h>
 #include <gsk/gskrenderer.h>
 #include <gsk/gskrendernode.h>
 #include <gsk/gskrenderreplay.h>

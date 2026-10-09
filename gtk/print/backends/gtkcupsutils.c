@@ -1,5 +1,5 @@
 /* GTK - The GIMP Toolkit
- * gtkcupsutils.h: Statemachine implementation of POST and GET 
+ * gtkcupsutilsprivate.h: Statemachine implementation of POST and GET 
  * cups calls which can be used to create a non-blocking cups API
  * Copyright (C) 2006, 2007 Red Hat, Inc.
  *
@@ -19,7 +19,7 @@
 
 #include "config.h"
 #include <gtk/gtk.h>
-#include "gtkcupsutils.h"
+#include "gtkcupsutilsprivate.h"
 #include "gtkprivate.h"
 
 #include <errno.h>
@@ -1052,8 +1052,7 @@ _post_check (GtkCupsRequest *request)
               if (request->password != NULL)
                 {
                   memset (request->password, 0, strlen (request->password));
-                  g_free (request->password);
-                  request->password = NULL;
+                  g_clear_pointer (&request->password, g_free);
                 }
 
               request->password_state = GTK_CUPS_PASSWORD_APPLIED;
@@ -1202,8 +1201,7 @@ _post_read_response (GtkCupsRequest *request)
                                  "%s",
                                  ippErrorString (ipp_error));
       
-      ippDelete (request->result->ipp_response);
-      request->result->ipp_response = NULL;
+      g_clear_pointer (&request->result->ipp_response, ippDelete);
 
       request->state = GTK_CUPS_POST_DONE;
       request->poll_state = GTK_CUPS_HTTP_IDLE;
@@ -1348,8 +1346,7 @@ _get_check (GtkCupsRequest *request)
               if (request->password != NULL)
                 {
                   memset (request->password, 0, strlen (request->password));
-                  g_free (request->password);
-                  request->password = NULL;
+                  g_clear_pointer (&request->password, g_free);
                 }
 
               request->password_state = GTK_CUPS_PASSWORD_APPLIED;
@@ -1642,8 +1639,7 @@ gtk_cups_connection_test_get_state (GtkCupsConnectionTest *test)
 
           if (code == 0 || error_code == EISCONN)
             {
-              close (test->socket);
-              test->socket = -1;
+              g_clear_fd (&test->socket, NULL);
               test->current_addr = NULL;
               result = GTK_CUPS_CONNECTION_AVAILABLE;
             }
@@ -1653,8 +1649,7 @@ gtk_cups_connection_test_get_state (GtkCupsConnectionTest *test)
                 result = GTK_CUPS_CONNECTION_IN_PROGRESS;
               else
                 {
-                  close (test->socket);
-                  test->socket = -1;
+                  g_clear_fd (&test->socket, NULL);
                   test->last_wrong_addr = test->current_addr;
                   result = GTK_CUPS_CONNECTION_NOT_AVAILABLE;
                 }
@@ -1676,10 +1671,6 @@ gtk_cups_connection_test_free (GtkCupsConnectionTest *test)
   test->current_addr = NULL;
   test->last_wrong_addr = NULL;
   httpAddrFreeList (test->addrlist);
-  if (test->socket != -1)
-    {
-      close (test->socket);
-      test->socket = -1;
-    }
+  g_clear_fd (&test->socket, NULL);
   g_free (test);
 }

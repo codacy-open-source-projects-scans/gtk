@@ -1002,8 +1002,7 @@ broadway_server_flush (BroadwayServer *server)
       !broadway_output_flush (server->output))
     {
       server->saved_serial = broadway_output_get_next_serial (server->output);
-      broadway_output_free (server->output);
-      server->output = NULL;
+      g_clear_pointer (&server->output, broadway_output_free);
       send_outstanding_roundtrips (server);
     }
 }
@@ -1207,8 +1206,7 @@ send_outstanding_roundtrips (BroadwayServer *server)
       broadway_server_fake_roundtrip_reply (server, rt->id, rt->tag);
     }
 
-  g_list_free_full (server->outstanding_roundtrips, g_free);
-  server->outstanding_roundtrips = NULL;
+  g_clear_list (&server->outstanding_roundtrips, g_free);
 }
 
 static void
@@ -1230,8 +1228,7 @@ start (BroadwayInput *input)
   if (server->input != NULL)
     {
       send_outstanding_roundtrips (server);
-      broadway_input_free (server->input);
-      server->input = NULL;
+      g_clear_pointer (&server->input, broadway_input_free);
     }
 
   server->input = input;
@@ -2049,7 +2046,6 @@ broadway_server_grab_pointer (BroadwayServer *server,
                               int client_id,
                               int id,
                               gboolean owner_events,
-                              guint32 event_mask,
                               guint32 time_)
 {
   if (server->pointer_grab_surface_id != -1 &&

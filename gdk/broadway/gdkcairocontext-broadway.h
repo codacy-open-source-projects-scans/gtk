@@ -37,8 +37,6 @@ typedef struct _GdkBroadwayCairoContextClass GdkBroadwayCairoContextClass;
 struct _GdkBroadwayCairoContext
 {
   GdkCairoContext parent_instance;
-
-  cairo_surface_t *paint_surface;
 };
 
 struct _GdkBroadwayCairoContextClass
@@ -47,7 +45,7 @@ struct _GdkBroadwayCairoContextClass
 };
 
 GDK_AVAILABLE_IN_ALL
-GType gdk_broadway_cairo_context_get_type (void) G_GNUC_CONST;
+GType gdk_broadway_cairo_context_get_type (void);
 
 G_END_DECLS
 

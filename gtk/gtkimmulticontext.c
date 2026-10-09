@@ -212,8 +212,7 @@ gtk_im_multicontext_set_delegate (GtkIMMulticontext *multicontext,
       if (priv->client_widget)
         gtk_im_context_set_client_widget (priv->delegate, NULL);
 
-      g_object_unref (priv->delegate);
-      priv->delegate = NULL;
+      g_clear_object (&priv->delegate);
 
       if (!finalizing)
 	need_preedit_changed = TRUE;
@@ -392,7 +391,7 @@ gtk_im_multicontext_filter_keypress (GtkIMContext *context,
       keyval = gdk_key_event_get_keyval (event);
       state = gdk_event_get_modifier_state (event);
 
-      no_text_input_mask = GDK_ALT_MASK|GDK_CONTROL_MASK;
+      no_text_input_mask = GDK_ALT_MASK|GDK_CONTROL_MASK|GDK_SUPER_MASK|GDK_HYPER_MASK;
 
       if (gdk_event_get_event_type (event) == GDK_KEY_PRESS &&
           (state & no_text_input_mask) == 0)

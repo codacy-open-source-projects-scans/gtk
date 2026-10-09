@@ -226,7 +226,7 @@ enum {
   PROP_ACCEPT_UNPAIRED_RELEASE,
   PROP_SHOW_SEPARATORS,
   PROP_TAB_BEHAVIOR,
-  LAST_PROPERTY
+  N_PROPS,
 };
 
 enum {
@@ -234,12 +234,11 @@ enum {
   ROW_PROP_ACTIVATABLE,
   ROW_PROP_SELECTABLE,
   ROW_PROP_CHILD,
-
-  /* actionable properties */
+  /* GtkActionable */
   ROW_PROP_ACTION_NAME,
   ROW_PROP_ACTION_TARGET,
+  ROW_N_PROPS
 
-  LAST_ROW_PROPERTY = ROW_PROP_ACTION_NAME
 };
 
 #define ROW_PRIV(row) ((GtkListBoxRowPrivate*)gtk_list_box_row_get_instance_private ((GtkListBoxRow*)(row)))
@@ -354,9 +353,9 @@ static void gtk_list_box_measure (GtkWidget     *widget,
 
 
 
-static GParamSpec *properties[LAST_PROPERTY] = { NULL, };
+static GParamSpec *properties[N_PROPS] = { NULL, };
 static guint signals[LAST_SIGNAL] = { 0 };
-static GParamSpec *row_properties[LAST_ROW_PROPERTY] = { NULL, };
+static GParamSpec *row_properties[ROW_N_PROPS] = { NULL, };
 static guint row_signals[ROW__LAST_SIGNAL] = { 0 };
 
 
@@ -578,7 +577,7 @@ gtk_list_box_class_init (GtkListBoxClass *klass)
                                                GTK_LIST_TAB_ALL,
                                                G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_NAME);
 
-  g_object_class_install_properties (object_class, LAST_PROPERTY, properties);
+  g_object_class_install_properties (object_class, N_PROPS, properties);
 
   /**
    * GtkListBox::row-selected:
@@ -740,37 +739,20 @@ gtk_list_box_class_init (GtkListBoxClass *klass)
 
   gtk_list_box_add_move_binding (widget_class, GDK_KEY_Home, 0,
                                  GTK_MOVEMENT_BUFFER_ENDS, -1);
-  gtk_list_box_add_move_binding (widget_class, GDK_KEY_KP_Home, 0,
-                                 GTK_MOVEMENT_BUFFER_ENDS, -1);
   gtk_list_box_add_move_binding (widget_class, GDK_KEY_End, 0,
-                                 GTK_MOVEMENT_BUFFER_ENDS, 1);
-  gtk_list_box_add_move_binding (widget_class, GDK_KEY_KP_End, 0,
                                  GTK_MOVEMENT_BUFFER_ENDS, 1);
   gtk_list_box_add_move_binding (widget_class, GDK_KEY_Up, 0,
                                  GTK_MOVEMENT_DISPLAY_LINES, -1);
-  gtk_list_box_add_move_binding (widget_class, GDK_KEY_KP_Up, 0,
-                                 GTK_MOVEMENT_DISPLAY_LINES, -1);
   gtk_list_box_add_move_binding (widget_class, GDK_KEY_Down, 0,
-                                 GTK_MOVEMENT_DISPLAY_LINES, 1);
-  gtk_list_box_add_move_binding (widget_class, GDK_KEY_KP_Down, 0,
                                  GTK_MOVEMENT_DISPLAY_LINES, 1);
   gtk_list_box_add_move_binding (widget_class, GDK_KEY_Page_Up, 0,
                                  GTK_MOVEMENT_PAGES, -1);
-  gtk_list_box_add_move_binding (widget_class, GDK_KEY_KP_Page_Up, 0,
-                                 GTK_MOVEMENT_PAGES, -1);
   gtk_list_box_add_move_binding (widget_class, GDK_KEY_Page_Down, 0,
-                                 GTK_MOVEMENT_PAGES, 1);
-  gtk_list_box_add_move_binding (widget_class, GDK_KEY_KP_Page_Down, 0,
                                  GTK_MOVEMENT_PAGES, 1);
 
   gtk_widget_class_add_binding_signal (widget_class,
                                        GDK_KEY_space, GDK_CONTROL_MASK,
-                                       "toggle-cursor-row",
-                                       NULL);
-  gtk_widget_class_add_binding_signal (widget_class,
-                                       GDK_KEY_KP_Space, GDK_CONTROL_MASK,
-                                       "toggle-cursor-row",
-                                       NULL);
+                                       "toggle-cursor-row", NULL);
 
 #ifdef __APPLE__
   gtk_widget_class_add_binding_signal (widget_class,
@@ -1192,8 +1174,7 @@ gtk_list_box_parent_cb (GObject    *object,
   if (box->adjustment_changed_id != 0 &&
       box->scrollable_parent != NULL)
     {
-      g_signal_handler_disconnect (box->scrollable_parent,
-                                   box->adjustment_changed_id);
+      g_clear_signal_handler (&box->adjustment_changed_id, box->scrollable_parent);
     }
 
   if (parent && GTK_IS_SCROLLABLE (parent))
@@ -3962,10 +3943,12 @@ gtk_list_box_row_class_init (GtkListBoxRowClass *klass)
                          GTK_TYPE_WIDGET,
                          G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_NAME);
 
-  g_object_class_install_properties (object_class, LAST_ROW_PROPERTY, row_properties);
+  row_properties[ROW_PROP_ACTION_NAME] = g_param_spec_override ("action-name",
+      g_object_interface_find_property (g_type_default_interface_ref (GTK_TYPE_ACTIONABLE), "action-name"));
+  row_properties[ROW_PROP_ACTION_TARGET] = g_param_spec_override ("action-target",
+      g_object_interface_find_property (g_type_default_interface_ref (GTK_TYPE_ACTIONABLE), "action-target"));
 
-  g_object_class_override_property (object_class, ROW_PROP_ACTION_NAME, "action-name");
-  g_object_class_override_property (object_class, ROW_PROP_ACTION_TARGET, "action-target");
+  g_object_class_install_properties (object_class, ROW_N_PROPS, row_properties);
 
   gtk_widget_class_set_layout_manager_type (widget_class, GTK_TYPE_BIN_LAYOUT);
   gtk_widget_class_set_css_name (widget_class, I_("row"));

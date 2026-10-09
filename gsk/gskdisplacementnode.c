@@ -38,8 +38,6 @@
  *
  * A render node that uses a displacement map to offset each pixel of the
  * child.
- *
- * Since: 4.22
  */
 struct _GskDisplacementNode
 {
@@ -56,6 +54,7 @@ struct _GskDisplacementNode
   graphene_size_t max;
   graphene_size_t scale;
   graphene_point_t offset;
+  GskRectSnap snap;
 };
 
 static void
@@ -212,15 +211,17 @@ gsk_displacement_node_draw (GskRenderNode *node,
   cairo_pattern_t *displacement;
   cairo_surface_t *child_surface;
   cairo_t *child_cr;
-  graphene_rect_t child_bounds;
+  graphene_rect_t bounds, child_bounds;
 
-  child_bounds = node->bounds;
+  if (!gsk_cairo_rect_snap (cr, &node->bounds, self->snap, &bounds))
+    return;
+
   graphene_rect_inset (&child_bounds, - self->max.width, - self->max.height);
-  if (!gsk_rect_intersection (&child_bounds, &self->child->bounds, &child_bounds))
+  if (!gsk_rect_intersection (&bounds, &self->child->bounds, &child_bounds))
     return;
 
   /* clip so the push_group() creates a smaller surface */
-  gdk_cairo_rect (cr, &node->bounds);
+  gdk_cairo_rect (cr, &bounds);
   cairo_clip (cr);
   if (gdk_cairo_is_all_clipped (cr))
     return;
@@ -280,6 +281,7 @@ gsk_displacement_node_diff (GskRenderNode *node1,
   cairo_region_t *child_region, *displacement_region;
 
   if (!gsk_rect_equal (&node1->bounds, &node2->bounds) ||
+      self1->snap != self2->snap ||
       self1->channels[0] != self2->channels[0] ||
       self1->channels[1] != self2->channels[1] ||
       !graphene_size_equal (&self1->max, &self2->max) ||
@@ -329,9 +331,20 @@ gsk_displacement_node_replay (GskRenderNode   *node,
     child = gsk_container_node_new (NULL, 0);
 
   if (child == self->child && displacement == self->displacement)
-    result = gsk_render_node_ref (node);
+    {
+      result = gsk_render_node_ref (node);
+    }
   else
-    result = gsk_displacement_node_new (&node->bounds, child, displacement, self->channels, &self->max, &self->scale, &self->offset);
+    {
+      result = gsk_displacement_node_new (&node->bounds,
+                                          self->snap,
+                                          child,
+                                          displacement,
+                                          self->channels,
+                                          &self->max,
+                                          &self->scale,
+                                          &self->offset);
+    }
 
   gsk_render_node_unref (child);
   gsk_render_node_unref (displacement);
@@ -379,6 +392,7 @@ GSK_DEFINE_RENDER_NODE_TYPE (GskDisplacementNode, gsk_displacement_node)
 /*< private >
  * gsk_displacement_node_new:
  * @bounds: The rectangle to apply to
+ * @snap: how to snap the rectangle to the pixel grid
  * @child: The child to displace
  * @displacement: The dissplacement mask
  * @channels: Which channels to usefor the displacement in horizontal and
@@ -397,11 +411,10 @@ GSK_DEFINE_RENDER_NODE_TYPE (GskDisplacementNode, gsk_displacement_node)
  * resulting value to be between `-max` and `max`.
  *
  * Returns: (transfer full) (type GskDisplacementNode): A new `GskRenderNode`
- *
- * Since: 4.22
  */
 GskRenderNode *
 gsk_displacement_node_new (const graphene_rect_t  *bounds,
+                           GskRectSnap             snap,
                            GskRenderNode          *child,
                            GskRenderNode          *displacement,
                            const GdkColorChannel   channels[2],
@@ -422,6 +435,7 @@ gsk_displacement_node_new (const graphene_rect_t  *bounds,
   self = gsk_render_node_alloc (GSK_TYPE_DISPLACEMENT_NODE);
   node = (GskRenderNode *) self;
   node->bounds = *bounds;
+  self->snap = snap;
   self->child = gsk_render_node_ref (child);
   self->displacement = gsk_render_node_ref (displacement);
   self->channels[0] = channels[0];
@@ -432,12 +446,14 @@ gsk_displacement_node_new (const graphene_rect_t  *bounds,
 
   node->preferred_depth = gsk_render_node_get_preferred_depth (child);
   node->is_hdr = gsk_render_node_is_hdr (child);
+  node->isolates_background = TRUE;
   if (child->fully_opaque)
     {
       graphene_rect_t child_opaque = child->bounds;
       graphene_rect_inset (&child_opaque, self->max.width, self->max.height);
       node->fully_opaque = gsk_rect_contains_rect (&child_opaque, &node->bounds);
     }
+  node->bilevel_opacity = gsk_render_node_is_bilevel_opacity (child);
   node->contains_subsurface_node = gsk_render_node_contains_subsurface_node (child) ||
                                    gsk_render_node_contains_subsurface_node (displacement);
   node->contains_paste_node = gsk_render_node_contains_paste_node (child) ||
@@ -453,8 +469,6 @@ gsk_displacement_node_new (const graphene_rect_t  *bounds,
  * Gets the child node that is getting displaced by the given @node.
  *
  * Returns: (transfer none): the child `GskRenderNode`
- *
- * Since: 4.22
  **/
 GskRenderNode *
 gsk_displacement_node_get_child (const GskRenderNode *node)
@@ -471,8 +485,6 @@ gsk_displacement_node_get_child (const GskRenderNode *node)
  * Gets the node that defines the displacement mask.
  *
  * Returns: (transfer none): the displacement `GskRenderNode`
- *
- * Since: 4.22
  **/
 GskRenderNode *
 gsk_displacement_node_get_displacement (const GskRenderNode *node)
@@ -514,3 +526,10 @@ gsk_displacement_node_get_offset (const GskRenderNode *node)
   return &self->offset;
 }
 
+GskRectSnap
+gsk_displacement_node_get_snap (const GskRenderNode *node)
+{
+  const GskDisplacementNode *self = (const GskDisplacementNode *) node;
+
+  return self->snap;
+}

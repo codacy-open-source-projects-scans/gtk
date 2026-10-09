@@ -579,6 +579,20 @@ gtk_list_view_measure_list (GtkWidget      *widget,
   *natural = nat + spacing * (n_items - 1);
 }
 
+static GtkSizeRequestMode
+gtk_list_view_get_request_mode (GtkWidget *widget)
+{
+  GtkListView *self = GTK_LIST_VIEW (widget);
+  GtkOrientation orientation;
+
+  orientation = gtk_list_base_get_orientation (GTK_LIST_BASE (self));
+
+  if (orientation == GTK_ORIENTATION_VERTICAL)
+    return GTK_SIZE_REQUEST_HEIGHT_FOR_WIDTH;
+  else
+    return GTK_SIZE_REQUEST_WIDTH_FOR_HEIGHT;
+}
+
 static void
 gtk_list_view_measure (GtkWidget      *widget,
                        GtkOrientation  orientation,
@@ -863,6 +877,7 @@ gtk_list_view_class_init (GtkListViewClass *klass)
   list_base_class->move_focus_along = gtk_list_view_move_focus_along;
   list_base_class->move_focus_across = gtk_list_view_move_focus_across;
 
+  widget_class->get_request_mode = gtk_list_view_get_request_mode;
   widget_class->measure = gtk_list_view_measure;
   widget_class->size_allocate = gtk_list_view_size_allocate;
   widget_class->root = gtk_list_view_root;
@@ -894,7 +909,7 @@ gtk_list_view_class_init (GtkListViewClass *klass)
   properties[PROP_FACTORY] =
     g_param_spec_object ("factory", NULL, NULL,
                          GTK_TYPE_LIST_ITEM_FACTORY,
-                         G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_STRINGS);
+                         G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_NAME);
 
   /**
    * GtkListView:header-factory:
@@ -908,7 +923,7 @@ gtk_list_view_class_init (GtkListViewClass *klass)
   properties[PROP_HEADER_FACTORY] =
     g_param_spec_object ("header-factory", NULL, NULL,
                          GTK_TYPE_LIST_ITEM_FACTORY,
-                         G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_STRINGS);
+                         G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_NAME);
 
   /**
    * GtkListView:model:
@@ -918,7 +933,7 @@ gtk_list_view_class_init (GtkListViewClass *klass)
   properties[PROP_MODEL] =
     g_param_spec_object ("model", NULL, NULL,
                          GTK_TYPE_SELECTION_MODEL,
-                         G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_STRINGS);
+                         G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_NAME);
 
   /**
    * GtkListView:show-separators:

@@ -161,7 +161,10 @@ typedef enum
 typedef enum {
   UNICODE_BIDI_NORMAL,
   UNICODE_BIDI_EMBED,
-  UNICODE_BIDI_OVERRIDE
+  UNICODE_BIDI_ISOLATE,
+  UNICODE_BIDI_OVERRIDE,
+  UNICODE_BIDI_ISOLATE_OVERRIDE,
+  UNICODE_BIDI_PLAINTEXT,
 } UnicodeBidi;
 
 typedef enum {
@@ -184,6 +187,13 @@ typedef enum
   EDGE_MODE_WRAP,
   EDGE_MODE_NONE,
 } EdgeMode;
+
+
+typedef enum
+{
+  STITCH_NO_STITCH,
+  STITCH_STITCH,
+} StitchTiles;
 
 
 typedef enum
@@ -222,6 +232,12 @@ typedef enum
 
 typedef enum
 {
+  TURBULENCE_TYPE_FRACTAL_NOISE,
+  TURBULENCE_TYPE_TURBULENCE,
+} TurbulenceType;
+
+typedef enum
+{
   VECTOR_EFFECT_NONE,
   VECTOR_EFFECT_NON_SCALING_STROKE,
 } VectorEffect;
@@ -245,6 +261,15 @@ typedef enum {
   FONT_WEIGHT_BOLDER,
   FONT_WEIGHT_LIGHTER,
 } FontWeight;
+
+typedef enum
+{
+  BASELINE_SHIFT_SUB,
+  BASELINE_SHIFT_SUPER,
+  BASELINE_SHIFT_TOP,
+  BASELINE_SHIFT_CENTER,
+  BASELINE_SHIFT_BOTTOM,
+} BaselineShift;
 
 typedef enum
 {
@@ -329,10 +354,10 @@ typedef enum
 
 typedef enum
 {
-  TEXT_DECORATION_NONE        = 0,
-  TEXT_DECORATION_UNDERLINE   = 1 << 0,
-  TEXT_DECORATION_OVERLINE    = 1 << 1,
-  TEXT_DECORATION_LINE_TROUGH = 1 << 2,
+  TEXT_DECORATION_NONE         = 0,
+  TEXT_DECORATION_UNDERLINE    = 1 << 0,
+  TEXT_DECORATION_OVERLINE     = 1 << 1,
+  TEXT_DECORATION_LINE_THROUGH = 1 << 2,
 } TextDecoration;
 
 typedef enum
@@ -364,6 +389,12 @@ typedef enum
 
 typedef enum
 {
+  XML_SPACE_DEFAULT,
+  XML_SPACE_PRESERVE,
+} XmlSpace;
+
+typedef enum
+{
   GPA_TRANSITION_NONE,
   GPA_TRANSITION_ANIMATE,
   GPA_TRANSITION_MORPH,
@@ -392,5 +423,11 @@ typedef enum
   GPA_EASING_EASE_OUT,
   GPA_EASING_EASE,
 } GpaEasing;
+
+typedef enum
+{
+  SVG_RENDERING_SVG,
+  SVG_RENDERING_SYMBOLIC,
+} SvgRendering;
 
 G_END_DECLS

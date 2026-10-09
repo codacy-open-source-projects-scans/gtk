@@ -46,7 +46,6 @@
 #include "gsk/gskrectprivate.h"
 #include "gsk/gskroundedrectprivate.h"
 #include "gtk/gtkcssselectorprivate.h"
-#include <glib/gstdio.h>
 #include "gtksvgenumtypes.h"
 #include "gtksvgutilsprivate.h"
 #include "gtksvgstringutilsprivate.h"
@@ -87,8 +86,11 @@
 #include "gtksvganimationprivate.h"
 #include "gtksvgtimespecprivate.h"
 #include "gtksvggpaprivate.h"
+#include "gtksvgmediaqueryprivate.h"
+#include "gtksvggpaprivate.h"
 
-#include <tgmath.h>
+#include <glib/gstdio.h>
+
 #include <stdint.h>
 
 #ifdef HAVE_PANGOFT
@@ -150,8 +152,7 @@ extern int64_t time_base;
  * not supported.
  *
  * In the `<filter>` element, the following primitives are not supported:
- * feConvolveMatrix, feDiffuseLighting, feMorphology, feSpecularLighting
- * and feTurbulence.
+ * feConvolveMatrix, feDiffuseLighting, feMorphology, feSpecularLighting.
  *
  * Support for the `mask` attribute is limited to just a url referring to
  * the `<mask>` element by ID.
@@ -216,6 +217,10 @@ extern int64_t time_base;
  * will start a fade-out of path1 300ms before a transition from state
  * 0 to 1, 2 or 3.
  *
+ * States can be specified numerically, or by name. It is also possible
+ * to say `not STATE` instead of explictly listing all states that are
+ * different from `STATE`.
+ *
  * In addition to the `gpa:fill` and `gpa:stroke` attributes, symbolic
  * colors can also be specified as a custom paint server reference,
  * like this: `url(#gpa:warning)`. This works in `fill` and `stroke`
@@ -257,7 +262,7 @@ gtk_svg_invalid_attribute (GtkSvg               *self,
                            const char           *format,
                            ...)
 {
-  GError *error;
+  GError *error = NULL;
   GtkSvgLocation start, end;
 
   if (format)
@@ -450,6 +455,12 @@ load_texture (const char  *string,
   else if (g_str_has_prefix (string, "resource:"))
     {
       texture = gdk_texture_new_from_resource (string + strlen ("resource:"));
+    }
+  else if (allow_external && g_str_has_prefix (string, "file:"))
+    {
+      GFile *file = g_file_new_for_uri (string);
+      texture = gdk_texture_new_from_file (file, error);
+      g_object_unref (file);
     }
   else if (allow_external)
     {
@@ -740,14 +751,8 @@ collect_next_update_for_shape (SvgElement    *shape,
         }
     }
 
-  if (shape->shapes)
-    {
-      for (unsigned int i = 0; i < shape->shapes->len; i++)
-        {
-          SvgElement *s = g_ptr_array_index (shape->shapes, i);
-          collect_next_update_for_shape (s, current_time, run_mode, next_update);
-        }
-    }
+  for (SvgElement *s = shape->first_child; s; s = s->next_sibling)
+    collect_next_update_for_shape (s, current_time, run_mode, next_update);
 }
 
 static void
@@ -813,14 +818,8 @@ shape_update_animation_state (SvgElement *shape,
         g_ptr_array_sort_values (shape->animations, compare_anim);
     }
 
-  if (shape->shapes)
-    {
-      for (unsigned int i = 0; i < shape->shapes->len; i++)
-        {
-          SvgElement *s = g_ptr_array_index (shape->shapes, i);
-          shape_update_animation_state (s, current_time);
-        }
-    }
+  for (SvgElement *s = shape->first_child; s; s = s->next_sibling)
+    shape_update_animation_state (s, current_time);
 }
 
 static void schedule_next_update (GtkSvg *self);
@@ -848,14 +847,8 @@ animations_update_for_pause (SvgElement *shape,
         }
     }
 
-  if (svg_element_type_is_path (svg_element_get_type (shape)))
-    {
-      for (unsigned int i = 0; i < shape->shapes->len; i++)
-        {
-          SvgElement *sh = g_ptr_array_index (shape->shapes, i);
-          animations_update_for_pause (sh, duration);
-        }
-    }
+  for (SvgElement *sh = shape->first_child; sh; sh = sh->next_sibling)
+    animations_update_for_pause (sh, duration);
 }
 
 /* }}} */
@@ -897,7 +890,7 @@ shape_get_current_value (SvgElement   *shape,
     {
       SvgColorStop *stop;
 
-      g_assert (svg_element_type_is_gradient (svg_element_get_type (shape)));
+      g_assert (svg_element_type_is_gradient (svg_element_get_element_type (shape)));
       g_assert (idx <= shape->color_stops->len);
 
       stop = g_ptr_array_index (shape->color_stops, idx - 1);
@@ -908,7 +901,7 @@ shape_get_current_value (SvgElement   *shape,
     {
       SvgFilter *f;
 
-      g_assert (svg_element_type_is_filter (svg_element_get_type (shape)));
+      g_assert (svg_element_type_is_filter (svg_element_get_element_type (shape)));
       g_assert (idx <= shape->filters->len);
 
       f = g_ptr_array_index (shape->filters, idx - 1);
@@ -936,7 +929,7 @@ shape_ref_base_value (SvgElement   *shape,
 
       if (svg_value_is_unset (value))
         {
-          if (svg_element_get_type (shape) == SVG_ELEMENT_RADIAL_GRADIENT)
+          if (svg_element_get_element_type (shape) == SVG_ELEMENT_RADIAL_GRADIENT)
             {
               if (attr == SVG_PROPERTY_FX)
                 return shape_ref_base_value (shape, parent, SVG_PROPERTY_CX, idx);
@@ -947,18 +940,18 @@ shape_ref_base_value (SvgElement   *shape,
           if (parent && svg_property_inherited (attr))
             return svg_value_ref (parent->current[attr]);
           else
-            return svg_property_ref_initial_value (attr, svg_element_get_type (shape), parent != NULL);
+            return svg_property_ref_initial_value (attr, svg_element_get_element_type (shape), parent != NULL);
         }
       else if (svg_value_is_inherit (value))
         {
           if (parent)
             return svg_value_ref (svg_element_get_current_value (parent, attr));
           else
-            return svg_property_ref_initial_value (attr, svg_element_get_type (shape), parent != NULL);
+            return svg_property_ref_initial_value (attr, svg_element_get_element_type (shape), parent != NULL);
         }
       else if (svg_value_is_initial (value))
         {
-          return svg_property_ref_initial_value (attr, svg_element_get_type (shape), parent != NULL);
+          return svg_property_ref_initial_value (attr, svg_element_get_element_type (shape), parent != NULL);
         }
       else
         {
@@ -970,7 +963,7 @@ shape_ref_base_value (SvgElement   *shape,
       SvgColorStop *stop;
       SvgValue *value;
 
-      g_assert (svg_element_type_is_gradient (svg_element_get_type (shape)));
+      g_assert (svg_element_type_is_gradient (svg_element_get_element_type (shape)));
       g_assert (idx <= shape->color_stops->len);
 
       stop = g_ptr_array_index (shape->color_stops, idx - 1);
@@ -981,7 +974,7 @@ shape_ref_base_value (SvgElement   *shape,
           if (svg_property_inherited (attr))
             return svg_value_ref (svg_element_get_current_value (shape, attr));
           else
-            return svg_property_ref_initial_value (attr, svg_element_get_type (shape), parent != NULL);
+            return svg_property_ref_initial_value (attr, svg_element_get_element_type (shape), parent != NULL);
         }
       else if (svg_value_is_inherit (value))
         {
@@ -989,7 +982,7 @@ shape_ref_base_value (SvgElement   *shape,
         }
       else if (svg_value_is_initial (value))
         {
-          return svg_property_ref_initial_value (attr, svg_element_get_type (shape), parent != NULL);
+          return svg_property_ref_initial_value (attr, svg_element_get_element_type (shape), parent != NULL);
         }
       else
         {
@@ -1001,7 +994,7 @@ shape_ref_base_value (SvgElement   *shape,
       SvgFilter *f;
       SvgValue *value;
 
-      g_assert (svg_element_type_is_filter (svg_element_get_type (shape)));
+      g_assert (svg_element_type_is_filter (svg_element_get_element_type (shape)));
       g_assert (idx <= shape->filters->len);
 
       f = g_ptr_array_index (shape->filters, idx - 1);
@@ -1012,7 +1005,7 @@ shape_ref_base_value (SvgElement   *shape,
           if (svg_property_inherited (attr))
             return svg_value_ref (shape_get_current_value (shape, attr, 0));
           else
-            return svg_property_ref_initial_value (attr, svg_element_get_type (shape), parent != NULL);
+            return svg_property_ref_initial_value (attr, svg_element_get_element_type (shape), parent != NULL);
         }
       else if (svg_value_is_inherit (value))
         {
@@ -1020,7 +1013,7 @@ shape_ref_base_value (SvgElement   *shape,
         }
       else if (svg_value_is_initial (value))
         {
-          return svg_property_ref_initial_value (attr, svg_element_get_type (shape), parent != NULL);
+          return svg_property_ref_initial_value (attr, svg_element_get_element_type (shape), parent != NULL);
         }
       else
         {
@@ -1045,7 +1038,7 @@ shape_set_current_value (SvgElement   *shape,
     {
       SvgColorStop *stop;
 
-      g_assert (svg_element_type_is_gradient (svg_element_get_type (shape)));
+      g_assert (svg_element_type_is_gradient (svg_element_get_element_type (shape)));
 
       stop = g_ptr_array_index (shape->color_stops, idx - 1);
       svg_color_stop_set_current_value (stop, attr, value);
@@ -1054,7 +1047,7 @@ shape_set_current_value (SvgElement   *shape,
     {
       SvgFilter *f;
 
-      g_assert (svg_element_type_is_filter (svg_element_get_type (shape)));
+      g_assert (svg_element_type_is_filter (svg_element_get_element_type (shape)));
 
       f = g_ptr_array_index (shape->filters, idx - 1);
       svg_filter_set_current_value (f, attr, value);
@@ -1223,10 +1216,10 @@ resolve_value (SvgElement        *shape,
     {
       SvgValue *v, *ret;
 
-      if (idx > 0 && svg_element_get_type (shape) == SVG_ELEMENT_FILTER)
+      if (idx > 0 && svg_element_get_element_type (shape) == SVG_ELEMENT_FILTER)
         v = svg_filter_ref_initial_value (g_ptr_array_index (shape->filters, idx - 1), attr);
       else
-        v = svg_property_ref_initial_value (attr, svg_element_get_type (shape), context->parent != NULL);
+        v = svg_property_ref_initial_value (attr, svg_element_get_element_type (shape), context->parent != NULL);
       ret = svg_value_resolve (v, attr, idx, shape, context);
       svg_value_unref (v);
       return ret;
@@ -1235,13 +1228,13 @@ resolve_value (SvgElement        *shape,
     {
       if (idx > 0)
         return svg_value_ref (svg_element_get_current_value (shape, attr));
-      else if (context->parent && svg_property_applies_to (attr, svg_element_get_type (context->parent)))
+      else if (context->parent && svg_property_applies_to (attr, svg_element_get_element_type (context->parent)))
         return svg_value_ref (svg_element_get_current_value (context->parent, attr));
       else
         {
           SvgValue *v, *ret;
 
-          v = svg_property_ref_initial_value (attr, svg_element_get_type (shape), context->parent != NULL);
+          v = svg_property_ref_initial_value (attr, svg_element_get_element_type (shape), context->parent != NULL);
           ret = svg_value_resolve (v, attr, idx, shape, context);
           svg_value_unref (v);
           return ret;
@@ -1251,7 +1244,7 @@ resolve_value (SvgElement        *shape,
     {
       if (idx > 0)
         {
-          if (svg_element_get_type (shape) == SVG_ELEMENT_FILTER)
+          if (svg_element_get_element_type (shape) == SVG_ELEMENT_FILTER)
             {
               SvgFilter *f = g_ptr_array_index (shape->filters, idx - 1);
 
@@ -1270,11 +1263,11 @@ resolve_value (SvgElement        *shape,
     {
       if (attr == SVG_PROPERTY_WIDTH || attr == SVG_PROPERTY_HEIGHT)
         {
-          if (svg_element_get_type (shape) == SVG_ELEMENT_SVG)
+          if (svg_element_get_element_type (shape) == SVG_ELEMENT_SVG)
             {
               return svg_value_resolve (svg_percentage_new (100), attr, idx, shape, context);
             }
-          else if (svg_element_get_type (shape) == SVG_ELEMENT_IMAGE)
+          else if (svg_element_get_element_type (shape) == SVG_ELEMENT_IMAGE)
             {
               GdkTexture *texture = svg_href_get_texture (svg_element_get_current_value (shape, SVG_PROPERTY_HREF));
 
@@ -1401,7 +1394,8 @@ compute_animation_motion_value (SvgAnimation      *a,
 
 static SvgValue *
 compute_value_at_time (SvgAnimation      *a,
-                       SvgComputeContext *context)
+                       SvgComputeContext *context,
+                       int64_t            time)
 {
   int rep;
   unsigned int frame;
@@ -1411,7 +1405,7 @@ compute_value_at_time (SvgAnimation      *a,
   if (a->type == ANIMATION_TYPE_SET)
     return resolve_value (a->shape, context, a->attr, a->idx, a->frames[0].value);
 
-  if (!svg_animation_get_progress (a, context->current_time,
+  if (!svg_animation_get_progress (a, time,
                                    &rep, &frame, &frame_t, &frame_start, &frame_end))
     gtk_svg_update_error (context->svg, "Not enough data to advance animation %s", a->id);
 
@@ -1448,7 +1442,7 @@ compute_value_at_time (SvgAnimation      *a,
         {
           gtk_svg_update_error (context->svg,
                                 "Failed to interpolate %s value (animation %s)",
-                                svg_property_get_presentation (a->attr, svg_element_get_type (a->shape)),
+                                svg_property_get_presentation (a->attr, svg_element_get_element_type (a->shape)),
                                 a->id);
           ival = resolve_value (a->shape, context, a->attr, a->idx, a->frames[frame].value);
         }
@@ -1465,7 +1459,7 @@ compute_value_at_time (SvgAnimation      *a,
             {
               gtk_svg_update_error (context->svg,
                                     "Failed to accumulate %s value (animation %s)",
-                                    svg_property_get_presentation (a->attr, svg_element_get_type (a->shape)),
+                                    svg_property_get_presentation (a->attr, svg_element_get_element_type (a->shape)),
                                     a->id);
               aval = svg_value_ref (ival);
             }
@@ -1506,28 +1500,28 @@ compute_value_for_animation (SvgAnimation      *a,
     {
       /* animation is active */
       dbg_print ("values", "%s: updating value", a->id);
-      value = compute_value_at_time (a, context);
+      value = compute_value_at_time (a, context, context->current_time);
     }
   else if (a->fill == ANIMATION_FILL_FREEZE)
     {
       /* keep the last value */
       if (a->repeat_count == 1)
         {
-          if (!(a->attr == SVG_PROPERTY_TRANSFORM && a->type == ANIMATION_TYPE_MOTION))
+          if (a->attr == SVG_PROPERTY_TRANSFORM && a->type == ANIMATION_TYPE_MOTION)
             {
-              dbg_print ("values", "%s: frozen (fast)", a->id);
-              value = resolve_value (a->shape, context, a->attr, a->idx, a->frames[a->n_frames - 1].value);
+              dbg_print ("values", "%s: frozen (motion)", a->id);
+              value = compute_animation_motion_value (a, 1, a->n_frames - 1, 0, context);
             }
           else
            {
-              dbg_print ("values", "%s: frozen (motion)", a->id);
-              value = compute_animation_motion_value (a, 1, a->n_frames - 1, 0, context);
+              dbg_print ("values", "%s: frozen (fast)", a->id);
+              value = resolve_value (a->shape, context, a->attr, a->idx, a->frames[a->n_frames - 1].value);
            }
         }
       else
         {
           dbg_print ("values", "%s: frozen", a->id);
-          value = compute_value_at_time (a, context);
+          value = compute_value_at_time (a, context, a->previous.end);
         }
     }
   else
@@ -1547,7 +1541,7 @@ shape_init_current_values (SvgElement        *shape,
 {
   for (SvgProperty attr = FIRST_SVG_PROPERTY; attr <= LAST_SVG_PROPERTY; attr++)
     {
-      if (svg_property_applies_to (attr, svg_element_get_type (shape)))
+      if (svg_property_applies_to (attr, svg_element_get_element_type (shape)))
         {
           SvgValue *base;
           SvgValue *value;
@@ -1560,7 +1554,7 @@ shape_init_current_values (SvgElement        *shape,
         }
     }
 
-  if (svg_element_type_is_gradient (svg_element_get_type (shape)))
+  if (svg_element_type_is_gradient (svg_element_get_element_type (shape)))
     {
       for (unsigned int idx = 0; idx < shape->color_stops->len; idx++)
         {
@@ -1580,12 +1574,12 @@ shape_init_current_values (SvgElement        *shape,
         }
     }
 
-  if (svg_element_type_is_filter (svg_element_get_type (shape)))
+  if (svg_element_type_is_filter (svg_element_get_element_type (shape)))
     {
       for (unsigned int idx = 0; idx < shape->filters->len; idx++)
         {
           SvgFilter *f = g_ptr_array_index (shape->filters, idx);
-          SvgFilterType type = svg_filter_get_type (f);
+          SvgFilterType type = svg_filter_get_filter_type (f);
 
           for (unsigned int i = 0; i < svg_filter_type_get_n_attrs (type); i++)
             {
@@ -1602,6 +1596,52 @@ shape_init_current_values (SvgElement        *shape,
             }
         }
     }
+}
+
+static void
+shape_init_animated_values (SvgElement        *shape,
+                            SvgComputeContext *context)
+{
+  for (unsigned int i = 0; i < shape->animations->len; i++)
+    {
+      SvgAnimation *a = g_ptr_array_index (shape->animations, i);
+      SvgValue *base;
+      SvgValue *value;
+
+      base = shape_ref_base_value (shape, context->parent, a->attr, a->idx);
+      value = resolve_value (shape, context, a->attr, a->idx, base);
+      shape_set_current_value (shape, a->attr, a->idx, value);
+      svg_value_unref (value);
+      svg_value_unref (base);
+    }
+}
+
+gboolean
+svg_animations_allow_incremental_values (SvgElement *shape)
+{
+  if (shape->animations)
+    {
+      for (unsigned int i = 0; i < shape->animations->len; i++)
+        {
+          SvgAnimation *a = g_ptr_array_index (shape->animations, i);
+
+          /* These properties can change how values on other elements resolve. */
+          if (svg_property_inherited (a->attr) ||
+              a->attr == SVG_PROPERTY_WIDTH ||
+              a->attr == SVG_PROPERTY_HEIGHT ||
+              a->attr == SVG_PROPERTY_VIEW_BOX ||
+              a->attr == SVG_PROPERTY_HREF)
+            return FALSE;
+        }
+    }
+
+  for (SvgElement *child = shape->first_child; child; child = child->next_sibling)
+    {
+      if (!svg_animations_allow_incremental_values (child))
+        return FALSE;
+    }
+
+  return TRUE;
 }
 
 void
@@ -1633,9 +1673,12 @@ compute_current_values_for_shape (SvgElement        *shape,
   const graphene_rect_t *old_viewport = context->viewport;
   graphene_rect_t viewport;
 
-  shape_init_current_values (shape, context);
+  if (!context->animations_only)
+    shape_init_current_values (shape, context);
+  else if (shape->animations)
+    shape_init_animated_values (shape, context);
 
-  if (svg_element_get_type (shape) == SVG_ELEMENT_SVG || svg_element_get_type (shape) == SVG_ELEMENT_SYMBOL)
+  if (svg_element_get_element_type (shape) == SVG_ELEMENT_SVG || svg_element_get_element_type (shape) == SVG_ELEMENT_SYMBOL)
     {
       SvgValue *vb = svg_element_get_current_value (shape, SVG_PROPERTY_VIEW_BOX);
       double width, height;
@@ -1659,6 +1702,21 @@ compute_current_values_for_shape (SvgElement        *shape,
         graphene_rect_init (&viewport, 0, 0, width, height);
 
       context->viewport = &viewport;
+    }
+
+  if ((context->svg->features & GTK_SVG_ANIMATIONS) == 0 &&
+      !svg_element_is_important (shape, SVG_PROPERTY_VISIBILITY))
+    {
+      Visibility visibility;
+
+      if (state_match (svg_element_get_states (shape), context->svg->state))
+        visibility = VISIBILITY_VISIBLE;
+      else
+        visibility = VISIBILITY_HIDDEN;
+
+      SvgValue *value = svg_visibility_new (visibility);
+      shape_set_current_value (shape, SVG_PROPERTY_VISIBILITY, 0, value);
+      svg_value_unref (value);
     }
 
   if (shape->animations)
@@ -1686,14 +1744,20 @@ compute_current_values_for_shape (SvgElement        *shape,
                   if (a->type == ANIMATION_TYPE_MOTION)
                     {
                       end_val = svg_value_accumulate (val, motion, context, 1);
-                      svg_value_unref (motion);
-                      motion = end_val;
+                      if (end_val)
+                        {
+                          svg_value_unref (motion);
+                          motion = end_val;
+                        }
                     }
                   else
                     {
                       end_val = svg_value_accumulate (val, shape_get_current_value (shape, a->attr, a->idx), context, 1);
-                      shape_set_current_value (shape, a->attr, a->idx, end_val);
-                      svg_value_unref (end_val);
+                      if (end_val)
+                        {
+                          shape_set_current_value (shape, a->attr, a->idx, end_val);
+                          svg_value_unref (end_val);
+                        }
                     }
                 }
               else
@@ -1720,8 +1784,11 @@ compute_current_values_for_shape (SvgElement        *shape,
               SvgValue *combined;
 
               combined = svg_value_accumulate (shape_get_current_value (shape, SVG_PROPERTY_TRANSFORM, 0), motion, context, 1);
-              svg_element_set_current_value (shape, SVG_PROPERTY_TRANSFORM, combined);
-              svg_value_unref (combined);
+              if (combined)
+                {
+                  svg_element_set_current_value (shape, SVG_PROPERTY_TRANSFORM, combined);
+                  svg_value_unref (combined);
+                }
             }
         }
 
@@ -1729,10 +1796,10 @@ compute_current_values_for_shape (SvgElement        *shape,
       svg_value_unref (motion);
     }
 
-  if (svg_element_get_type (shape) == SVG_ELEMENT_USE)
-    svg_element_ensure_shadow_tree (shape, context->svg);
+  if (svg_element_get_element_type (shape) == SVG_ELEMENT_USE)
+    svg_element_ensure_shadow_tree (shape, context);
 
-  if (shape->shapes)
+  if (shape->first_child)
     {
       SvgElement *parent = context->parent;
       context->parent = shape;
@@ -1880,34 +1947,49 @@ gtk_svg_init (GtkSvg *self)
 }
 
 static void
+clear_animation_timespecs (SvgElement *shape,
+                           gpointer    data)
+{
+  for (unsigned int i = 0; i < svg_element_get_n_animations (shape); i++)
+    {
+      SvgAnimation *a = svg_element_get_animation (shape, i);
+      svg_animation_clear_begin (a);
+      svg_animation_clear_end (a);
+    }
+}
+
+static void setting_changed (GtkSvg *self);
+
+static void
 gtk_svg_dispose (GObject *object)
 {
   GtkSvg *self = GTK_SVG (object);
 
-  frame_clock_disconnect (self);
-  g_clear_handle_id (&self->pending_advance, g_source_remove);
+  /* Shapes and animation objects can outlive the svg, so make sure
+   * they don't retain references to the timeline
+   */
+  svg_element_foreach (self->content, clear_animation_timespecs, NULL);
 
-  g_clear_pointer (&self->content, svg_element_free);
-  g_clear_pointer (&self->timeline, timeline_free);
-  g_clear_pointer (&self->images, g_hash_table_unref);
-  g_clear_object (&self->fontmap);
-  g_clear_pointer (&self->font_files, g_ptr_array_unref);
-  g_clear_pointer (&self->node, gsk_render_node_unref);
+  gtk_svg_clear_content (self);
 
-  g_clear_object (&self->clock);
-
-  g_clear_pointer (&self->author, g_free);
-  g_clear_pointer (&self->license, g_free);
-  g_clear_pointer (&self->description, g_free);
-  g_clear_pointer (&self->keywords, g_free);
-  g_clear_pointer (&self->resource, g_free);
-
-  g_clear_pointer (&self->state_names, g_strfreev);
-
+  /* clear_content preserves the stylesheet */
   g_clear_pointer (&self->stylesheet, g_bytes_unref);
 
+  /* clear_content recreates these */
+  g_clear_object (&self->content);
+  g_clear_pointer (&self->timeline, timeline_free);
+  g_clear_pointer (&self->images, g_hash_table_unref);
   g_clear_pointer (&self->user_styles, g_array_unref);
   g_clear_pointer (&self->author_styles, g_array_unref);
+
+  frame_clock_disconnect (self);
+  g_clear_handle_id (&self->pending_advance, g_source_remove);
+  g_clear_object (&self->clock);
+
+  if (self->settings)
+    g_signal_handlers_disconnect_by_func (self->settings, setting_changed, self);
+
+  g_clear_object (&self->settings);
 
   G_OBJECT_CLASS (gtk_svg_parent_class)->dispose (object);
 }
@@ -2170,14 +2252,8 @@ shape_dump_animation_state (SvgElement *shape, GString *string)
         }
     }
 
-  if (shape->shapes)
-    {
-      for (unsigned int i = 0; i < shape->shapes->len; i++)
-        {
-          SvgElement *s = g_ptr_array_index (shape->shapes, i);
-          shape_dump_animation_state (s, string);
-        }
-    }
+  for (SvgElement *s = shape->first_child; s; s = s->next_sibling)
+    shape_dump_animation_state (s, string);
 }
 
 static void
@@ -2232,11 +2308,22 @@ gtk_svg_equal (GtkSvg *svg1,
     return TRUE;
 
   if (svg1->gpa_version != svg2->gpa_version ||
+      svg1->rendering != svg2->rendering ||
+      svg1->n_state_names != svg2->n_state_names ||
+      svg1->weight != svg2->weight ||
+      svg1->initial_state != svg2->initial_state ||
+      svg1->features != svg2->features ||
       g_strcmp0 (svg1->author, svg2->author) != 0 ||
       g_strcmp0 (svg1->license, svg2->license) != 0 ||
       g_strcmp0 (svg1->description, svg2->description) != 0 ||
       g_strcmp0 (svg1->keywords, svg2->keywords) != 0)
     return FALSE;
+
+  for (unsigned int i = 0; i < svg1->n_state_names; i++)
+    {
+      if (g_strcmp0 (svg1->state_names[i], svg2->state_names[i]) != 0)
+        return FALSE;
+    }
 
   return svg_element_equal (svg1->content, svg2->content);
 }
@@ -2260,6 +2347,9 @@ gtk_svg_set_hover_callback (GtkSvg             *svg,
 }
 
 /* {{{ Animation */
+
+static void update_for_state (GtkSvg       *self,
+                              unsigned int  previous_state);
 
 /*< private>
  * gtk_svg_set_load_time:
@@ -2299,6 +2389,7 @@ gtk_svg_set_load_time (GtkSvg  *self,
 
   timeline_set_load_time (self->timeline, load_time);
 
+  update_for_state (self, self->initial_state);
   update_animation_state (self);
 }
 
@@ -2326,11 +2417,24 @@ gtk_svg_advance (GtkSvg  *self,
 {
   g_return_if_fail (GTK_IS_SVG (self));
   g_return_if_fail (self->load_time < INDEFINITE);
-  g_return_if_fail (self->current_time <= current_time);
+  if (self->current_time > current_time)
+    {
+      g_warning ("gtk_svg_advance: time went backward: "
+                 "self->current_time=%" G_GINT64_FORMAT " "
+                 "current_time=%" G_GINT64_FORMAT " "
+                 "delta=%" G_GINT64_FORMAT " "
+                 "clock_frame_time=%" G_GINT64_FORMAT,
+                 self->current_time, current_time,
+                 self->current_time - current_time,
+                 self->clock ? gdk_frame_clock_get_frame_time (self->clock) : (gint64) -1);
+      return;
+    }
 
   dbg_print ("run", "advancing current time to %s", format_time (current_time));
 
   self->current_time = current_time;
+
+  invalidate_for_next_update (self);
 
   update_animation_state (self);
 
@@ -2468,8 +2572,11 @@ gtk_svg_set_playing (GtkSvg   *self,
 void
 gtk_svg_clear_content (GtkSvg *self)
 {
+  frame_clock_disconnect (self);
+
+  g_clear_pointer (&self->resource, g_free);
   g_clear_pointer (&self->timeline, timeline_free);
-  g_clear_pointer (&self->content, svg_element_free);
+  g_clear_object (&self->content);
   g_clear_pointer (&self->images, g_hash_table_unref);
   g_clear_object (&self->fontmap);
   g_clear_pointer (&self->font_files, g_ptr_array_unref);
@@ -2487,11 +2594,17 @@ gtk_svg_clear_content (GtkSvg *self)
   self->initial_state = 0;
   self->state = 0;
   self->max_state = 0;
+  self->load_time = INDEFINITE;
   self->state_change_delay = 0;
+  self->next_update = INDEFINITE;
+  self->playing = FALSE;
+  self->run_mode = GTK_SVG_RUN_MODE_STOPPED;
   self->used = 0;
   self->has_use_cycle = FALSE;
+  self->animations_allow_incremental_values = FALSE;
 
   self->gpa_version = 0;
+  self->rendering = SVG_RENDERING_SVG;
 
   g_clear_pointer (&self->author, g_free);
   g_clear_pointer (&self->license, g_free);
@@ -2504,6 +2617,8 @@ gtk_svg_clear_content (GtkSvg *self)
 
   g_array_set_size (self->user_styles, 0);
   g_array_set_size (self->author_styles, 0);
+
+  g_clear_list (&self->media, (GDestroyNotify) svg_css_media_block_free);
 
   /* Note: we intentionally keep the stylesheet */
 
@@ -2554,7 +2669,7 @@ gtk_svg_activate_element (GtkSvg     *self,
   SvgElement *target = svg_href_get_shape (value);
   int64_t current_time = get_current_time (self);
 
-  g_assert (svg_element_get_type (link) == SVG_ELEMENT_LINK);
+  g_assert (svg_element_get_element_type (link) == SVG_ELEMENT_LINK);
 
   if (animation)
     {
@@ -2564,7 +2679,7 @@ gtk_svg_activate_element (GtkSvg     *self,
       invalidate_for_next_update (self);
       schedule_next_update (self);
     }
-  else if (target && svg_element_get_type (target) == SVG_ELEMENT_VIEW)
+  else if (target && svg_element_get_element_type (target) == SVG_ELEMENT_VIEW)
     {
       gtk_svg_set_view (self, target);
     }
@@ -2976,8 +3091,8 @@ gtk_svg_load_from_bytes (GtkSvg *self,
                          GBytes *bytes)
 {
   g_return_if_fail (GTK_IS_SVG (self));
+  g_return_if_fail (bytes != NULL);
 
-  gtk_svg_set_playing (self, FALSE);
   gtk_svg_clear_content (self);
 
   gtk_svg_init_from_bytes (self, bytes);
@@ -3005,14 +3120,11 @@ gtk_svg_load_from_resource (GtkSvg     *self,
                             const char *path)
 {
   g_return_if_fail (GTK_IS_SVG (self));
+  g_return_if_fail (path != NULL);
 
-  g_set_str (&self->resource, path);
-
-  gtk_svg_set_playing (self, FALSE);
   gtk_svg_clear_content (self);
-
-  if (path)
-    gtk_svg_init_from_resource (self, path);
+  self->resource = g_strdup (path);
+  gtk_svg_init_from_resource (self, path);
 
   g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_RESOURCE]);
 }
@@ -3069,6 +3181,32 @@ gtk_svg_get_weight (GtkSvg *self)
   return self->weight;
 }
 
+static void
+update_for_state (GtkSvg       *self,
+                  unsigned int  previous_state)
+{
+  int64_t current_time;
+
+  if ((self->features & GTK_SVG_ANIMATIONS) == 0 || !self->playing || !self->clock)
+    {
+      if (self->gpa_version > 0)
+        {
+          apply_state (self, self->state);
+          gdk_paintable_invalidate_contents (GDK_PAINTABLE (self));
+        }
+    }
+
+  current_time = get_current_time (self);
+  timeline_update_for_state (self->timeline,
+                             previous_state, self->state,
+                             current_time + self->state_change_delay);
+   gtk_svg_advance (self, current_time);
+
+#ifdef DEBUG
+   animation_state_dump (self);
+#endif
+}
+
 /**
  * gtk_svg_set_state:
  * @self: an SVG paintable
@@ -3098,39 +3236,16 @@ gtk_svg_set_state (GtkSvg       *self,
   previous_state = self->state;
   self->state = state;
 
-  if ((self->features & GTK_SVG_EXTENSIONS) == 0)
-    {
-      g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_STATE]);
-      return;
-    }
+  dbg_print ("state", "renderer state %u -> %u", previous_state, state);
 
-  if ((self->features & GTK_SVG_ANIMATIONS) == 0 ||
-      !self->playing)
-    {
-      if (self->gpa_version > 0)
-        {
-          apply_state (self, state);
-          gdk_paintable_invalidate_contents (GDK_PAINTABLE (self));
-        }
-    }
+  if ((self->features & GTK_SVG_EXTENSIONS) == 0)
+    goto done;
 
   /* Don't jiggle things while we're still loading */
   if (self->load_time != INDEFINITE)
-    {
-      int64_t current_time = get_current_time (self);
-      dbg_print ("state", "renderer state %u -> %u", previous_state, state);
+    update_for_state (self, previous_state);
 
-      timeline_update_for_state (self->timeline,
-                                 previous_state, self->state,
-                                 current_time + self->state_change_delay);
-
-      gtk_svg_advance (self, current_time);
-
-#ifdef DEBUG
-      animation_state_dump (self);
-#endif
-    }
-
+done:
   g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_STATE]);
 }
 
@@ -3317,6 +3432,50 @@ gtk_svg_get_stylesheet (GtkSvg *self)
   g_return_val_if_fail (GTK_IS_SVG (self), NULL);
 
   return self->stylesheet;
+}
+
+static void
+setting_changed (GtkSvg *self)
+{
+  gtk_svg_update_media (self);
+  self->style_changed = TRUE;
+}
+
+/**
+ * gtk_svg_set_settings:
+ * @self: an SVG paintable
+ * @settings: (nullable): the settings object
+ *
+ * Sets a settings object holding settinsg used when
+ * rendering the SVG.
+ *
+ * Since: 4.24
+ */
+void
+gtk_svg_set_settings (GtkSvg      *self,
+                      GtkSettings *settings)
+{
+  g_return_if_fail (GTK_IS_SVG (self));
+
+  if (self->settings == settings)
+    return;
+
+  if (self->settings)
+    g_signal_handlers_disconnect_by_func (self->settings, setting_changed, self);
+
+  g_set_object (&self->settings, settings);
+
+  if (settings)
+    {
+      g_signal_connect_swapped (self->settings, "notify::gtk-interface-color-scheme",
+                                G_CALLBACK (setting_changed), self);
+      g_signal_connect_swapped (self->settings, "notify::gtk-interface-contrast",
+                                G_CALLBACK (setting_changed), self);
+      g_signal_connect_swapped (self->settings, "notify::gtk-interface-reduced-motion",
+                                G_CALLBACK (setting_changed), self);
+    }
+
+  setting_changed (self);
 }
 
 /* }}} */

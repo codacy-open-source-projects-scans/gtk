@@ -148,8 +148,7 @@ op_unix_free (GtkPrintOperationUnix *op_unix)
   if (op_unix->job)
     {
       if (op_unix->job_status_changed_tag > 0)
-        g_signal_handler_disconnect (op_unix->job,
-                                     op_unix->job_status_changed_tag);
+        g_clear_signal_handler (&op_unix->job_status_changed_tag, op_unix->job);
       g_object_unref (op_unix->job);
     }
 
@@ -438,8 +437,7 @@ unix_end_run (GtkPrintOperation *op,
       g_object_ref (op);
       if (!op_unix->data_sent)
         g_main_loop_run (op_unix->loop);
-      g_main_loop_unref (op_unix->loop);
-      op_unix->loop = NULL;
+      g_clear_pointer (&op_unix->loop, g_main_loop_unref);
       g_object_unref (op);
     }
 }
@@ -925,8 +923,7 @@ gtk_print_operation_unix_run_dialog (GtkPrintOperation *op,
 
       rdata.loop = g_main_loop_new (NULL, FALSE);
       g_main_loop_run (rdata.loop);
-      g_main_loop_unref (rdata.loop);
-      rdata.loop = NULL;
+      g_clear_pointer (&rdata.loop, g_main_loop_unref);
     }
   else
     {
@@ -939,8 +936,7 @@ gtk_print_operation_unix_run_dialog (GtkPrintOperation *op,
                     (GFunc) found_printer, &rdata);
 
       g_main_loop_run (rdata.loop);
-      g_main_loop_unref (rdata.loop);
-      rdata.loop = NULL;
+      g_clear_pointer (&rdata.loop, g_main_loop_unref);
     }
 
   *do_print = rdata.do_print;
@@ -1051,8 +1047,7 @@ gtk_print_run_page_setup_dialog (GtkWindow        *parent,
   gtk_window_present (GTK_WINDOW (dialog));
 
   g_main_loop_run (rdata.loop);
-  g_main_loop_unref (rdata.loop);
-  rdata.loop = NULL;
+  g_clear_pointer (&rdata.loop, g_main_loop_unref);
 
   if (rdata.page_setup)
     return rdata.page_setup;
@@ -1117,7 +1112,7 @@ struct _PrinterFinder
   GtkPrinter *first_printer;
 };
 
-static gboolean
+static void
 find_printer_idle (gpointer data)
 {
   PrinterFinder *finder = data;
@@ -1135,15 +1130,13 @@ find_printer_idle (gpointer data)
   finder->func (printer, finder->data);
 
   printer_finder_free (finder);
-
-  return G_SOURCE_REMOVE;
 }
 
 static void
 schedule_finder_callback (PrinterFinder *finder)
 {
   g_assert (!finder->scheduled_callback);
-  g_idle_add (find_printer_idle, finder);
+  g_idle_add_once (find_printer_idle, finder);
   finder->scheduled_callback = TRUE;
 }
 

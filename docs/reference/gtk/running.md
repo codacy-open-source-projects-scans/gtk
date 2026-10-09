@@ -389,8 +389,8 @@ disable certain features.
 `threads`
 : Disable threads where possible
 
-`icon-nodes`
-: Disable the svg-to-node conversion for symbolic icons
+`throttling`
+: Ignore compositor throttling hints
 
 ### `GDK_GL_DISABLE`
 

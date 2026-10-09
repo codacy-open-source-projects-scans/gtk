@@ -38,7 +38,7 @@ typedef struct _GtkGridView GtkGridView;
 typedef struct _GtkGridViewClass GtkGridViewClass;
 
 GDK_AVAILABLE_IN_ALL
-GType           gtk_grid_view_get_type                          (void) G_GNUC_CONST;
+GType           gtk_grid_view_get_type                          (void);
 
 GDK_AVAILABLE_IN_ALL
 GtkWidget *     gtk_grid_view_new                               (GtkSelectionModel      *model,
@@ -56,6 +56,12 @@ void            gtk_grid_view_set_factory                       (GtkGridView    
 GDK_AVAILABLE_IN_ALL
 GtkListItemFactory *
                 gtk_grid_view_get_factory                       (GtkGridView            *self);
+GDK_AVAILABLE_IN_4_26
+GtkListItemFactory *
+                gtk_grid_view_get_header_factory                (GtkGridView            *self);
+GDK_AVAILABLE_IN_4_26
+void            gtk_grid_view_set_header_factory                (GtkGridView            *self,
+                                                                 GtkListItemFactory     *factory);
 GDK_AVAILABLE_IN_ALL
 guint           gtk_grid_view_get_min_columns                   (GtkGridView            *self);
 GDK_AVAILABLE_IN_ALL

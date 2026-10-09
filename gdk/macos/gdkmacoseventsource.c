@@ -324,6 +324,8 @@ select_thread_func (void *arg)
               select_thread_set_state (WAITING);
             }
           break;
+        default:
+          g_assert_not_reached ();
         }
     }
 }
@@ -487,8 +489,7 @@ select_thread_start_poll (GPollFD *ufds,
        */
       if (!pollfds_equal (ufds, nfds, next_pollfds, next_n_pollfds - 1))
         {
-          g_free (next_pollfds);
-          next_pollfds = NULL;
+          g_clear_pointer (&next_pollfds, g_free);
           next_n_pollfds = 0;
 
           have_new_pollfds = TRUE;
@@ -981,8 +982,7 @@ run_loop_after_waiting (void)
   if (run_loop_timer)
     {
       CFRunLoopRemoveTimer (main_thread_run_loop, run_loop_timer, kCFRunLoopCommonModes);
-      CFRelease (run_loop_timer);
-      run_loop_timer = NULL;
+      g_clear_pointer (&run_loop_timer, CFRelease);
     }
 
   if (run_loop_polling_async)

@@ -97,7 +97,7 @@ gtk_gesture_long_press_check (GtkGesture *gesture)
   return GTK_GESTURE_CLASS (gtk_gesture_long_press_parent_class)->check (gesture);
 }
 
-static gboolean
+static void
 _gtk_gesture_long_press_timeout (gpointer user_data)
 {
   GtkGestureLongPress *gesture = user_data;
@@ -112,8 +112,6 @@ _gtk_gesture_long_press_timeout (gpointer user_data)
   priv->timeout_id = 0;
   priv->triggered = TRUE;
   g_signal_emit (gesture, signals[PRESSED], 0, x, y);
-
-  return G_SOURCE_REMOVE;
 }
 
 static void
@@ -148,7 +146,7 @@ gtk_gesture_long_press_begin (GtkGesture       *gesture,
 
   gtk_gesture_get_point (gesture, sequence,
                          &priv->initial_x, &priv->initial_y);
-  priv->timeout_id = g_timeout_add (delay, _gtk_gesture_long_press_timeout, gesture);
+  priv->timeout_id = g_timeout_add_once (delay, _gtk_gesture_long_press_timeout, gesture);
   gdk_source_set_static_name_by_id (priv->timeout_id, "[gtk] _gtk_gesture_long_press_timeout");
 }
 
@@ -168,8 +166,7 @@ gtk_gesture_long_press_update (GtkGesture       *gesture,
     {
       if (priv->timeout_id)
         {
-          g_source_remove (priv->timeout_id);
-          priv->timeout_id = 0;
+          g_clear_handle_id (&priv->timeout_id, g_source_remove);
           g_signal_emit (gesture, signals[CANCELLED], 0);
         }
 
@@ -188,8 +185,7 @@ gtk_gesture_long_press_end (GtkGesture       *gesture,
 
   if (priv->timeout_id)
     {
-      g_source_remove (priv->timeout_id);
-      priv->timeout_id = 0;
+      g_clear_handle_id (&priv->timeout_id, g_source_remove);
       g_signal_emit (gesture, signals[CANCELLED], 0);
     }
 
@@ -288,7 +284,7 @@ gtk_gesture_long_press_class_init (GtkGestureLongPressClass *klass)
   props[PROP_DELAY_FACTOR] =
     g_param_spec_double ("delay-factor", NULL, NULL,
                          0.5, 2.0, 1.0,
-                         G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY);
+                         G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   g_object_class_install_properties (object_class, LAST_PROP, props);
 

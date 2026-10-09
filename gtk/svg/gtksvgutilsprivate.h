@@ -22,6 +22,7 @@
 #pragma once
 
 #include <tgmath.h>
+#include <stdint.h>
 #include <graphene.h>
 #include "gdk/gdkcolorprivate.h"
 #include "gtk/svg/gtksvgtypesprivate.h"
@@ -211,12 +212,12 @@ gboolean path_in_stroke (GskPath                *path,
                          const graphene_point_t *point,
                          GskStroke              *stroke);
 
+#ifdef DEBUG
 const char * format_time_buf (char    *buf,
                               size_t   size,
                               int64_t  time);
 const char * format_time     (int64_t time);
 
-#ifdef DEBUG
 #if 0
 static void
 print_rect (const char *label,

@@ -27,6 +27,9 @@
 #include "gtkactionmuxerprivate.h"
 #include "gtkapplicationaccelsprivate.h"
 
+#include "gtkenumsprivate.h"
+#include "gtkprivatetypebuiltins.h"
+
 G_BEGIN_DECLS
 
 void                    gtk_application_window_set_id                   (GtkApplicationWindow     *window,
@@ -48,6 +51,8 @@ GtkApplicationAccels *  gtk_application_get_application_accels          (GtkAppl
 void                    gtk_application_set_screensaver_active          (GtkApplication           *application,
                                                                          gboolean                  active);
 
+void             gtk_application_save                            (GtkApplication       *application);
+void             gtk_application_forget                          (GtkApplication       *application);
 
 #define GTK_TYPE_APPLICATION_IMPL                           (gtk_application_impl_get_type ())
 #define GTK_APPLICATION_IMPL_CLASS(class)                   (G_TYPE_CHECK_CLASS_CAST ((class),                     \
@@ -211,8 +216,6 @@ guint                   gtk_application_impl_inhibit                    (GtkAppl
                                                                          const char                  *reason);
 void                    gtk_application_impl_uninhibit                  (GtkApplicationImpl          *impl,
                                                                          guint                        cookie);
-gboolean                gtk_application_impl_is_inhibited               (GtkApplicationImpl          *impl,
-                                                                         GtkApplicationInhibitFlags   flags);
 
 char *                 gtk_application_impl_dbus_get_window_path       (GtkApplicationImplDBus      *dbus,
                                                                          GtkWindow                   *window);

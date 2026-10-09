@@ -172,8 +172,7 @@ gdk_wayland_drag_update_cursor (GdkDrag *drag)
 }
 
 static void
-gdk_wayland_drag_drop_performed (GdkDrag  *drag,
-                                 uint32_t  time_)
+gdk_wayland_drag_drop_performed (GdkDrag *drag)
 {
   gdk_wayland_drag_set_cursor (drag, NULL);
 }
@@ -423,8 +422,6 @@ _gdk_wayland_surface_drag_begin (GdkSurface         *surface,
                              _gdk_wayland_seat_get_implicit_grab_serial (seat, device, NULL));
 
   gdk_drag_update_cursor (drag);
-
-  gdk_seat_ungrab (seat);
 
   return drag;
 }

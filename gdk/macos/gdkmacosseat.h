@@ -35,6 +35,8 @@ typedef struct _GdkMacosSeat      GdkMacosSeat;
 typedef struct _GdkMacosSeatClass GdkMacosSeatClass;
 
 GDK_AVAILABLE_IN_ALL
-GType gdk_macos_seat_get_type (void) G_GNUC_CONST;
+GType gdk_macos_seat_get_type (void);
+
+G_DEFINE_AUTOPTR_CLEANUP_FUNC (GdkMacosSeat, g_object_unref)
 
 G_END_DECLS

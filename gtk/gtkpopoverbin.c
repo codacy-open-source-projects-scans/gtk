@@ -332,7 +332,7 @@ gtk_popover_bin_class_init (GtkPopoverBinClass *klass)
   obj_props[PROP_MENU_MODEL] =
       g_param_spec_object ("menu-model", NULL, NULL,
                            G_TYPE_MENU_MODEL,
-                           GTK_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY);
+                           G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkPopoverBin:popover:
@@ -345,7 +345,7 @@ gtk_popover_bin_class_init (GtkPopoverBinClass *klass)
   obj_props[PROP_POPOVER] =
       g_param_spec_object ("popover", NULL, NULL,
                            GTK_TYPE_POPOVER,
-                           GTK_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY);
+                           G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkPopoverBin:child:
@@ -357,7 +357,7 @@ gtk_popover_bin_class_init (GtkPopoverBinClass *klass)
   obj_props[PROP_CHILD] =
       g_param_spec_object ("child", NULL, NULL,
                            GTK_TYPE_WIDGET,
-                           GTK_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY);
+                           G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkPopoverBin:handle-input:
@@ -370,7 +370,7 @@ gtk_popover_bin_class_init (GtkPopoverBinClass *klass)
   obj_props[PROP_HANDLE_INPUT] =
       g_param_spec_boolean ("handle-input", NULL, NULL,
                             FALSE,
-                            GTK_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY);
+                            G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   g_object_class_install_properties (gobject_class, N_PROPS, obj_props);
 
@@ -650,9 +650,7 @@ gtk_popover_bin_set_handle_input (GtkPopoverBin *self,
       gtk_widget_add_controller (GTK_WIDGET (self), self->long_press_gesture);
 
       self->shortcut_controller = GTK_EVENT_CONTROLLER (gtk_shortcut_controller_new ());
-      trigger = gtk_alternative_trigger_new (
-                  gtk_keyval_trigger_new (GDK_KEY_Menu, GDK_NO_MODIFIER_MASK),
-                  gtk_keyval_trigger_new (GDK_KEY_F10, GDK_SHIFT_MASK));
+      trigger = gtk_shortcut_trigger_create_for_menu ();
       action = gtk_named_action_new ("menu.popup");
       gtk_shortcut_controller_add_shortcut (GTK_SHORTCUT_CONTROLLER (self->shortcut_controller),
                                             gtk_shortcut_new (trigger, action));

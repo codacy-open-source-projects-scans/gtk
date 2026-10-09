@@ -31,7 +31,7 @@ typedef struct _GtkShortcutLabel      GtkShortcutLabel;
 typedef struct _GtkShortcutLabelClass GtkShortcutLabelClass;
 
 GDK_AVAILABLE_IN_ALL
-GType        gtk_shortcut_label_get_type        (void) G_GNUC_CONST;
+GType        gtk_shortcut_label_get_type        (void);
 
 GDK_AVAILABLE_IN_ALL
 GtkWidget   *gtk_shortcut_label_new             (const char       *accelerator);
@@ -49,6 +49,8 @@ const char *gtk_shortcut_label_get_disabled_text (GtkShortcutLabel *self);
 GDK_AVAILABLE_IN_ALL
 void         gtk_shortcut_label_set_disabled_text (GtkShortcutLabel *self,
                                                    const char       *disabled_text);
+
+G_DEFINE_AUTOPTR_CLEANUP_FUNC(GtkShortcutLabel, g_object_unref)
 
 G_END_DECLS
 

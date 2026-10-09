@@ -35,6 +35,9 @@ struct _SvgComputeContext
   const GdkRGBA *colors;
   size_t n_colors;
   GdkColorState *interpolation;
+  unsigned int clone_count;
+  GHashTable *shadow_tree_map;
+  gboolean animations_only;
 };
 
 typedef struct _SvgValueClass SvgValueClass;
@@ -70,7 +73,7 @@ struct _SvgValue
   int ref_count;
 };
 
-GType      svg_value_get_type     (void) G_GNUC_CONST;
+GType      svg_value_get_type     (void);
 
 SvgValue * svg_value_ref          (SvgValue       *value);
 void       svg_value_unref        (SvgValue       *value);
@@ -113,5 +116,7 @@ SvgValue * svg_value_default_resolve  (const SvgValue      *value,
                                        unsigned int         idx,
                                        SvgElement          *shape,
                                        SvgComputeContext   *context);
+
+gboolean   svg_value_is_set           (const SvgValue *value);
 
 G_END_DECLS

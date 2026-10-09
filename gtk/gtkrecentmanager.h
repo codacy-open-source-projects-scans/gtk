@@ -145,7 +145,7 @@ GQuark 	gtk_recent_manager_error_quark (void);
 
 
 GDK_AVAILABLE_IN_ALL
-GType 		  gtk_recent_manager_get_type       (void) G_GNUC_CONST;
+GType 		  gtk_recent_manager_get_type       (void);
 
 GDK_AVAILABLE_IN_ALL
 GtkRecentManager *gtk_recent_manager_new            (void);
@@ -183,7 +183,7 @@ int               gtk_recent_manager_purge_items    (GtkRecentManager     *manag
 
 
 GDK_AVAILABLE_IN_ALL
-GType	              gtk_recent_info_get_type             (void) G_GNUC_CONST;
+GType	              gtk_recent_info_get_type             (void);
 
 GDK_AVAILABLE_IN_ALL
 GtkRecentInfo *       gtk_recent_info_ref                  (GtkRecentInfo  *info);
@@ -245,9 +245,6 @@ gboolean              gtk_recent_info_exists               (GtkRecentInfo  *info
 GDK_AVAILABLE_IN_ALL
 gboolean              gtk_recent_info_match                (GtkRecentInfo  *info_a,
 							    GtkRecentInfo  *info_b);
-
-/* private */
-void _gtk_recent_manager_sync (void);
 
 G_DEFINE_AUTOPTR_CLEANUP_FUNC(GtkRecentManager, g_object_unref)
 G_DEFINE_AUTOPTR_CLEANUP_FUNC(GtkRecentInfo, gtk_recent_info_unref)

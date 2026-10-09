@@ -18,6 +18,8 @@ enum {
   NUM_PROPERTIES
 };
 
+static GParamSpec *props[NUM_PROPERTIES] = { NULL, };
+
 static void
 pixbuf_paintable_snapshot (GdkPaintable *paintable,
                            GdkSnapshot  *snapshot,
@@ -74,18 +76,16 @@ pixbuf_paintable_init (PixbufPaintable *paintable)
 {
 }
 
-static gboolean
+static void
 delay_cb (gpointer data)
 {
   PixbufPaintable *self = data;
   int delay;
 
   delay = gdk_pixbuf_animation_iter_get_delay_time (self->iter);
-  self->timeout = g_timeout_add (delay, delay_cb, self);
+  self->timeout = g_timeout_add_once (delay, delay_cb, self);
 
   gdk_paintable_invalidate_contents (GDK_PAINTABLE (self));
-
-  return G_SOURCE_REMOVE;
 }
 
 static void
@@ -103,11 +103,11 @@ pixbuf_paintable_set_resource_path (PixbufPaintable *self,
   self->iter = gdk_pixbuf_animation_get_iter (self->anim, NULL);
 
   delay = gdk_pixbuf_animation_iter_get_delay_time (self->iter);
-  self->timeout = g_timeout_add (delay, delay_cb, self);
+  self->timeout = g_timeout_add_once (delay, delay_cb, self);
 
   gdk_paintable_invalidate_contents (GDK_PAINTABLE (self));
 
-  g_object_notify (G_OBJECT (self), "resource-path");
+  g_object_notify_by_pspec (G_OBJECT (self), props[PROP_RESOURCE_PATH]);
 }
 
 static void
@@ -156,11 +156,7 @@ pixbuf_paintable_dispose (GObject *object)
   g_clear_pointer (&self->resource_path, g_free);
   g_clear_object (&self->anim);
   g_clear_object (&self->iter);
-  if (self->timeout)
-    {
-      g_source_remove (self->timeout);
-      self->timeout = 0;
-    }
+  g_clear_handle_id (&self->timeout, g_source_remove);
 
   G_OBJECT_CLASS (pixbuf_paintable_parent_class)->dispose (object);
 }
@@ -174,9 +170,10 @@ pixbuf_paintable_class_init (PixbufPaintableClass *class)
   object_class->get_property = pixbuf_paintable_get_property;
   object_class->set_property = pixbuf_paintable_set_property;
 
-  g_object_class_install_property (object_class, PROP_RESOURCE_PATH,
-      g_param_spec_string ("resource-path", "Resource path", "Resource path",
-                           NULL, G_PARAM_READWRITE));
+  props[PROP_RESOURCE_PATH] = g_param_spec_string ("resource-path", NULL, NULL,
+                                                   NULL, G_PARAM_READWRITE | G_PARAM_STATIC_NAME);
+
+  g_object_class_install_properties (object_class, NUM_PROPERTIES, props);
 
 }
 

@@ -106,6 +106,7 @@ struct _GdkX11Drag
   guint16 last_x;              /* Coordinates from last event */
   guint16 last_y;
   gulong timestamp;            /* Timestamp we claimed the DND selection with */
+  guint32 drop_time;           /* Timestamp of the event that performed the drop */
   GdkDragAction xdnd_actions;  /* What is currently set in XdndActionList */
   guint version;               /* Xdnd protocol version */
 
@@ -180,8 +181,7 @@ static void        gdk_x11_drag_drop_done    (GdkDrag         *drag,
 static void        gdk_x11_drag_update_cursor (GdkDrag        *drag);
 static void        gdk_x11_drag_cancel       (GdkDrag             *drag,
                                               GdkDragCancelReason  reason);
-static void        gdk_x11_drag_drop_performed (GdkDrag           *drag,
-                                                guint32            time);
+static void        gdk_x11_drag_drop_performed (GdkDrag           *drag);
 
 static void
 gdk_x11_drag_class_init (GdkX11DragClass *klass)
@@ -347,11 +347,7 @@ gdk_surface_cache_shape_filter (const XEvent *xevent,
         {
           GdkCacheChild *child = node->data;
           child->shape_valid = FALSE;
-          if (child->shape)
-            {
-              cairo_region_destroy (child->shape);
-              child->shape = NULL;
-            }
+          g_clear_pointer (&child->shape, cairo_region_destroy);
         }
 
       return GDK_FILTER_REMOVE;
@@ -858,8 +854,15 @@ gdk_x11_drag_handle_finished (GdkDisplay   *display,
         drag_x11->drop_failed = xevent->xclient.data.l[1] == 0;
 
       g_object_ref (drag);
-      g_signal_emit_by_name (drag, "dnd-finished");
-      gdk_drag_drop_done (drag, !drag_x11->drop_failed);
+      if (drag_x11->drop_failed)
+        {
+          gdk_drag_cancel (drag, GDK_DRAG_CANCEL_ERROR);
+        }
+      else
+        {
+          g_signal_emit_by_name (drag, "dnd-finished");
+          gdk_drag_drop_done (drag, TRUE);
+        }
       g_object_unref (drag);
     }
 }
@@ -1828,7 +1831,6 @@ static gboolean
 drag_grab (GdkDrag *drag)
 {
   GdkX11Drag *x11_drag = GDK_X11_DRAG (drag);
-  GdkSeatCapabilities capabilities;
   GdkSeat *seat;
   GdkCursor *cursor;
 
@@ -1837,14 +1839,14 @@ drag_grab (GdkDrag *drag)
 
   seat = gdk_device_get_seat (gdk_drag_get_device (drag));
 
-  capabilities = GDK_SEAT_CAPABILITY_POINTER;
-
   cursor = gdk_drag_get_cursor (drag, x11_drag->current_action);
   g_set_object (&x11_drag->cursor, cursor);
 
-  if (gdk_seat_grab (seat, x11_drag->ipc_surface,
-                     capabilities, FALSE,
-                     x11_drag->cursor, NULL, NULL, NULL) != GDK_GRAB_SUCCESS)
+  if (gdk_x11_device_xi2_grab (gdk_seat_get_pointer (seat),
+                               x11_drag->ipc_surface,
+                               FALSE,
+                               x11_drag->cursor,
+                               GDK_CURRENT_TIME) != GDK_GRAB_SUCCESS)
     return FALSE;
 
   g_set_object (&x11_drag->grab_seat, seat);
@@ -1860,8 +1862,7 @@ drag_ungrab (GdkDrag *drag)
   if (!x11_drag->grab_seat)
     return;
 
-  gdk_seat_ungrab (x11_drag->grab_seat);
-
+  gdk_x11_device_xi2_ungrab (gdk_seat_get_pointer (x11_drag->grab_seat), GDK_CURRENT_TIME);
   g_clear_object (&x11_drag->grab_seat);
 }
 
@@ -1941,7 +1942,7 @@ _gdk_x11_surface_drag_begin (GdkSurface         *surface,
     }
 
   
-  g_signal_connect_object (display, "xevent", G_CALLBACK (gdk_x11_drag_xevent), drag, 0);
+  g_signal_connect_object (display, "xevent", G_CALLBACK (gdk_x11_drag_xevent), drag, G_CONNECT_DEFAULT);
   /* backend holds a ref until gdk_drag_drop_done is called */
   g_object_ref (drag);
 
@@ -1963,13 +1964,10 @@ gdk_x11_drag_update_cursor (GdkDrag *drag)
 
   if (x11_drag->grab_seat)
     {
-      G_GNUC_BEGIN_IGNORE_DEPRECATIONS;
-      gdk_device_grab (gdk_seat_get_pointer (x11_drag->grab_seat),
-                       x11_drag->ipc_surface,
-                       FALSE,
-                       GDK_POINTER_MOTION_MASK | GDK_BUTTON_RELEASE_MASK,
-                       cursor, GDK_CURRENT_TIME);
-      G_GNUC_END_IGNORE_DEPRECATIONS;
+      gdk_x11_device_xi2_grab (gdk_seat_get_pointer (x11_drag->grab_seat),
+                               x11_drag->ipc_surface,
+                               FALSE,
+                               cursor, GDK_CURRENT_TIME);
     }
 }
 
@@ -1983,10 +1981,11 @@ gdk_x11_drag_cancel (GdkDrag             *drag,
 }
 
 static void
-gdk_x11_drag_drop_performed (GdkDrag *drag,
-                             guint32  time_)
+gdk_x11_drag_drop_performed (GdkDrag *drag)
 {
-  gdk_x11_drag_drop (drag, time_);
+  GdkX11Drag *x11_drag = GDK_X11_DRAG (drag);
+
+  gdk_x11_drag_drop (drag, x11_drag->drop_time);
   drag_ungrab (drag);
 }
 
@@ -2131,6 +2130,7 @@ gdk_dnd_handle_button_event (GdkDrag  *drag,
   if ((gdk_drag_get_selected_action (drag) != 0) &&
       (x11_drag->proxy_xid != None))
     {
+      x11_drag->drop_time = gdk_event_get_time (event);
       g_signal_emit_by_name (drag, "drop-performed");
     }
   else

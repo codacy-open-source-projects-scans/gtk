@@ -52,6 +52,8 @@
 #include "gtkrenderborderprivate.h"
 #include "gtkscrollable.h"
 #include "gtksettings.h"
+#include "gtkshortcut.h"
+#include "gtkshortcuttrigger.h"
 #include "gtksnapshot.h"
 #include "gtktextiterprivate.h"
 #include "gtktexthandleprivate.h"
@@ -223,6 +225,10 @@ struct _GtkTextViewPrivate
 {
   GtkTextLayout *layout;
   GtkTextBuffer *buffer;
+
+  PangoContext *mru_line_height_context;
+  guint mru_line_height_context_serial;
+  int mru_line_height;
 
   guint blink_time;  /* time in msec the cursor has blinked since last user event */
   guint im_spot_idle;
@@ -416,15 +422,19 @@ enum
   PROP_OVERWRITE,
   PROP_ACCEPTS_TAB,
   PROP_IM_MODULE,
+  PROP_INPUT_PURPOSE,
+  PROP_INPUT_HINTS,
+  PROP_MONOSPACE,
+  PROP_EXTRA_MENU,
+  /* GtkScrollable */
   PROP_HADJUSTMENT,
   PROP_VADJUSTMENT,
   PROP_HSCROLL_POLICY,
   PROP_VSCROLL_POLICY,
-  PROP_INPUT_PURPOSE,
-  PROP_INPUT_HINTS,
-  PROP_MONOSPACE,
-  PROP_EXTRA_MENU
+  N_PROPS
 };
+
+static GParamSpec *props[N_PROPS] = { NULL, };
 
 static GQuark quark_text_selection_data = 0;
 static GQuark quark_gtk_signal = 0;
@@ -610,6 +620,10 @@ static void gtk_text_view_delete_range_handler   (GtkTextBuffer     *buffer,
                                                   GtkTextIter       *start,
                                                   GtkTextIter       *end,
                                                   gpointer           data);
+static void gtk_text_view_delete_range_after_handler (GtkTextBuffer     *buffer,
+                                                      GtkTextIter       *start,
+                                                      GtkTextIter       *end,
+                                                      gpointer           data);
 static void gtk_text_view_update_redo_action     (GtkTextView       *view);
 static void gtk_text_view_update_undo_action     (GtkTextView       *view);
 static void gtk_text_view_get_virtual_cursor_pos (GtkTextView       *text_view,
@@ -874,18 +888,31 @@ add_move_binding (GtkWidgetClass *widget_class,
                   GtkMovementStep step,
                   int             count)
 {
-  g_assert ((modmask & GDK_SHIFT_MASK) == 0);
+  const guint *keys;
+  guint n_keys;
 
-  gtk_widget_class_add_binding_signal (widget_class,
-                                       keyval, modmask,
-                                       "move-cursor",
-                                       "(iib)", step, count, FALSE);
+  g_return_if_fail ((modmask & GDK_SHIFT_MASK) == 0);
 
-  /* Selection-extending version */
-  gtk_widget_class_add_binding_signal (widget_class,
-                                       keyval, modmask | GDK_SHIFT_MASK,
-                                       "move-cursor",
-                                       "(iib)", step, count, TRUE);
+  keys = gdk_keyval_get_aliases (keyval, &n_keys);
+  if (keys == NULL)
+    {
+      keys = &keyval;
+      n_keys = 1;
+    }
+
+  for (unsigned int i = 0; i < n_keys; i++)
+    {
+      gtk_widget_class_add_binding_signal (widget_class,
+                                           keys[i], modmask,
+                                           "move-cursor",
+                                           "(iib)", step, count, FALSE);
+
+      /* Selection-extending version */
+      gtk_widget_class_add_binding_signal (widget_class,
+                                           keys[i], modmask | GDK_SHIFT_MASK,
+                                           "move-cursor",
+                                           "(iib)", step, count, TRUE);
+    }
 }
 
 static void
@@ -917,6 +944,8 @@ gtk_text_view_class_init (GtkTextViewClass *klass)
 {
   GObjectClass *gobject_class = G_OBJECT_CLASS (klass);
   GtkWidgetClass *widget_class = GTK_WIDGET_CLASS (klass);
+  gpointer iface;
+  GtkShortcut *shortcut;
 
   /* Default handlers and virtual methods
    */
@@ -959,68 +988,56 @@ gtk_text_view_class_init (GtkTextViewClass *klass)
    *
    * Pixels of blank space above paragraphs.
    */
-  g_object_class_install_property (gobject_class,
-                                   PROP_PIXELS_ABOVE_LINES,
-                                   g_param_spec_int ("pixels-above-lines", NULL, NULL,
+  props[PROP_PIXELS_ABOVE_LINES] = g_param_spec_int ("pixels-above-lines", NULL, NULL,
                                                      0, G_MAXINT, 0,
-                                                     GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY));
+                                                     G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkTextView:pixels-below-lines:
    *
    * Pixels of blank space below paragraphs.
    */
-  g_object_class_install_property (gobject_class,
-                                   PROP_PIXELS_BELOW_LINES,
-                                   g_param_spec_int ("pixels-below-lines", NULL, NULL,
+  props[PROP_PIXELS_BELOW_LINES] = g_param_spec_int ("pixels-below-lines", NULL, NULL,
                                                      0, G_MAXINT, 0,
-                                                     GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY));
+                                                     G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkTextView:pixels-inside-wrap:
    *
    * Pixels of blank space between wrapped lines in a paragraph.
    */
-  g_object_class_install_property (gobject_class,
-                                   PROP_PIXELS_INSIDE_WRAP,
-                                   g_param_spec_int ("pixels-inside-wrap", NULL, NULL,
+  props[PROP_PIXELS_INSIDE_WRAP] = g_param_spec_int ("pixels-inside-wrap", NULL, NULL,
                                                      0, G_MAXINT, 0,
-                                                     GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY));
+                                                     G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkTextView:editable:
    *
    * Whether the text can be modified by the user.
    */
-  g_object_class_install_property (gobject_class,
-                                   PROP_EDITABLE,
-                                   g_param_spec_boolean ("editable", NULL, NULL,
-                                                         TRUE,
-                                                         GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY));
+  props[PROP_EDITABLE] = g_param_spec_boolean ("editable", NULL, NULL,
+                                               TRUE,
+                                               G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkTextView:wrap-mode:
    *
    * Whether to wrap lines never, at word boundaries, or at character boundaries.
    */
-  g_object_class_install_property (gobject_class,
-                                   PROP_WRAP_MODE,
-                                   g_param_spec_enum ("wrap-mode", NULL, NULL,
-                                                      GTK_TYPE_WRAP_MODE,
-                                                      GTK_WRAP_NONE,
-                                                      GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY));
+  props[PROP_WRAP_MODE] = g_param_spec_enum ("wrap-mode", NULL, NULL,
+                                             GTK_TYPE_WRAP_MODE,
+                                             GTK_WRAP_NONE,
+                                             G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkTextView:justification:
    *
    * Left, right, or center justification.
    */
-  g_object_class_install_property (gobject_class,
-                                   PROP_JUSTIFICATION,
-                                   g_param_spec_enum ("justification", NULL, NULL,
-                                                      GTK_TYPE_JUSTIFICATION,
-                                                      GTK_JUSTIFY_LEFT,
-                                                      GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY));
+  props[PROP_JUSTIFICATION] = g_param_spec_enum ("justification", NULL, NULL,
+                                                 GTK_TYPE_JUSTIFICATION,
+                                                 GTK_JUSTIFY_LEFT,
+                                                 G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkTextView:left-margin:
@@ -1033,11 +1050,9 @@ gtk_text_view_class_init (GtkTextViewClass *klass)
    * the value set here is padding, and it is applied in addition
    * to the padding from the theme.
    */
-  g_object_class_install_property (gobject_class,
-                                   PROP_LEFT_MARGIN,
-                                   g_param_spec_int ("left-margin", NULL, NULL,
-                                                     0, G_MAXINT, 0,
-                                                     GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY));
+  props[PROP_LEFT_MARGIN] = g_param_spec_int ("left-margin", NULL, NULL,
+                                              0, G_MAXINT, 0,
+                                              G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkTextView:right-margin:
@@ -1050,11 +1065,9 @@ gtk_text_view_class_init (GtkTextViewClass *klass)
    * the value set here is padding, and it is applied in addition
    * to the padding from the theme.
    */
-  g_object_class_install_property (gobject_class,
-                                   PROP_RIGHT_MARGIN,
-                                   g_param_spec_int ("right-margin", NULL, NULL,
-                                                     0, G_MAXINT, 0,
-                                                     GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY));
+  props[PROP_RIGHT_MARGIN] = g_param_spec_int ("right-margin", NULL, NULL,
+                                               0, G_MAXINT, 0,
+                                               G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkTextView:top-margin:
@@ -1067,11 +1080,9 @@ gtk_text_view_class_init (GtkTextViewClass *klass)
    *
    * Don't confuse this property with [property@Gtk.Widget:margin-top].
    */
-  g_object_class_install_property (gobject_class,
-                                   PROP_TOP_MARGIN,
-                                   g_param_spec_int ("top-margin", NULL, NULL,
-                                                     0, G_MAXINT, 0,
-                                                     GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY));
+  props[PROP_TOP_MARGIN] = g_param_spec_int ("top-margin", NULL, NULL,
+                                             0, G_MAXINT, 0,
+                                             G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkTextView:bottom-margin:
@@ -1084,11 +1095,9 @@ gtk_text_view_class_init (GtkTextViewClass *klass)
    *
    * Don't confuse this property with [property@Gtk.Widget:margin-bottom].
    */
-  g_object_class_install_property (gobject_class,
-                                   PROP_BOTTOM_MARGIN,
-                                   g_param_spec_int ("bottom-margin", NULL, NULL,
-                                                     0, G_MAXINT, 0,
-                                                     GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY));
+  props[PROP_BOTTOM_MARGIN] = g_param_spec_int ("bottom-margin", NULL, NULL,
+                                                0, G_MAXINT, 0,
+                                                G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkTextView:indent:
@@ -1100,66 +1109,54 @@ gtk_text_view_class_init (GtkTextViewClass *klass)
    * lines will be indented by the absolute value of indent.
    *
    */
-  g_object_class_install_property (gobject_class,
-                                   PROP_INDENT,
-                                   g_param_spec_int ("indent", NULL, NULL,
-                                                     G_MININT, G_MAXINT, 0,
-                                                     GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY));
+  props[PROP_INDENT] = g_param_spec_int ("indent", NULL, NULL,
+                                         G_MININT, G_MAXINT, 0,
+                                         G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkTextView:tabs:
    *
    * Custom tabs for this text.
    */
-  g_object_class_install_property (gobject_class,
-                                   PROP_TABS,
-                                   g_param_spec_boxed ("tabs", NULL, NULL,
-                                                       PANGO_TYPE_TAB_ARRAY,
-						       GTK_PARAM_READWRITE));
+  props[PROP_TABS] = g_param_spec_boxed ("tabs", NULL, NULL,
+                                         PANGO_TYPE_TAB_ARRAY,
+                                         G_PARAM_READWRITE | G_PARAM_STATIC_NAME);
 
   /**
    * GtkTextView:cursor-visible:
    *
    * If the insertion cursor is shown.
    */
-  g_object_class_install_property (gobject_class,
-                                   PROP_CURSOR_VISIBLE,
-                                   g_param_spec_boolean ("cursor-visible", NULL, NULL,
-                                                         TRUE,
-                                                         GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY));
+  props[PROP_CURSOR_VISIBLE] = g_param_spec_boolean ("cursor-visible", NULL, NULL,
+                                                     TRUE,
+                                                     G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkTextView:buffer:
    *
    * The buffer which is displayed.
    */
-  g_object_class_install_property (gobject_class,
-                                   PROP_BUFFER,
-                                   g_param_spec_object ("buffer", NULL, NULL,
-							GTK_TYPE_TEXT_BUFFER,
-							GTK_PARAM_READWRITE));
+  props[PROP_BUFFER] = g_param_spec_object ("buffer", NULL, NULL,
+                                            GTK_TYPE_TEXT_BUFFER,
+                                            G_PARAM_READWRITE | G_PARAM_STATIC_NAME);
 
   /**
    * GtkTextView:overwrite:
    *
    * Whether entered text overwrites existing contents.
    */
-  g_object_class_install_property (gobject_class,
-                                   PROP_OVERWRITE,
-                                   g_param_spec_boolean ("overwrite", NULL, NULL,
-                                                         FALSE,
-                                                         GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY));
+  props[PROP_OVERWRITE] = g_param_spec_boolean ("overwrite", NULL, NULL,
+                                                FALSE,
+                                                G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkTextView:accepts-tab:
    *
    * Whether Tab will result in a tab character being entered.
    */
-  g_object_class_install_property (gobject_class,
-                                   PROP_ACCEPTS_TAB,
-                                   g_param_spec_boolean ("accepts-tab", NULL, NULL,
-                                                         TRUE,
-                                                         GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY));
+  props[PROP_ACCEPTS_TAB] = g_param_spec_boolean ("accepts-tab", NULL, NULL,
+                                                  TRUE,
+                                                  G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
    /**
     * GtkTextView:im-module:
@@ -1171,11 +1168,9 @@ gtk_text_view_class_init (GtkTextViewClass *klass)
     * Setting this to a non-%NULL value overrides the system-wide IM module
     * setting. See the GtkSettings [property@Gtk.Settings:gtk-im-module] property.
     */
-   g_object_class_install_property (gobject_class,
-                                    PROP_IM_MODULE,
-                                    g_param_spec_string ("im-module", NULL, NULL,
-                                                         NULL,
-                                                         GTK_PARAM_READWRITE));
+   props[PROP_IM_MODULE] = g_param_spec_string ("im-module", NULL, NULL,
+                                               NULL,
+                                               G_PARAM_READWRITE | G_PARAM_STATIC_NAME);
 
   /**
    * GtkTextView:input-purpose:
@@ -1185,12 +1180,10 @@ gtk_text_view_class_init (GtkTextViewClass *klass)
    * This property can be used by on-screen keyboards and other input
    * methods to adjust their behaviour.
    */
-  g_object_class_install_property (gobject_class,
-                                   PROP_INPUT_PURPOSE,
-                                   g_param_spec_enum ("input-purpose", NULL, NULL,
-                                                      GTK_TYPE_INPUT_PURPOSE,
-                                                      GTK_INPUT_PURPOSE_FREE_FORM,
-                                                      GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY));
+  props[PROP_INPUT_PURPOSE] = g_param_spec_enum ("input-purpose", NULL, NULL,
+                                                 GTK_TYPE_INPUT_PURPOSE,
+                                                 GTK_INPUT_PURPOSE_FREE_FORM,
+                                                 G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
 
   /**
@@ -1199,12 +1192,10 @@ gtk_text_view_class_init (GtkTextViewClass *klass)
    * Additional hints (beyond [property@Gtk.TextView:input-purpose])
    * that allow input methods to fine-tune their behaviour.
    */
-  g_object_class_install_property (gobject_class,
-                                   PROP_INPUT_HINTS,
-                                   g_param_spec_flags ("input-hints", NULL, NULL,
-                                                       GTK_TYPE_INPUT_HINTS,
-                                                       GTK_INPUT_HINT_NONE,
-                                                       GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY));
+  props[PROP_INPUT_HINTS] = g_param_spec_flags ("input-hints", NULL, NULL,
+                                                GTK_TYPE_INPUT_HINTS,
+                                                GTK_INPUT_HINT_NONE,
+                                                G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
 
   /**
@@ -1215,28 +1206,31 @@ gtk_text_view_class_init (GtkTextViewClass *klass)
    * If %TRUE, set the .monospace style class on the
    * text view to indicate that a monospace font is desired.
    */
-  g_object_class_install_property (gobject_class,
-                                   PROP_MONOSPACE,
-                                   g_param_spec_boolean ("monospace", NULL, NULL,
-                                                         FALSE,
-                                                         GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY));
+  props[PROP_MONOSPACE] = g_param_spec_boolean ("monospace", NULL, NULL,
+                                                FALSE,
+                                                G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkTextView:extra-menu:
    *
    * A menu model whose contents will be appended to the context menu.
    */
-  g_object_class_install_property (gobject_class,
-                                   PROP_EXTRA_MENU,
-                                   g_param_spec_object ("extra-menu", NULL, NULL,
-                                                        G_TYPE_MENU_MODEL,
-                                                        GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY));
+  props[PROP_EXTRA_MENU] = g_param_spec_object ("extra-menu", NULL, NULL,
+                                                G_TYPE_MENU_MODEL,
+                                                G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
    /* GtkScrollable interface */
-   g_object_class_override_property (gobject_class, PROP_HADJUSTMENT,    "hadjustment");
-   g_object_class_override_property (gobject_class, PROP_VADJUSTMENT,    "vadjustment");
-   g_object_class_override_property (gobject_class, PROP_HSCROLL_POLICY, "hscroll-policy");
-   g_object_class_override_property (gobject_class, PROP_VSCROLL_POLICY, "vscroll-policy");
+   iface = g_type_default_interface_ref (GTK_TYPE_SCROLLABLE);
+   props[PROP_HADJUSTMENT] = g_param_spec_override ("hadjustment",
+                                                    g_object_interface_find_property (iface, "hadjustment"));
+   props[PROP_VADJUSTMENT] = g_param_spec_override ("vadjustment",
+                                                    g_object_interface_find_property (iface, "vadjustment"));
+   props[PROP_HSCROLL_POLICY] = g_param_spec_override ("hscroll-policy",
+                                                       g_object_interface_find_property (iface, "hscroll-policy"));
+   props[PROP_VSCROLL_POLICY] = g_param_spec_override ("vscroll-policy",
+                                                       g_object_interface_find_property (iface, "vscroll-policy"));
+
+   g_object_class_install_properties (gobject_class, N_PROPS, props);
 
   /*
    * Signals
@@ -1695,14 +1689,10 @@ gtk_text_view_class_init (GtkTextViewClass *klass)
    * Key bindings
    */
 
-  gtk_widget_class_add_binding_action (widget_class,
-                                       GDK_KEY_F10, GDK_SHIFT_MASK,
-                                       "menu.popup",
-                                       NULL);
-  gtk_widget_class_add_binding_action (widget_class,
-                                       GDK_KEY_Menu, 0,
-                                       "menu.popup",
-                                       NULL);
+  shortcut = gtk_shortcut_new (gtk_shortcut_trigger_create_for_menu (),
+                               gtk_named_action_new ("menu.popup"));
+  gtk_widget_class_add_shortcut (widget_class, shortcut);
+  g_object_unref (shortcut);
 
   gtk_widget_class_add_binding_action (widget_class,
                                        GDK_KEY_Clear, GDK_NO_MODIFIER_MASK,
@@ -1713,97 +1703,49 @@ gtk_text_view_class_init (GtkTextViewClass *klass)
   add_move_binding (widget_class, GDK_KEY_Right, 0,
                     GTK_MOVEMENT_VISUAL_POSITIONS, 1);
 
-  add_move_binding (widget_class, GDK_KEY_KP_Right, 0,
-                    GTK_MOVEMENT_VISUAL_POSITIONS, 1);
-
   add_move_binding (widget_class, GDK_KEY_Left, 0,
-                    GTK_MOVEMENT_VISUAL_POSITIONS, -1);
-
-  add_move_binding (widget_class, GDK_KEY_KP_Left, 0,
                     GTK_MOVEMENT_VISUAL_POSITIONS, -1);
 
   add_move_binding (widget_class, GDK_KEY_Right, GDK_CONTROL_MASK,
                     GTK_MOVEMENT_WORDS, 1);
 
-  add_move_binding (widget_class, GDK_KEY_KP_Right, GDK_CONTROL_MASK,
-                    GTK_MOVEMENT_WORDS, 1);
-
   add_move_binding (widget_class, GDK_KEY_Left, GDK_CONTROL_MASK,
-                    GTK_MOVEMENT_WORDS, -1);
-
-  add_move_binding (widget_class, GDK_KEY_KP_Left, GDK_CONTROL_MASK,
                     GTK_MOVEMENT_WORDS, -1);
 
   add_move_binding (widget_class, GDK_KEY_Up, 0,
                     GTK_MOVEMENT_DISPLAY_LINES, -1);
 
-  add_move_binding (widget_class, GDK_KEY_KP_Up, 0,
-                    GTK_MOVEMENT_DISPLAY_LINES, -1);
-
   add_move_binding (widget_class, GDK_KEY_Down, 0,
-                    GTK_MOVEMENT_DISPLAY_LINES, 1);
-
-  add_move_binding (widget_class, GDK_KEY_KP_Down, 0,
                     GTK_MOVEMENT_DISPLAY_LINES, 1);
 
   add_move_binding (widget_class, GDK_KEY_Up, GDK_CONTROL_MASK,
                     GTK_MOVEMENT_PARAGRAPHS, -1);
 
-  add_move_binding (widget_class, GDK_KEY_KP_Up, GDK_CONTROL_MASK,
-                    GTK_MOVEMENT_PARAGRAPHS, -1);
-
   add_move_binding (widget_class, GDK_KEY_Down, GDK_CONTROL_MASK,
-                    GTK_MOVEMENT_PARAGRAPHS, 1);
-
-  add_move_binding (widget_class, GDK_KEY_KP_Down, GDK_CONTROL_MASK,
                     GTK_MOVEMENT_PARAGRAPHS, 1);
 
   add_move_binding (widget_class, GDK_KEY_Home, 0,
                     GTK_MOVEMENT_DISPLAY_LINE_ENDS, -1);
 
-  add_move_binding (widget_class, GDK_KEY_KP_Home, 0,
-                    GTK_MOVEMENT_DISPLAY_LINE_ENDS, -1);
-
   add_move_binding (widget_class, GDK_KEY_End, 0,
-                    GTK_MOVEMENT_DISPLAY_LINE_ENDS, 1);
-
-  add_move_binding (widget_class, GDK_KEY_KP_End, 0,
                     GTK_MOVEMENT_DISPLAY_LINE_ENDS, 1);
 
   add_move_binding (widget_class, GDK_KEY_Home, GDK_CONTROL_MASK,
                     GTK_MOVEMENT_BUFFER_ENDS, -1);
 
-  add_move_binding (widget_class, GDK_KEY_KP_Home, GDK_CONTROL_MASK,
-                    GTK_MOVEMENT_BUFFER_ENDS, -1);
-
   add_move_binding (widget_class, GDK_KEY_End, GDK_CONTROL_MASK,
-                    GTK_MOVEMENT_BUFFER_ENDS, 1);
-
-  add_move_binding (widget_class, GDK_KEY_KP_End, GDK_CONTROL_MASK,
                     GTK_MOVEMENT_BUFFER_ENDS, 1);
 
   add_move_binding (widget_class, GDK_KEY_Page_Up, 0,
                     GTK_MOVEMENT_PAGES, -1);
 
-  add_move_binding (widget_class, GDK_KEY_KP_Page_Up, 0,
-                    GTK_MOVEMENT_PAGES, -1);
-
   add_move_binding (widget_class, GDK_KEY_Page_Down, 0,
-                    GTK_MOVEMENT_PAGES, 1);
-
-  add_move_binding (widget_class, GDK_KEY_KP_Page_Down, 0,
                     GTK_MOVEMENT_PAGES, 1);
 
   add_move_binding (widget_class, GDK_KEY_Page_Up, GDK_CONTROL_MASK,
                     GTK_MOVEMENT_HORIZONTAL_PAGES, -1);
 
-  add_move_binding (widget_class, GDK_KEY_KP_Page_Up, GDK_CONTROL_MASK,
-                    GTK_MOVEMENT_HORIZONTAL_PAGES, -1);
-
   add_move_binding (widget_class, GDK_KEY_Page_Down, GDK_CONTROL_MASK,
-                    GTK_MOVEMENT_HORIZONTAL_PAGES, 1);
-
-  add_move_binding (widget_class, GDK_KEY_KP_Page_Down, GDK_CONTROL_MASK,
                     GTK_MOVEMENT_HORIZONTAL_PAGES, 1);
 
 #ifdef __APPLE__
@@ -1813,34 +1755,16 @@ gtk_text_view_class_init (GtkTextViewClass *klass)
   add_move_binding (widget_class, GDK_KEY_Left, GDK_ALT_MASK,
                     GTK_MOVEMENT_WORDS, -1);
 
-  add_move_binding (widget_class, GDK_KEY_KP_Right, GDK_ALT_MASK,
-                    GTK_MOVEMENT_WORDS, 1);
-
-  add_move_binding (widget_class, GDK_KEY_KP_Left, GDK_ALT_MASK,
-                    GTK_MOVEMENT_WORDS, -1);
-
   add_move_binding (widget_class, GDK_KEY_Right, GDK_META_MASK,
                     GTK_MOVEMENT_DISPLAY_LINE_ENDS, 1);
 
   add_move_binding (widget_class, GDK_KEY_Left, GDK_META_MASK,
                     GTK_MOVEMENT_DISPLAY_LINE_ENDS, -1);
 
-  add_move_binding (widget_class, GDK_KEY_KP_Right, GDK_META_MASK,
-                    GTK_MOVEMENT_DISPLAY_LINE_ENDS, 1);
-
-  add_move_binding (widget_class, GDK_KEY_KP_Left, GDK_META_MASK,
-                    GTK_MOVEMENT_DISPLAY_LINE_ENDS, -1);
-
   add_move_binding (widget_class, GDK_KEY_Up, GDK_META_MASK,
                     GTK_MOVEMENT_BUFFER_ENDS, -1);
 
   add_move_binding (widget_class, GDK_KEY_Down, GDK_META_MASK,
-                    GTK_MOVEMENT_BUFFER_ENDS, 1);
-
-  add_move_binding (widget_class, GDK_KEY_KP_Up, GDK_META_MASK,
-                    GTK_MOVEMENT_BUFFER_ENDS, -1);
-
-  add_move_binding (widget_class, GDK_KEY_KP_Down, GDK_META_MASK,
                     GTK_MOVEMENT_BUFFER_ENDS, 1);
 #endif
 
@@ -1882,33 +1806,21 @@ gtk_text_view_class_init (GtkTextViewClass *klass)
 
   /* Deleting text */
   gtk_widget_class_add_binding_signal (widget_class,
-                                       GDK_KEY_Delete, 0,
+                                       GDK_KEY_Delete, GDK_NO_MODIFIER_MASK,
                                        "delete-from-cursor",
                                        "(ii)", GTK_DELETE_CHARS, 1);
 
   gtk_widget_class_add_binding_signal (widget_class,
-                                       GDK_KEY_KP_Delete, 0,
-                                       "delete-from-cursor",
-                                       "(ii)", GTK_DELETE_CHARS, 1);
-
-  gtk_widget_class_add_binding_signal (widget_class,
-                                       GDK_KEY_BackSpace, 0,
-                                       "backspace",
-                                       NULL);
+                                       GDK_KEY_BackSpace, GDK_NO_MODIFIER_MASK,
+                                       "backspace", NULL);
 
   /* Make this do the same as Backspace, to help with mis-typing */
   gtk_widget_class_add_binding_signal (widget_class,
                                        GDK_KEY_BackSpace, GDK_SHIFT_MASK,
-                                       "backspace",
-                                       NULL);
+                                       "backspace", NULL);
 
   gtk_widget_class_add_binding_signal (widget_class,
                                        GDK_KEY_Delete, GDK_CONTROL_MASK,
-                                       "delete-from-cursor",
-                                       "(ii)", GTK_DELETE_WORD_ENDS, 1);
-
-  gtk_widget_class_add_binding_signal (widget_class,
-                                       GDK_KEY_KP_Delete, GDK_CONTROL_MASK,
                                        "delete-from-cursor",
                                        "(ii)", GTK_DELETE_WORD_ENDS, 1);
 
@@ -1919,7 +1831,7 @@ gtk_text_view_class_init (GtkTextViewClass *klass)
 
 #ifdef __APPLE__
   gtk_widget_class_add_binding_signal (widget_class,
-                                       GDK_KEY_Delete, GDK_ALT_MASK,
+                                       GDK_KEY_Delete, GDK_CONTROL_MASK,
                                        "delete-from-cursor",
                                        "(ii)", GTK_DELETE_WORD_ENDS, 1);
 
@@ -1934,11 +1846,6 @@ gtk_text_view_class_init (GtkTextViewClass *klass)
                                        "(ii)", GTK_DELETE_PARAGRAPH_ENDS, 1);
 
   gtk_widget_class_add_binding_signal (widget_class,
-                                       GDK_KEY_KP_Delete, GDK_SHIFT_MASK | GDK_CONTROL_MASK,
-                                       "delete-from-cursor",
-                                       "(ii)", GTK_DELETE_PARAGRAPH_ENDS, 1);
-
-  gtk_widget_class_add_binding_signal (widget_class,
                                        GDK_KEY_BackSpace, GDK_SHIFT_MASK | GDK_CONTROL_MASK,
                                        "delete-from-cursor",
                                        "(ii)", GTK_DELETE_PARAGRAPH_ENDS, -1);
@@ -1947,68 +1854,45 @@ gtk_text_view_class_init (GtkTextViewClass *klass)
   /* Cut/copy/paste */
   gtk_widget_class_add_binding_signal (widget_class,
                                        GDK_KEY_Cut, GDK_NO_MODIFIER_MASK,
-                                       "cut-clipboard",
-                                       NULL);
+                                       "cut-clipboard", NULL);
   gtk_widget_class_add_binding_signal (widget_class,
                                        GDK_KEY_Copy, GDK_NO_MODIFIER_MASK,
-                                       "copy-clipboard",
-                                       NULL);
+                                       "copy-clipboard", NULL);
   gtk_widget_class_add_binding_signal (widget_class,
                                        GDK_KEY_Paste, GDK_NO_MODIFIER_MASK,
-                                       "paste-clipboard",
-                                       NULL);
+                                       "paste-clipboard", NULL);
 #ifdef __APPLE__
   gtk_widget_class_add_binding_signal (widget_class,
                                        GDK_KEY_x, GDK_META_MASK,
-                                       "cut-clipboard",
-                                       NULL);
+                                       "cut-clipboard", NULL);
   gtk_widget_class_add_binding_signal (widget_class,
                                        GDK_KEY_c, GDK_META_MASK,
-                                       "copy-clipboard",
-                                       NULL);
+                                       "copy-clipboard", NULL);
   gtk_widget_class_add_binding_signal (widget_class,
                                        GDK_KEY_v, GDK_META_MASK,
-                                       "paste-clipboard",
-                                       NULL);
+                                       "paste-clipboard", NULL);
 #else
   gtk_widget_class_add_binding_signal (widget_class,
                                        GDK_KEY_x, GDK_CONTROL_MASK,
-                                       "cut-clipboard",
-                                       NULL);
+                                       "cut-clipboard", NULL);
   gtk_widget_class_add_binding_signal (widget_class,
                                        GDK_KEY_c, GDK_CONTROL_MASK,
-                                       "copy-clipboard",
-                                       NULL);
+                                       "copy-clipboard", NULL);
   gtk_widget_class_add_binding_signal (widget_class,
                                        GDK_KEY_v, GDK_CONTROL_MASK,
-                                       "paste-clipboard",
-                                       NULL);
-
-  gtk_widget_class_add_binding_signal (widget_class,
-                                       GDK_KEY_KP_Delete, GDK_SHIFT_MASK,
-                                       "cut-clipboard",
-                                       NULL);
-  gtk_widget_class_add_binding_signal (widget_class,
-                                       GDK_KEY_KP_Insert, GDK_CONTROL_MASK,
-                                       "copy-clipboard",
-                                       NULL);
-  gtk_widget_class_add_binding_signal (widget_class,
-                                       GDK_KEY_KP_Insert, GDK_SHIFT_MASK,
-                                       "paste-clipboard",
-                                       NULL);
+                                       "paste-clipboard", NULL);
 
   gtk_widget_class_add_binding_signal (widget_class,
                                        GDK_KEY_Delete, GDK_SHIFT_MASK,
-                                       "cut-clipboard",
-                                       NULL);
+                                       "cut-clipboard", NULL);
+
   gtk_widget_class_add_binding_signal (widget_class,
                                        GDK_KEY_Insert, GDK_CONTROL_MASK,
-                                       "copy-clipboard",
-                                       NULL);
+                                       "copy-clipboard", NULL);
+
   gtk_widget_class_add_binding_signal (widget_class,
                                        GDK_KEY_Insert, GDK_SHIFT_MASK,
-                                       "paste-clipboard",
-                                       NULL);
+                                       "paste-clipboard", NULL);
 #endif
 
   /* Undo/Redo */
@@ -2039,13 +1923,8 @@ gtk_text_view_class_init (GtkTextViewClass *klass)
 
   /* Overwrite */
   gtk_widget_class_add_binding_signal (widget_class,
-                                       GDK_KEY_Insert, 0,
-                                       "toggle-overwrite",
-                                       NULL);
-  gtk_widget_class_add_binding_signal (widget_class,
-                                       GDK_KEY_KP_Insert, 0,
-                                       "toggle-overwrite",
-                                       NULL);
+                                       GDK_KEY_Insert, GDK_NO_MODIFIER_MASK,
+                                       "toggle-overwrite", NULL);
 
   /* Emoji */
   gtk_widget_class_add_binding_action (widget_class,
@@ -2059,7 +1938,7 @@ gtk_text_view_class_init (GtkTextViewClass *klass)
 
   /* Caret mode */
   gtk_widget_class_add_binding_signal (widget_class,
-                                       GDK_KEY_F7, 0,
+                                       GDK_KEY_F7, GDK_NO_MODIFIER_MASK,
                                        "toggle-cursor-visible",
                                        NULL);
 
@@ -2068,17 +1947,9 @@ gtk_text_view_class_init (GtkTextViewClass *klass)
                                        GDK_KEY_Tab, GDK_CONTROL_MASK,
                                        "move-focus",
                                        "(i)", GTK_DIR_TAB_FORWARD);
-  gtk_widget_class_add_binding_signal (widget_class,
-                                       GDK_KEY_KP_Tab, GDK_CONTROL_MASK,
-                                       "move-focus",
-                                       "(i)", GTK_DIR_TAB_FORWARD);
 
   gtk_widget_class_add_binding_signal (widget_class,
                                        GDK_KEY_Tab, GDK_SHIFT_MASK | GDK_CONTROL_MASK,
-                                       "move-focus",
-                                       "(i)", GTK_DIR_TAB_BACKWARD);
-  gtk_widget_class_add_binding_signal (widget_class,
-                                       GDK_KEY_KP_Tab, GDK_SHIFT_MASK | GDK_CONTROL_MASK,
                                        "move-focus",
                                        "(i)", GTK_DIR_TAB_BACKWARD);
 
@@ -2162,6 +2033,7 @@ gtk_text_view_init (GtkTextView *text_view)
    * to it; so we create it here and destroy it in finalize ().
    */
   priv->im_context = gtk_im_multicontext_new ();
+  gtk_im_context_set_client_widget (priv->im_context, GTK_WIDGET (text_view));
 
   g_signal_connect (priv->im_context, "commit",
                     G_CALLBACK (gtk_text_view_commit_handler), text_view);
@@ -2375,6 +2247,9 @@ gtk_text_view_set_buffer (GtkTextView   *text_view,
       g_signal_handlers_disconnect_by_func (priv->buffer,
                                             gtk_text_view_delete_range_handler,
                                             text_view);
+      g_signal_handlers_disconnect_by_func (priv->buffer,
+                                            gtk_text_view_delete_range_after_handler,
+                                            text_view);
 
       if (gtk_widget_get_realized (GTK_WIDGET (text_view)))
 	{
@@ -2435,6 +2310,9 @@ gtk_text_view_set_buffer (GtkTextView   *text_view,
       g_signal_connect (priv->buffer, "delete-range",
                         G_CALLBACK (gtk_text_view_delete_range_handler),
                         text_view);
+      g_signal_connect_after (priv->buffer, "delete-range",
+                              G_CALLBACK (gtk_text_view_delete_range_after_handler),
+                              text_view);
 
 
       if (gtk_widget_get_realized (GTK_WIDGET (text_view)))
@@ -2456,7 +2334,7 @@ gtk_text_view_set_buffer (GtkTextView   *text_view,
   if (old_buffer)
     g_object_unref (old_buffer);
 
-  g_object_notify (G_OBJECT (text_view), "buffer");
+  g_object_notify_by_pspec (G_OBJECT (text_view), props[PROP_BUFFER]);
 
   if (gtk_widget_get_visible (GTK_WIDGET (text_view)))
     gtk_widget_queue_draw (GTK_WIDGET (text_view));
@@ -2971,11 +2849,7 @@ free_pending_scroll (GtkTextPendingScroll *scroll)
 static void
 cancel_pending_scroll (GtkTextView *text_view)
 {
-  if (text_view->priv->pending_scroll)
-    {
-      free_pending_scroll (text_view->priv->pending_scroll);
-      text_view->priv->pending_scroll = NULL;
-    }
+  g_clear_pointer (&text_view->priv->pending_scroll, free_pending_scroll);
 }
 
 static void
@@ -3182,7 +3056,7 @@ do_update_im_spot_location (gpointer text_view)
   priv->im_spot_idle = 0;
 
   gtk_text_view_update_im_spot_location (text_view);
-  return FALSE;
+  return G_SOURCE_REMOVE;
 }
 
 static void
@@ -3213,8 +3087,7 @@ flush_update_im_spot_location (GtkTextView *text_view)
 
   if (priv->im_spot_idle)
     {
-      g_source_remove (priv->im_spot_idle);
-      priv->im_spot_idle = 0;
+      g_clear_handle_id (&priv->im_spot_idle, g_source_remove);
       gtk_text_view_update_im_spot_location (text_view);
     }
 }
@@ -3430,7 +3303,7 @@ gtk_text_view_set_wrap_mode (GtkTextView *text_view,
           priv->layout->default_style->wrap_mode = wrap_mode;
           gtk_text_layout_default_style_changed (priv->layout);
         }
-      g_object_notify (G_OBJECT (text_view), "wrap-mode");
+      g_object_notify_by_pspec (G_OBJECT (text_view), props[PROP_WRAP_MODE]);
     }
 }
 
@@ -3504,7 +3377,7 @@ gtk_text_view_set_editable (GtkTextView *text_view,
       gtk_text_view_update_redo_action (text_view);
       gtk_text_view_update_undo_action (text_view);
 
-      g_object_notify (G_OBJECT (text_view), "editable");
+      g_object_notify_by_pspec (G_OBJECT (text_view), props[PROP_EDITABLE]);
     }
 }
 
@@ -3555,7 +3428,7 @@ gtk_text_view_set_pixels_above_lines (GtkTextView *text_view,
           gtk_text_layout_default_style_changed (priv->layout);
         }
 
-      g_object_notify (G_OBJECT (text_view), "pixels-above-lines");
+      g_object_notify_by_pspec (G_OBJECT (text_view), props[PROP_PIXELS_ABOVE_LINES]);
     }
 }
 
@@ -3608,7 +3481,7 @@ gtk_text_view_set_pixels_below_lines (GtkTextView *text_view,
           gtk_text_layout_default_style_changed (priv->layout);
         }
 
-      g_object_notify (G_OBJECT (text_view), "pixels-below-lines");
+      g_object_notify_by_pspec (G_OBJECT (text_view), props[PROP_PIXELS_BELOW_LINES]);
     }
 }
 
@@ -3661,7 +3534,7 @@ gtk_text_view_set_pixels_inside_wrap (GtkTextView *text_view,
           gtk_text_layout_default_style_changed (priv->layout);
         }
 
-      g_object_notify (G_OBJECT (text_view), "pixels-inside-wrap");
+      g_object_notify_by_pspec (G_OBJECT (text_view), props[PROP_PIXELS_INSIDE_WRAP]);
     }
 }
 
@@ -3711,7 +3584,7 @@ gtk_text_view_set_justification (GtkTextView     *text_view,
           gtk_text_layout_default_style_changed (priv->layout);
         }
 
-      g_object_notify (G_OBJECT (text_view), "justification");
+      g_object_notify_by_pspec (G_OBJECT (text_view), props[PROP_JUSTIFICATION]);
     }
 }
 
@@ -3763,7 +3636,7 @@ gtk_text_view_set_left_margin (GtkTextView *text_view,
           gtk_text_layout_default_style_changed (priv->layout);
         }
 
-      g_object_notify (G_OBJECT (text_view), "left-margin");
+      g_object_notify_by_pspec (G_OBJECT (text_view), props[PROP_LEFT_MARGIN]);
     }
 }
 
@@ -3815,7 +3688,7 @@ gtk_text_view_set_right_margin (GtkTextView *text_view,
           gtk_text_layout_default_style_changed (priv->layout);
         }
 
-      g_object_notify (G_OBJECT (text_view), "right-margin");
+      g_object_notify_by_pspec (G_OBJECT (text_view), props[PROP_RIGHT_MARGIN]);
     }
 }
 
@@ -3866,7 +3739,7 @@ gtk_text_view_set_top_margin (GtkTextView *text_view,
 
       gtk_text_view_invalidate (text_view);
 
-      g_object_notify (G_OBJECT (text_view), "top-margin");
+      g_object_notify_by_pspec (G_OBJECT (text_view), props[PROP_TOP_MARGIN]);
     }
 }
 
@@ -3911,7 +3784,7 @@ gtk_text_view_set_bottom_margin (GtkTextView *text_view,
       if (priv->layout && priv->layout->default_style)
         gtk_text_layout_default_style_changed (priv->layout);
 
-      g_object_notify (G_OBJECT (text_view), "bottom-margin");
+      g_object_notify_by_pspec (G_OBJECT (text_view), props[PROP_BOTTOM_MARGIN]);
     }
 }
 
@@ -3960,7 +3833,7 @@ gtk_text_view_set_indent (GtkTextView *text_view,
           gtk_text_layout_default_style_changed (priv->layout);
         }
 
-      g_object_notify (G_OBJECT (text_view), "indent");
+      g_object_notify_by_pspec (G_OBJECT (text_view), props[PROP_INDENT]);
     }
 }
 
@@ -4019,7 +3892,7 @@ gtk_text_view_set_tabs (GtkTextView   *text_view,
       gtk_text_layout_default_style_changed (priv->layout);
     }
 
-  g_object_notify (G_OBJECT (text_view), "tabs");
+  g_object_notify_by_pspec (G_OBJECT (text_view), props[PROP_TABS]);
 }
 
 /**
@@ -4087,7 +3960,7 @@ gtk_text_view_set_cursor_visible (GtkTextView *text_view,
             }
         }
 
-      g_object_notify (G_OBJECT (text_view), "cursor-visible");
+      g_object_notify_by_pspec (G_OBJECT (text_view), props[PROP_CURSOR_VISIBLE]);
     }
 }
 
@@ -4165,15 +4038,10 @@ gtk_text_view_remove_validate_idles (GtkTextView *text_view)
   if (priv->first_validate_idle != 0)
     {
       DV (g_print ("Removing first validate idle: %s\n", G_STRLOC));
-      g_source_remove (priv->first_validate_idle);
-      priv->first_validate_idle = 0;
+      g_clear_handle_id (&priv->first_validate_idle, g_source_remove);
     }
 
-  if (priv->incremental_validate_idle != 0)
-    {
-      g_source_remove (priv->incremental_validate_idle);
-      priv->incremental_validate_idle = 0;
-    }
+  g_clear_handle_id (&priv->incremental_validate_idle, g_source_remove);
 }
 
 static void
@@ -4190,21 +4058,14 @@ gtk_text_view_dispose (GObject *object)
       g_object_set_data (object, "gtk-emoji-chooser", NULL);
     }
 
+  gtk_im_context_set_client_widget (priv->im_context, NULL);
   gtk_text_view_remove_validate_idles (text_view);
   gtk_text_view_set_buffer (text_view, NULL);
   gtk_text_view_destroy_layout (text_view);
 
-  if (text_view->priv->scroll_timeout)
-    {
-      g_source_remove (text_view->priv->scroll_timeout);
-      text_view->priv->scroll_timeout = 0;
-    }
+  g_clear_handle_id (&text_view->priv->scroll_timeout, g_source_remove);
 
-  if (priv->im_spot_idle)
-    {
-      g_source_remove (priv->im_spot_idle);
-      priv->im_spot_idle = 0;
-    }
+  g_clear_handle_id (&priv->im_spot_idle, g_source_remove);
 
   if (priv->magnifier)
     _gtk_magnifier_set_inspected (GTK_MAGNIFIER (priv->magnifier), NULL);
@@ -4262,6 +4123,7 @@ gtk_text_view_finalize (GObject *object)
 
   g_clear_pointer (&priv->popup_menu, gtk_widget_unparent);
   g_clear_object (&priv->extra_menu);
+  g_clear_object (&priv->mru_line_height_context);
 
   G_OBJECT_CLASS (gtk_text_view_parent_class)->finalize (object);
 }
@@ -4850,6 +4712,35 @@ gtk_text_view_set_gutter (GtkTextView       *text_view,
   update_node_ordering (GTK_WIDGET (text_view));
 }
 
+static int
+gtk_text_view_get_mru_line_height (GtkTextView *text_view)
+{
+  GtkTextViewPrivate *priv = text_view->priv;
+  GtkWidget *widget = GTK_WIDGET (text_view);
+  PangoContext *context;
+  PangoLayout *layout;
+  guint serial;
+  int height;
+
+  context = gtk_widget_get_pango_context (widget);
+  serial = pango_context_get_serial (context);
+
+  if (priv->mru_line_height_context == context &&
+      priv->mru_line_height_context_serial == serial)
+    return priv->mru_line_height;
+
+  layout = pango_layout_new (context);
+  pango_layout_set_text (layout, "X", 1);
+  pango_layout_get_pixel_size (layout, NULL, &height);
+  g_object_unref (layout);
+
+  g_set_object (&priv->mru_line_height_context, context);
+  priv->mru_line_height_context_serial = serial;
+  priv->mru_line_height = height;
+
+  return height;
+}
+
 static void
 gtk_text_view_size_allocate (GtkWidget *widget,
                              int        widget_width,
@@ -4865,7 +4756,6 @@ gtk_text_view_size_allocate (GtkWidget *widget,
   GdkRectangle top_rect;
   GdkRectangle bottom_rect;
   GtkWidget *chooser;
-  PangoLayout *layout;
   guint mru_size;
 
   text_view = GTK_TEXT_VIEW (widget);
@@ -4952,14 +4842,12 @@ gtk_text_view_size_allocate (GtkWidget *widget,
   gtk_text_view_allocate_children (text_view);
 
   /* Optimize display cache size */
-  layout = gtk_widget_create_pango_layout (widget, "X");
-  pango_layout_get_pixel_size (layout, &width, &height);
+  height = gtk_text_view_get_mru_line_height (text_view);
   if (height > 0)
     {
       mru_size = SCREEN_HEIGHT (widget) / height * 3;
       gtk_text_layout_set_mru_size (priv->layout, mru_size);
     }
-  g_object_unref (layout);
 
   /* The GTK resize loop processes all the pending exposes right
    * after doing the resize stuff, so the idle sizer won't have a
@@ -5049,8 +4937,7 @@ gtk_text_view_flush_first_validate (GtkTextView *text_view)
    * will be installed, and we'll start again.
    */
   DV (g_print ("removing first validate in %s\n", G_STRLOC));
-  g_source_remove (priv->first_validate_idle);
-  priv->first_validate_idle = 0;
+  g_clear_handle_id (&priv->first_validate_idle, g_source_remove);
 
   /* be sure we have up-to-date screen size set on the
    * layout.
@@ -5095,7 +4982,7 @@ first_validate_callback (gpointer data)
 
   gtk_text_view_flush_first_validate (text_view);
 
-  return FALSE;
+  return G_SOURCE_REMOVE;
 }
 
 static gboolean
@@ -5247,7 +5134,6 @@ gtk_text_view_realize (GtkWidget *widget)
     {
       gtk_im_context_set_parent_node (priv->im_context,
                                       priv->text_window->css_node);
-      gtk_im_context_set_client_widget (priv->im_context, widget);
     }
 
   gtk_text_view_ensure_layout (text_view);
@@ -5282,7 +5168,6 @@ gtk_text_view_unrealize (GtkWidget *widget)
 
   g_clear_pointer (&priv->popup_menu, gtk_widget_unparent);
 
-  gtk_im_context_set_client_widget (priv->im_context, NULL);
   gtk_im_context_set_parent_node (priv->im_context, NULL);
 
   GTK_WIDGET_CLASS (gtk_text_view_parent_class)->unrealize (widget);
@@ -5484,8 +5369,6 @@ gtk_text_view_set_handle_position (GtkTextView   *text_view,
       GtkTextDirection dir = GTK_TEXT_DIR_LTR;
       GtkTextAttributes attributes = { 0 };
 
-      gtk_widget_set_visible (GTK_WIDGET (handle), TRUE);
-
       rect.x = CLAMP (x, 0, SCREEN_WIDTH (text_view));
       rect.y = CLAMP (y, 0, SCREEN_HEIGHT (text_view));
       _text_window_to_widget_coords (text_view, &rect.x, &rect.y);
@@ -5496,6 +5379,7 @@ gtk_text_view_set_handle_position (GtkTextView   *text_view,
         dir = attributes.direction;
 
       gtk_widget_set_direction (GTK_WIDGET (handle), dir);
+      gtk_widget_set_visible (GTK_WIDGET (handle), TRUE);
     }
 }
 
@@ -6005,7 +5889,8 @@ gtk_text_view_click_gesture_released (GtkGestureClick *gesture,
 
   if (gtk_event_treat_as_touch (event) &&
       gtk_text_iter_compare (&start, &end) == 0 &&
-      gtk_text_iter_can_insert (&start, priv->editable))
+      gtk_text_iter_can_insert (&start, priv->editable) &&
+      (gtk_text_view_get_input_hints (text_view) & GTK_INPUT_HINT_INHIBIT_OSK) == 0)
     gtk_im_context_activate_osk (priv->im_context, event);
 }
 
@@ -7389,6 +7274,8 @@ gtk_text_view_paste_done_handler (GtkTextBuffer *buffer,
     }
 
   priv->scroll_after_paste = FALSE;
+
+  gtk_text_view_set_virtual_cursor_pos (text_view, -1, -1);
 }
 
 static void
@@ -7435,6 +7322,17 @@ gtk_text_view_delete_range_handler (GtkTextBuffer *buffer,
 }
 
 static void
+gtk_text_view_delete_range_after_handler (GtkTextBuffer *buffer,
+                                          GtkTextIter   *start,
+                                          GtkTextIter   *end,
+                                          gpointer       data)
+{
+  GtkTextView *text_view = data;
+
+  gtk_text_view_set_virtual_cursor_pos (text_view, -1, -1);
+}
+
+static void
 gtk_text_view_toggle_overwrite (GtkTextView *text_view)
 {
   GtkTextViewPrivate *priv = text_view->priv;
@@ -7449,7 +7347,7 @@ gtk_text_view_toggle_overwrite (GtkTextView *text_view)
 
   gtk_text_view_pend_cursor_blink (text_view);
 
-  g_object_notify (G_OBJECT (text_view), "overwrite");
+  g_object_notify_by_pspec (G_OBJECT (text_view), props[PROP_OVERWRITE]);
 }
 
 /**
@@ -7513,7 +7411,7 @@ gtk_text_view_set_accepts_tab (GtkTextView *text_view,
     {
       text_view->priv->accepts_tab = accepts_tab;
 
-      g_object_notify (G_OBJECT (text_view), "accepts-tab");
+      g_object_notify_by_pspec (G_OBJECT (text_view), props[PROP_ACCEPTS_TAB]);
     }
 }
 
@@ -7589,7 +7487,7 @@ selection_scan_timeout (gpointer data)
   gtk_text_view_scroll_mark_onscreen (text_view,
 				      gtk_text_buffer_get_insert (get_buffer (text_view)));
 
-  return TRUE; /* remain installed. */
+  return G_SOURCE_CONTINUE; /* remain installed. */
 }
 
 static void
@@ -7908,11 +7806,7 @@ gtk_text_view_drag_gesture_end (GtkGestureDrag *gesture,
   g_object_set_qdata (G_OBJECT (gesture), quark_text_selection_data, NULL);
   gtk_text_view_unobscure_mouse_cursor (text_view, timestamp);
 
-  if (priv->scroll_timeout != 0)
-    {
-      g_source_remove (priv->scroll_timeout);
-      priv->scroll_timeout = 0;
-    }
+  g_clear_handle_id (&priv->scroll_timeout, g_source_remove);
 
   if (priv->magnifier_popover)
     gtk_widget_set_visible (priv->magnifier_popover, FALSE);
@@ -8033,11 +7927,7 @@ gtk_text_view_end_selection_drag (GtkTextView *text_view)
   if (!gtk_gesture_is_active (priv->drag_gesture))
     return FALSE;
 
-  if (priv->scroll_timeout != 0)
-    {
-      g_source_remove (priv->scroll_timeout);
-      priv->scroll_timeout = 0;
-    }
+  g_clear_handle_id (&priv->scroll_timeout, g_source_remove);
 
   if (priv->magnifier_popover)
     gtk_widget_set_visible (priv->magnifier_popover, FALSE);
@@ -8341,8 +8231,7 @@ gtk_text_view_destroy_layout (GtkTextView *text_view)
       gtk_text_view_stop_cursor_blink (text_view);
       gtk_text_view_end_selection_drag (text_view);
 
-      g_object_unref (priv->layout);
-      priv->layout = NULL;
+      g_clear_object (&priv->layout);
     }
 }
 
@@ -8628,7 +8517,7 @@ gtk_text_view_set_hadjustment (GtkTextView   *text_view,
   priv->hadjustment = g_object_ref_sink (adjustment);
   gtk_text_view_set_hadjustment_values (text_view);
 
-  g_object_notify (G_OBJECT (text_view), "hadjustment");
+  g_object_notify_by_pspec (G_OBJECT (text_view), props[PROP_HADJUSTMENT]);
 }
 
 static void
@@ -8656,7 +8545,7 @@ gtk_text_view_set_vadjustment (GtkTextView   *text_view,
   priv->vadjustment = g_object_ref_sink (adjustment);
   gtk_text_view_set_vadjustment_values (text_view);
 
-  g_object_notify (G_OBJECT (text_view), "vadjustment");
+  g_object_notify_by_pspec (G_OBJECT (text_view), props[PROP_VADJUSTMENT]);
 }
 
 static void
@@ -8799,11 +8688,7 @@ gtk_text_view_value_changed (GtkAdjustment *adjustment,
   gtk_text_view_validate_onscreen (text_view);
 
   /* If this got installed, get rid of it, it's just a waste of time. */
-  if (priv->first_validate_idle != 0)
-    {
-      g_source_remove (priv->first_validate_idle);
-      priv->first_validate_idle = 0;
-    }
+  g_clear_handle_id (&priv->first_validate_idle, g_source_remove);
 
   /* Allow to extend selection with mouse scrollwheel. Bug 710612 */
   if (gtk_gesture_is_active (priv->drag_gesture))
@@ -8891,7 +8776,7 @@ gtk_text_view_commit_text (GtkTextView   *text_view,
         }
     }
 
-  if (!strcmp (str, "\n"))
+  if (strcmp (str, "\n") == 0)
     {
       if (!gtk_text_buffer_insert_interactive_at_cursor (get_buffer (text_view), "\n", 1,
                                                          priv->editable))
@@ -9100,7 +8985,6 @@ gtk_text_view_mark_set_handler (GtkTextBuffer     *buffer,
     }
   else if (mark == gtk_text_buffer_get_selection_bound (buffer))
     {
-      gtk_accessible_text_update_selection_bound (GTK_ACCESSIBLE_TEXT (text_view));
       need_reset = TRUE;
     }
 
@@ -9111,6 +8995,9 @@ gtk_text_view_mark_set_handler (GtkTextBuffer     *buffer,
 
       has_selection = gtk_text_buffer_get_selection_bounds (get_buffer (text_view), NULL, NULL);
       gtk_css_node_set_visible (text_view->priv->selection_node, has_selection);
+
+      if (has_selection)
+        gtk_accessible_text_update_selection_bound (GTK_ACCESSIBLE_TEXT (text_view));
     }
 }
 
@@ -9302,7 +9189,10 @@ gtk_text_view_activate_misc_insert_emoji (GtkWidget  *widget,
                                           const char *action_name,
                                           GVariant   *parameter)
 {
-  gtk_text_view_insert_emoji (GTK_TEXT_VIEW (widget));
+  GtkTextView *text_view = GTK_TEXT_VIEW (widget);
+
+  gtk_text_view_insert_emoji (text_view);
+  hide_selection_bubble (text_view);
 }
 
 static void
@@ -9643,7 +9533,7 @@ append_bubble_item (GtkTextView *text_view,
   gtk_box_append (GTK_BOX (toolbar), item);
 }
 
-static gboolean
+static void
 gtk_text_view_selection_bubble_popup_show (gpointer user_data)
 {
   GtkTextView *text_view = user_data;
@@ -9698,8 +9588,6 @@ gtk_text_view_selection_bubble_popup_show (gpointer user_data)
 
   gtk_popover_set_pointing_to (GTK_POPOVER (priv->selection_bubble), &rect);
   gtk_widget_set_visible (priv->selection_bubble, TRUE);
-
-  return G_SOURCE_REMOVE;
 }
 
 static void
@@ -9712,11 +9600,7 @@ gtk_text_view_selection_bubble_popup_unset (GtkTextView *text_view)
   if (priv->selection_bubble)
     gtk_widget_set_visible (priv->selection_bubble, FALSE);
 
-  if (priv->selection_bubble_timeout_id)
-    {
-      g_source_remove (priv->selection_bubble_timeout_id);
-      priv->selection_bubble_timeout_id = 0;
-    }
+  g_clear_handle_id (&priv->selection_bubble_timeout_id, g_source_remove);
 }
 
 static void
@@ -9729,7 +9613,7 @@ gtk_text_view_selection_bubble_popup_set (GtkTextView *text_view)
   if (priv->selection_bubble_timeout_id)
     g_source_remove (priv->selection_bubble_timeout_id);
 
-  priv->selection_bubble_timeout_id = g_timeout_add (50, gtk_text_view_selection_bubble_popup_show, text_view);
+  priv->selection_bubble_timeout_id = g_timeout_add_once (50, gtk_text_view_selection_bubble_popup_show, text_view);
   gdk_source_set_static_name_by_id (priv->selection_bubble_timeout_id, "[gtk] gtk_text_view_selection_bubble_popup_cb");
 }
 
@@ -9806,7 +9690,7 @@ text_window_new (GtkWidget *widget)
   win->css_node = gtk_css_node_new ();
   gtk_css_node_set_parent (win->css_node, widget_node);
   gtk_css_node_set_state (win->css_node, gtk_css_node_get_state (widget_node));
-  g_signal_connect_object (win->css_node, "style-changed", G_CALLBACK (node_style_changed_cb), widget, 0);
+  g_signal_connect_object (win->css_node, "style-changed", G_CALLBACK (node_style_changed_cb), widget, G_CONNECT_DEFAULT);
   gtk_css_node_set_name (win->css_node, g_quark_from_static_string ("text"));
 
   g_object_unref (win->css_node);
@@ -10332,7 +10216,7 @@ gtk_text_view_set_input_purpose (GtkTextView     *text_view,
                     "input-purpose", purpose,
                     NULL);
 
-      g_object_notify (G_OBJECT (text_view), "input-purpose");
+      g_object_notify_by_pspec (G_OBJECT (text_view), props[PROP_INPUT_PURPOSE]);
     }
 }
 
@@ -10381,7 +10265,7 @@ gtk_text_view_set_input_hints (GtkTextView   *text_view,
                     "input-hints", hints,
                     NULL);
 
-      g_object_notify (G_OBJECT (text_view), "input-hints");
+      g_object_notify_by_pspec (G_OBJECT (text_view), props[PROP_INPUT_HINTS]);
       gtk_text_view_update_emoji_action (text_view);
     }
 }
@@ -10433,7 +10317,7 @@ gtk_text_view_set_monospace (GtkTextView *text_view,
       else
         gtk_widget_remove_css_class (GTK_WIDGET (text_view), "monospace");
 
-      g_object_notify (G_OBJECT (text_view), "monospace");
+      g_object_notify_by_pspec (G_OBJECT (text_view), props[PROP_MONOSPACE]);
     }
 }
 
@@ -10542,7 +10426,7 @@ gtk_text_view_set_extra_menu (GtkTextView *text_view,
   if (g_set_object (&priv->extra_menu, model))
     {
       g_clear_pointer (&priv->popup_menu, gtk_widget_unparent);
-      g_object_notify (G_OBJECT (text_view), "extra-menu");
+      g_object_notify_by_pspec (G_OBJECT (text_view), props[PROP_EXTRA_MENU]);
     }
 }
 
@@ -10774,9 +10658,12 @@ gtk_text_view_accessible_text_get_selection (GtkAccessibleText       *self,
 
   *n_ranges = 1;
 
-  *ranges = g_new (GtkAccessibleTextRange, 1);
-  (*ranges)[0].start = start;
-  (*ranges)[0].length = end - start;
+  if (ranges != NULL)
+    {
+      *ranges = g_new (GtkAccessibleTextRange, 1);
+      (*ranges)[0].start = start;
+      (*ranges)[0].length = end - start;
+    }
 
   return TRUE;
 }
@@ -10803,32 +10690,46 @@ gtk_text_view_accessible_text_get_attributes (GtkAccessibleText        *self,
     {
       g_hash_table_unref (attrs);
       *n_ranges = 0;
-      *ranges = NULL;
-      *attribute_names = NULL;
-      *attribute_values = NULL;
+      if (ranges != NULL)
+        *ranges = NULL;
+      if (attribute_names != NULL)
+        *attribute_names = NULL;
+      if (attribute_values != NULL)
+        *attribute_values = NULL;
       return FALSE;
     }
 
   *n_ranges = n_attrs;
-  *ranges = g_new (GtkAccessibleTextRange, n_attrs);
-  *attribute_names = g_new (char *, n_attrs + 1);
-  *attribute_values = g_new (char *, n_attrs + 1);
+
+  if (ranges != NULL)
+    *ranges = g_new (GtkAccessibleTextRange, n_attrs);
+  if (attribute_names != NULL)
+    *attribute_names = g_new (char *, n_attrs + 1);
+  if (attribute_values != NULL)
+    *attribute_values = g_new (char *, n_attrs + 1);
 
   i = 0;
   g_hash_table_iter_init (&iter, attrs);
   while (g_hash_table_iter_next (&iter, &key, &value))
     {
-      ((*ranges)[i]).start = start;
-      ((*ranges)[i]).length = end - start;
+      if (ranges != NULL)
+        {
+          ((*ranges)[i]).start = start;
+          ((*ranges)[i]).length = end - start;
+        }
 
-      (*attribute_names)[i] = g_strdup (key);
-      (*attribute_values)[i] = g_strdup (value);
+      if (attribute_names != NULL)
+        (*attribute_names)[i] = g_strdup (key);
+      if (attribute_values != NULL)
+        (*attribute_values)[i] = g_strdup (value);
 
       i += 1;
     }
 
-  (*attribute_names)[n_attrs] = NULL;
-  (*attribute_values)[n_attrs] = NULL;
+  if (attribute_names != NULL)
+    (*attribute_names)[n_attrs] = NULL;
+  if (attribute_values != NULL)
+    (*attribute_values)[n_attrs] = NULL;
 
   return TRUE;
 }
@@ -10967,26 +10868,34 @@ gtk_text_view_accessible_text_get_default_attributes (GtkAccessibleText   *self,
   if (n_attrs == 0)
     {
       g_hash_table_unref (attrs);
-      *attribute_names = NULL;
-      *attribute_values = NULL;
+      if (attribute_names != NULL)
+        *attribute_names = NULL;
+      if (attribute_values != NULL)
+        *attribute_values = NULL;
       return;
     }
 
-  *attribute_names = g_new (char *, n_attrs + 1);
-  *attribute_values = g_new (char *, n_attrs + 1);
+  if (attribute_names != NULL)
+    *attribute_names = g_new (char *, n_attrs + 1);
+  if (attribute_values != NULL)
+    *attribute_values = g_new (char *, n_attrs + 1);
 
   i = 0;
   g_hash_table_iter_init (&iter, attrs);
   while (g_hash_table_iter_next (&iter, &key, &value))
     {
-      (*attribute_names)[i] = g_strdup (key);
-      (*attribute_values)[i] = g_strdup (value);
+      if (attribute_names != NULL)
+        (*attribute_names)[i] = g_strdup (key);
+      if (attribute_values != NULL)
+        (*attribute_values)[i] = g_strdup (value);
 
       i += 1;
     }
 
-  (*attribute_names)[n_attrs] = NULL;
-  (*attribute_values)[n_attrs] = NULL;
+  if (attribute_names != NULL)
+    (*attribute_names)[n_attrs] = NULL;
+  if (attribute_values != NULL)
+    (*attribute_values)[n_attrs] = NULL;
 
   g_hash_table_unref (attrs);
 }

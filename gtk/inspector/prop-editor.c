@@ -62,8 +62,11 @@ enum
   PROP_0,
   PROP_OBJECT,
   PROP_NAME,
-  PROP_SIZE_GROUP
+  PROP_SIZE_GROUP,
+  N_PROPS
 };
+
+static GParamSpec *props[N_PROPS] = { NULL, };
 
 enum
 {
@@ -93,7 +96,7 @@ disconnect_func (gpointer data)
 {
   DisconnectData *dd = data;
 
-  g_signal_handler_disconnect (dd->instance, dd->id);
+  g_clear_signal_handler (&dd->id, dd->instance);
 }
 
 static void
@@ -178,7 +181,7 @@ connect_controller (GObject     *controller,
   p->spec = spec;
 
   p->modified_id = g_signal_connect_data (controller, signal, func, p,
-                                          (GClosureNotify)free_object_property, 0);
+                                          (GClosureNotify)free_object_property, G_CONNECT_DEFAULT);
   g_object_set_data (controller, "object-property", p);
 }
 
@@ -1011,6 +1014,20 @@ describe_expression (GtkExpression *expression)
 }
 
 static void
+string_append_unichar_escaped (GString  *string,
+                               gunichar  ch)
+{
+  char text[16] = { 0, };
+  int len;
+  char *escaped;
+
+  len = g_unichar_to_utf8 (ch, text);
+  escaped = g_markup_escape_text (text, len);
+  g_string_append (string, escaped);
+  g_free (escaped);
+}
+
+static void
 toggle_unicode (GtkWidget *stack,
                 gboolean   show_unicode)
 {
@@ -1029,17 +1046,20 @@ toggle_unicode (GtkWidget *stack,
 
       orig = gtk_editable_get_text (GTK_EDITABLE (entry));
       s = g_string_sized_new (10 * strlen (orig));
+
+      g_string_append_unichar (s, 0x202d); /* LRO, we are rendering left-to-right */
       for (p = orig; *p; p = g_utf8_next_char (p))
         {
           gunichar ch = g_utf8_get_char (p);
           if (s->len > 0)
             g_string_append_unichar (s, 0x2005);
-          g_string_append_unichar (s, ch);
+          string_append_unichar_escaped (s, ch);
           g_string_append_unichar (s, 0x2005);
           g_string_append (s, "<span alpha=\"70%\" font_size=\"smaller\">");
           g_string_append_printf (s, "%04X", ch);
           g_string_append (s, "</span>");
         }
+      g_string_append_unichar (s, 0x202c); /* PDF */
       pango_parse_markup (s->str, s->len, 0, &attrs, &text, NULL, NULL);
       gtk_editable_set_text (GTK_EDITABLE (unicode), text);
       gtk_entry_set_attributes (GTK_ENTRY (unicode), attrs);
@@ -1794,6 +1814,8 @@ constructed (GObject *object)
   gboolean can_modify;
   GtkWidget *box;
 
+  G_OBJECT_CLASS (gtk_inspector_prop_editor_parent_class)->constructed (object);
+
   spec = find_property (self);
 
   can_modify = ((spec->flags & G_PARAM_WRITABLE) != 0 &&
@@ -1802,9 +1824,9 @@ constructed (GObject *object)
   box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 10);
 
   if ((spec->flags & G_PARAM_CONSTRUCT_ONLY) != 0)
-    label = gtk_label_new ("(construct-only)");
+    label = gtk_label_new (_("(construct-only)"));
   else if ((spec->flags & G_PARAM_WRITABLE) == 0)
-    label = gtk_label_new ("(not writable)");
+    label = gtk_label_new (_("(not writable)"));
   else
     label = NULL;
 
@@ -1932,17 +1954,16 @@ gtk_inspector_prop_editor_class_init (GtkInspectorPropEditorClass *klass)
                   NULL, NULL, NULL,
                   G_TYPE_NONE, 3, G_TYPE_OBJECT, G_TYPE_STRING, G_TYPE_STRING);
 
-  g_object_class_install_property (object_class, PROP_OBJECT,
-      g_param_spec_object ("object", NULL, NULL,
-                           G_TYPE_OBJECT, G_PARAM_READWRITE | G_PARAM_CONSTRUCT | G_PARAM_STATIC_NAME));
+  props[PROP_OBJECT] = g_param_spec_object ("object", NULL, NULL,
+                                            G_TYPE_OBJECT, G_PARAM_READWRITE | G_PARAM_CONSTRUCT | G_PARAM_STATIC_NAME);
 
-  g_object_class_install_property (object_class, PROP_NAME,
-      g_param_spec_string ("name", NULL, NULL,
-                           NULL, G_PARAM_READWRITE | G_PARAM_CONSTRUCT | G_PARAM_STATIC_NAME));
+  props[PROP_NAME] = g_param_spec_string ("name", NULL, NULL,
+                                          NULL, G_PARAM_READWRITE | G_PARAM_CONSTRUCT | G_PARAM_STATIC_NAME);
 
-  g_object_class_install_property (object_class, PROP_SIZE_GROUP,
-      g_param_spec_object ("size-group", NULL, NULL,
-                           GTK_TYPE_SIZE_GROUP, G_PARAM_READWRITE | G_PARAM_CONSTRUCT | G_PARAM_STATIC_NAME));
+  props[PROP_SIZE_GROUP] = g_param_spec_object ("size-group", NULL, NULL,
+                                                GTK_TYPE_SIZE_GROUP, G_PARAM_READWRITE | G_PARAM_CONSTRUCT | G_PARAM_STATIC_NAME);
+
+  g_object_class_install_properties (object_class, N_PROPS, props);
 }
 
 GtkWidget *

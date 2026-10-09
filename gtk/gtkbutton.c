@@ -120,11 +120,10 @@ enum {
   PROP_ICON_NAME,
   PROP_CHILD,
   PROP_CAN_SHRINK,
-
-  /* actionable properties */
+  /* GtkActionable */
   PROP_ACTION_NAME,
   PROP_ACTION_TARGET,
-  LAST_PROP = PROP_ACTION_NAME
+  LAST_PROP
 };
 
 enum {
@@ -199,11 +198,10 @@ gtk_button_get_request_mode (GtkWidget *widget)
 static void
 gtk_button_class_init (GtkButtonClass *klass)
 {
-  const guint activate_keyvals[] = { GDK_KEY_space, GDK_KEY_KP_Space, GDK_KEY_Return,
-                                     GDK_KEY_ISO_Enter, GDK_KEY_KP_Enter };
   GObjectClass *gobject_class;
   GtkWidgetClass *widget_class;
-  GtkShortcutAction *activate_action;
+  GtkShortcutTrigger *trigger;
+  GtkShortcut *activate_shortcut;
 
   gobject_class = G_OBJECT_CLASS (klass);
   widget_class = (GtkWidgetClass*) klass;
@@ -228,7 +226,7 @@ gtk_button_class_init (GtkButtonClass *klass)
   props[PROP_LABEL] =
     g_param_spec_string ("label", NULL, NULL,
                          NULL,
-                         GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                         G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkButton:use-underline:
@@ -239,7 +237,7 @@ gtk_button_class_init (GtkButtonClass *klass)
   props[PROP_USE_UNDERLINE] =
     g_param_spec_boolean ("use-underline", NULL, NULL,
                           FALSE,
-                          GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                          G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkButton:has-frame:
@@ -249,7 +247,7 @@ gtk_button_class_init (GtkButtonClass *klass)
   props[PROP_HAS_FRAME] =
     g_param_spec_boolean ("has-frame", NULL, NULL,
                           TRUE,
-                          GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                          G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkButton:icon-name:
@@ -259,7 +257,7 @@ gtk_button_class_init (GtkButtonClass *klass)
   props[PROP_ICON_NAME] =
     g_param_spec_string ("icon-name", NULL, NULL,
                          NULL,
-                         GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                         G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkButton:child:
@@ -269,7 +267,7 @@ gtk_button_class_init (GtkButtonClass *klass)
   props[PROP_CHILD] =
     g_param_spec_object ("child", NULL, NULL,
                          GTK_TYPE_WIDGET,
-                         GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                         G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkButton:can-shrink:
@@ -287,12 +285,14 @@ gtk_button_class_init (GtkButtonClass *klass)
   props[PROP_CAN_SHRINK] =
     g_param_spec_boolean ("can-shrink", NULL, NULL,
                           FALSE,
-                          GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                          G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
+
+  props[PROP_ACTION_NAME] = g_param_spec_override ("action-name",
+      g_object_interface_find_property (g_type_default_interface_ref (GTK_TYPE_ACTIONABLE), "action-name"));
+  props[PROP_ACTION_TARGET] = g_param_spec_override ("action-target",
+      g_object_interface_find_property (g_type_default_interface_ref (GTK_TYPE_ACTIONABLE), "action-target"));
 
   g_object_class_install_properties (gobject_class, LAST_PROP, props);
-
-  g_object_class_override_property (gobject_class, PROP_ACTION_NAME, "action-name");
-  g_object_class_override_property (gobject_class, PROP_ACTION_TARGET, "action-target");
 
   /**
    * GtkButton::clicked:
@@ -332,16 +332,11 @@ gtk_button_class_init (GtkButtonClass *klass)
 
   gtk_widget_class_set_activate_signal (widget_class, button_signals[ACTIVATE]);
 
-  activate_action = gtk_signal_action_new ("activate");
-  for (guint i = 0; i < G_N_ELEMENTS (activate_keyvals); i++)
-    {
-      GtkShortcut *activate_shortcut = gtk_shortcut_new (gtk_keyval_trigger_new (activate_keyvals[i], 0),
-                                                         g_object_ref (activate_action));
-
-      gtk_widget_class_add_shortcut (widget_class, activate_shortcut);
-      g_object_unref (activate_shortcut);
-    }
-  g_object_unref (activate_action);
+  trigger = gtk_alternative_trigger_new (gtk_shortcut_trigger_create_with_aliases (GDK_KEY_Return, 0),
+                                         gtk_shortcut_trigger_create_with_aliases (GDK_KEY_space, 0));
+  activate_shortcut = gtk_shortcut_new (trigger, gtk_signal_action_new ("activate"));
+  gtk_widget_class_add_shortcut (widget_class, activate_shortcut);
+  g_object_unref (activate_shortcut);
 
   gtk_widget_class_set_accessible_role (widget_class, GTK_ACCESSIBLE_ROLE_BUTTON);
   gtk_widget_class_set_layout_manager_type (widget_class, GTK_TYPE_BIN_LAYOUT);
@@ -817,12 +812,10 @@ gtk_real_button_clicked (GtkButton *button)
     gtk_action_helper_activate (priv->action_helper);
 }
 
-static gboolean
+static void
 button_activate_timeout (gpointer data)
 {
   gtk_button_finish_activate (data, TRUE);
-
-  return FALSE;
 }
 
 static void
@@ -833,7 +826,7 @@ gtk_real_button_activate (GtkButton *button)
 
   if (gtk_widget_get_realized (widget) && !priv->activate_timeout)
     {
-      priv->activate_timeout = g_timeout_add (ACTIVATE_TIMEOUT, button_activate_timeout, button);
+      priv->activate_timeout = g_timeout_add_once (ACTIVATE_TIMEOUT, button_activate_timeout, button);
       gdk_source_set_static_name_by_id (priv->activate_timeout, "[gtk] button_activate_timeout");
 
       gtk_widget_add_css_class (GTK_WIDGET (button), "keyboard-activating");
@@ -849,8 +842,7 @@ gtk_button_finish_activate (GtkButton *button,
 
   gtk_widget_remove_css_class (GTK_WIDGET (button), "keyboard-activating");
 
-  g_source_remove (priv->activate_timeout);
-  priv->activate_timeout = 0;
+  g_clear_handle_id (&priv->activate_timeout, g_source_remove);
 
   priv->button_down = FALSE;
 

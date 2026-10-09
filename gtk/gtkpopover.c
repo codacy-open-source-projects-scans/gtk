@@ -859,7 +859,7 @@ gtk_popover_has_mnemonic_modifier_pressed (GtkPopover *popover)
   return retval;
 }
 
-static gboolean
+static void
 schedule_mnemonics_visible_cb (gpointer data)
 {
   GtkPopover *popover = data;
@@ -868,8 +868,6 @@ schedule_mnemonics_visible_cb (gpointer data)
   priv->mnemonics_display_timeout_id = 0;
 
   gtk_popover_set_mnemonics_visible (popover, TRUE);
-
-  return G_SOURCE_REMOVE;
 }
 
 static void
@@ -881,7 +879,7 @@ gtk_popover_schedule_mnemonics_visible (GtkPopover *popover)
     return;
 
   priv->mnemonics_display_timeout_id =
-    g_timeout_add (MNEMONICS_DELAY, schedule_mnemonics_visible_cb, popover);
+    g_timeout_add_once (MNEMONICS_DELAY, schedule_mnemonics_visible_cb, popover);
   gdk_source_set_static_name_by_id (priv->mnemonics_display_timeout_id, "[gtk] popover_schedule_mnemonics_visible_cb");
 }
 
@@ -966,15 +964,6 @@ surface_mapped_changed (GtkWidget *widget)
   GtkPopoverPrivate *priv = gtk_popover_get_instance_private (popover);
 
   gtk_widget_set_visible (widget, gdk_surface_get_mapped (priv->surface));
-}
-
-static gboolean
-surface_render (GdkSurface     *surface,
-                cairo_region_t *region,
-                GtkWidget      *widget)
-{
-  gtk_widget_render (widget, surface, region);
-  return TRUE;
 }
 
 static gboolean
@@ -1072,7 +1061,7 @@ gtk_popover_init (GtkPopover *popover)
   gtk_css_node_set_state (priv->arrow_node,
                           gtk_css_node_get_state (gtk_widget_get_css_node (widget)));
   g_signal_connect_object (priv->arrow_node, "style-changed",
-                           G_CALLBACK (node_style_changed_cb), popover, 0);
+                           G_CALLBACK (node_style_changed_cb), popover, G_CONNECT_DEFAULT);
   g_object_unref (priv->arrow_node);
 
   priv->contents_widget = gtk_popover_content_new ();
@@ -1101,7 +1090,6 @@ gtk_popover_realize (GtkWidget *widget)
   gdk_surface_set_widget (priv->surface, widget);
 
   g_signal_connect_swapped (priv->surface, "notify::mapped", G_CALLBACK (surface_mapped_changed), widget);
-  g_signal_connect (priv->surface, "render", G_CALLBACK (surface_render), widget);
   g_signal_connect (priv->surface, "event", G_CALLBACK (surface_event), widget);
 
   GTK_WIDGET_CLASS (gtk_popover_parent_class)->realize (widget);
@@ -1125,7 +1113,6 @@ gtk_popover_unrealize (GtkWidget *widget)
   g_clear_object (&priv->renderer);
 
   g_signal_handlers_disconnect_by_func (priv->surface, surface_mapped_changed, widget);
-  g_signal_handlers_disconnect_by_func (priv->surface, surface_render, widget);
   g_signal_handlers_disconnect_by_func (priv->surface, surface_event, widget);
   gdk_surface_set_widget (priv->surface, NULL);
   g_clear_pointer (&priv->surface, gdk_surface_destroy);
@@ -1299,11 +1286,7 @@ gtk_popover_finalize (GObject *object)
 
   g_clear_pointer (&priv->layout, gdk_popup_layout_unref);
 
-  if (priv->mnemonics_display_timeout_id)
-    {
-      g_source_remove (priv->mnemonics_display_timeout_id);
-      priv->mnemonics_display_timeout_id = 0;
-    }
+  g_clear_handle_id (&priv->mnemonics_display_timeout_id, g_source_remove);
 
   G_OBJECT_CLASS (gtk_popover_parent_class)->finalize (object);
 }
@@ -1889,19 +1872,23 @@ add_arrow_bindings (GtkWidgetClass   *widget_class,
 {
   guint keypad_keysym = keysym - GDK_KEY_Left + GDK_KEY_KP_Left;
 
-  gtk_widget_class_add_binding_signal (widget_class, keysym, 0,
+  gtk_widget_class_add_binding_signal (widget_class,
+                                       keysym, GDK_NO_MODIFIER_MASK,
                                        "move-focus",
                                        "(i)",
                                        direction);
-  gtk_widget_class_add_binding_signal (widget_class, keysym, GDK_CONTROL_MASK,
+  gtk_widget_class_add_binding_signal (widget_class,
+                                       keysym, GDK_CONTROL_MASK,
                                        "move-focus",
                                        "(i)",
                                        direction);
-  gtk_widget_class_add_binding_signal (widget_class, keypad_keysym, 0,
+  gtk_widget_class_add_binding_signal (widget_class,
+                                       keypad_keysym, GDK_NO_MODIFIER_MASK,
                                        "move-focus",
                                        "(i)",
                                        direction);
-  gtk_widget_class_add_binding_signal (widget_class, keypad_keysym, GDK_CONTROL_MASK,
+  gtk_widget_class_add_binding_signal (widget_class,
+                                       keypad_keysym, GDK_CONTROL_MASK,
                                        "move-focus",
                                        "(i)",
                                        direction);
@@ -1973,7 +1960,7 @@ gtk_popover_class_init (GtkPopoverClass *klass)
   properties[PROP_POINTING_TO] =
       g_param_spec_boxed ("pointing-to", NULL, NULL,
                           GDK_TYPE_RECTANGLE,
-                          GTK_PARAM_READWRITE);
+                          G_PARAM_READWRITE | G_PARAM_STATIC_NAME);
 
   /**
    * GtkPopover:position:
@@ -1983,17 +1970,21 @@ gtk_popover_class_init (GtkPopoverClass *klass)
   properties[PROP_POSITION] =
       g_param_spec_enum ("position", NULL, NULL,
                          GTK_TYPE_POSITION_TYPE, GTK_POS_BOTTOM,
-                         GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                         G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkPopover:autohide:
    *
    * Whether to dismiss the popover on outside clicks.
+   *
+   * If false, the popover won't automatically grab the focus when shown.
+   * This is useful for usecases like entry completion, where the focus is
+   * expected to stay on the entry.
    */
   properties[PROP_AUTOHIDE] =
       g_param_spec_boolean ("autohide", NULL, NULL,
                             TRUE,
-                            GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                            G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkPopover:default-widget:
@@ -2003,7 +1994,7 @@ gtk_popover_class_init (GtkPopoverClass *klass)
   properties[PROP_DEFAULT_WIDGET] =
       g_param_spec_object ("default-widget", NULL, NULL,
                            GTK_TYPE_WIDGET,
-                           GTK_PARAM_READWRITE|G_PARAM_STATIC_STRINGS|G_PARAM_EXPLICIT_NOTIFY);
+                           G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkPopover:has-arrow:
@@ -2013,7 +2004,7 @@ gtk_popover_class_init (GtkPopoverClass *klass)
   properties[PROP_HAS_ARROW] =
       g_param_spec_boolean ("has-arrow", NULL, NULL,
                             TRUE,
-                            GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                            G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkPopover:mnemonics-visible:
@@ -2023,7 +2014,7 @@ gtk_popover_class_init (GtkPopoverClass *klass)
   properties[PROP_MNEMONICS_VISIBLE] =
       g_param_spec_boolean ("mnemonics-visible", NULL, NULL,
                             FALSE,
-                            GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                            G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkPopover:child:
@@ -2033,7 +2024,7 @@ gtk_popover_class_init (GtkPopoverClass *klass)
   properties[PROP_CHILD] =
       g_param_spec_object ("child", NULL, NULL,
                            GTK_TYPE_WIDGET,
-                           GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                           G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkPopover:cascade-popdown:
@@ -2045,7 +2036,7 @@ gtk_popover_class_init (GtkPopoverClass *klass)
   properties[PROP_CASCADE_POPDOWN] =
       g_param_spec_boolean ("cascade-popdown", NULL, NULL,
                             FALSE,
-                            GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                            G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   g_object_class_install_properties (object_class, NUM_PROPERTIES, properties);
 
@@ -2095,11 +2086,11 @@ gtk_popover_class_init (GtkPopoverClass *klass)
   add_tab_bindings (widget_class, GDK_SHIFT_MASK, GTK_DIR_TAB_BACKWARD);
   add_tab_bindings (widget_class, GDK_CONTROL_MASK | GDK_SHIFT_MASK, GTK_DIR_TAB_BACKWARD);
 
-  gtk_widget_class_add_binding_signal (widget_class, GDK_KEY_Return, 0,
+  gtk_widget_class_add_binding_signal (widget_class, GDK_KEY_Return, GDK_NO_MODIFIER_MASK,
                                        "activate-default", NULL);
-  gtk_widget_class_add_binding_signal (widget_class, GDK_KEY_ISO_Enter, 0,
+  gtk_widget_class_add_binding_signal (widget_class, GDK_KEY_ISO_Enter, GDK_NO_MODIFIER_MASK,
                                        "activate-default", NULL);
-  gtk_widget_class_add_binding_signal (widget_class, GDK_KEY_KP_Enter, 0,
+  gtk_widget_class_add_binding_signal (widget_class, GDK_KEY_KP_Enter, GDK_NO_MODIFIER_MASK,
                                        "activate-default", NULL);
 
   gtk_widget_class_set_css_name (widget_class, "popover");
@@ -2192,18 +2183,14 @@ gtk_popover_set_default_widget (GtkPopover *popover,
 
   if (priv->default_widget)
     {
-      _gtk_widget_set_has_default (priv->default_widget, FALSE);
-      gtk_widget_queue_draw (priv->default_widget);
-      g_object_notify (G_OBJECT (priv->default_widget), "has-default");
+      gtk_widget_set_has_default (priv->default_widget, FALSE);
     }
 
   g_set_object (&priv->default_widget, widget);
 
   if (priv->default_widget)
     {
-      _gtk_widget_set_has_default (priv->default_widget, TRUE);
-      gtk_widget_queue_draw (priv->default_widget);
-      g_object_notify (G_OBJECT (priv->default_widget), "has-default");
+      gtk_widget_set_has_default (priv->default_widget, TRUE);
     }
 
   g_object_notify_by_pspec (G_OBJECT (popover), properties[PROP_DEFAULT_WIDGET]);
@@ -2580,11 +2567,7 @@ gtk_popover_set_mnemonics_visible (GtkPopover *popover,
   g_object_notify_by_pspec (G_OBJECT (popover), properties[PROP_MNEMONICS_VISIBLE]);
   gtk_widget_queue_resize (GTK_WIDGET (popover));
 
-  if (priv->mnemonics_display_timeout_id)
-    {
-      g_source_remove (priv->mnemonics_display_timeout_id);
-      priv->mnemonics_display_timeout_id = 0;
-    }
+  g_clear_handle_id (&priv->mnemonics_display_timeout_id, g_source_remove);
 }
 
 /**
@@ -2679,7 +2662,7 @@ gtk_popover_set_cascade_popdown (GtkPopover *popover,
   if (priv->cascade_popdown != !!cascade_popdown)
     {
       priv->cascade_popdown = !!cascade_popdown;
-      g_object_notify (G_OBJECT (popover), "cascade-popdown");
+      g_object_notify_by_pspec (G_OBJECT (popover), properties[PROP_CASCADE_POPDOWN]);
     }
 }
 

@@ -28,11 +28,14 @@
 
 G_BEGIN_DECLS
 
-#define GDK_CAIRO_CONTEXT_CLASS(klass) 	        (G_TYPE_CHECK_CLASS_CAST ((klass), GDK_TYPE_CAIRO_CONTEXT, GdkCairoContextClass))
-#define GDK_IS_CAIRO_CONTEXT_CLASS(klass)	(G_TYPE_CHECK_CLASS_TYPE ((klass), GDK_TYPE_CAIRO_CONTEXT))
-#define GDK_CAIRO_CONTEXT_GET_CLASS(obj)	(G_TYPE_INSTANCE_GET_CLASS ((obj), GDK_TYPE_CAIRO_CONTEXT, GdkCairoContextClass))
+typedef struct _GdkCairoContextFrame GdkCairoContextFrame;
 
-typedef struct _GdkCairoContextClass GdkCairoContextClass;
+struct _GdkCairoContextFrame
+{
+  GdkDrawContextFrame parent;
+
+  cairo_surface_t *surface;
+};
 
 struct _GdkCairoContext
 {
@@ -42,9 +45,11 @@ struct _GdkCairoContext
 struct _GdkCairoContextClass
 {
   GdkDrawContextClass parent_class;
-
-  cairo_t *     (* cairo_create)                (GdkCairoContext        *self);
 };
+
+void                    gdk_cairo_context_frame_set_surface     (GdkCairoContextFrame   *frame,
+                                                                 cairo_surface_t        *surface);
+cairo_surface_t *       gdk_cairo_context_frame_get_surface     (GdkCairoContextFrame   *frame);
 
 G_END_DECLS
 

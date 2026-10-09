@@ -291,7 +291,7 @@ gtk_editable_label_prepare_drag (GtkDragSource    *source,
                                          gtk_label_get_label (GTK_LABEL (self->label)));
 }
 
-static gboolean
+static void
 stop_editing_soon (gpointer data)
 {
   GtkEventController *controller = data;
@@ -301,8 +301,6 @@ stop_editing_soon (gpointer data)
     gtk_editable_label_stop_editing (self, TRUE);
 
   self->stop_editing_soon_id = 0;
-
-  return FALSE;
 }
 
 static void
@@ -313,7 +311,7 @@ gtk_editable_label_focus_out (GtkEventController *controller,
     return;
 
   if (self->stop_editing_soon_id == 0)
-    self->stop_editing_soon_id = g_timeout_add (100, stop_editing_soon, controller);
+    self->stop_editing_soon_id = g_timeout_add_once (100, stop_editing_soon, controller);
 }
 
 static void
@@ -494,8 +492,6 @@ gtk_editable_label_class_init (GtkEditableLabelClass *class)
   GObjectClass *object_class = G_OBJECT_CLASS (class);
   GtkWidgetClass *widget_class = GTK_WIDGET_CLASS (class);
   GtkShortcut *shortcut;
-  GtkShortcutTrigger *trigger;
-  GtkShortcutAction *action;
 
   object_class->set_property = gtk_editable_label_set_property;
   object_class->get_property = gtk_editable_label_get_property;
@@ -511,7 +507,7 @@ gtk_editable_label_class_init (GtkEditableLabelClass *class)
   properties[PROP_EDITING] =
     g_param_spec_boolean ("editing", NULL, NULL,
                           FALSE,
-                          GTK_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY);
+                          G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   g_object_class_install_properties (object_class, NUM_PROPERTIES, properties);
 
@@ -547,32 +543,23 @@ gtk_editable_label_class_init (GtkEditableLabelClass *class)
    */
   gtk_widget_class_install_action (widget_class, "editing.stop", "b", stop_editing);
 
-  trigger = gtk_alternative_trigger_new (
-                gtk_alternative_trigger_new (
-                    gtk_keyval_trigger_new (GDK_KEY_Return, 0),
-                    gtk_keyval_trigger_new (GDK_KEY_ISO_Enter, 0)),
-                    gtk_keyval_trigger_new (GDK_KEY_KP_Enter, 0));
-  action = gtk_named_action_new ("editing.start");
-  shortcut = gtk_shortcut_new (trigger, action);
-  gtk_widget_class_add_shortcut (widget_class, shortcut);
-  g_object_unref (shortcut);
+  gtk_widget_class_add_binding_action (widget_class,
+                                       GDK_KEY_Return, GDK_NO_MODIFIER_MASK,
+                                       "editing.start",
+                                       NULL);
 
   gtk_widget_class_add_binding_action (widget_class,
-                                       GDK_KEY_Escape, 0,
+                                       GDK_KEY_Escape, GDK_NO_MODIFIER_MASK,
                                        "editing.stop",
                                        "b", FALSE);
 
   gtk_widget_class_install_action (widget_class, "clipboard.copy", NULL, clipboard_copy);
   gtk_widget_class_install_action (widget_class, "menu.popup", NULL, popup_menu);
 
-  gtk_widget_class_add_binding_action (widget_class,
-                                       GDK_KEY_F10, GDK_SHIFT_MASK,
-                                       "menu.popup",
-                                       NULL);
-  gtk_widget_class_add_binding_action (widget_class,
-                                       GDK_KEY_Menu, 0,
-                                       "menu.popup",
-                                       NULL);
+  shortcut = gtk_shortcut_new (gtk_shortcut_trigger_create_for_menu (),
+                               gtk_named_action_new ("menu.popup"));
+  gtk_widget_class_add_shortcut (widget_class, shortcut);
+  g_object_unref (shortcut);
 
   gtk_widget_class_set_layout_manager_type (widget_class, GTK_TYPE_BIN_LAYOUT);
   gtk_widget_class_set_css_name (widget_class, "editablelabel");

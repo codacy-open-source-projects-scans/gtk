@@ -140,8 +140,9 @@ enum {
   PROP_RESTRICT_TO_FILL_LEVEL,
   PROP_FILL_LEVEL,
   PROP_ROUND_DIGITS,
+  /* GtkOrientable */
   PROP_ORIENTATION,
-  LAST_PROP = PROP_ORIENTATION
+  LAST_PROP
 };
 
 enum {
@@ -384,7 +385,8 @@ gtk_range_class_init (GtkRangeClass *class)
                               G_TYPE_FROM_CLASS (gobject_class),
                               _gtk_marshal_BOOLEAN__ENUM_DOUBLEv);
 
-  g_object_class_override_property (gobject_class, PROP_ORIENTATION, "orientation");
+  properties[PROP_ORIENTATION] = g_param_spec_override ("orientation",
+      g_object_interface_find_property (g_type_default_interface_ref (GTK_TYPE_ORIENTABLE), "orientation"));
 
   /**
    * GtkRange:adjustment:
@@ -394,7 +396,7 @@ gtk_range_class_init (GtkRangeClass *class)
   properties[PROP_ADJUSTMENT] =
       g_param_spec_object ("adjustment", NULL, NULL,
                            GTK_TYPE_ADJUSTMENT,
-                           GTK_PARAM_READWRITE|G_PARAM_CONSTRUCT|G_PARAM_EXPLICIT_NOTIFY);
+                           G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_CONSTRUCT | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkRange:inverted:
@@ -404,7 +406,7 @@ gtk_range_class_init (GtkRangeClass *class)
   properties[PROP_INVERTED] =
       g_param_spec_boolean ("inverted", NULL, NULL,
                             FALSE,
-                            GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                            G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkRange:show-fill-level:
@@ -415,7 +417,7 @@ gtk_range_class_init (GtkRangeClass *class)
   properties[PROP_SHOW_FILL_LEVEL] =
       g_param_spec_boolean ("show-fill-level", NULL, NULL,
                             FALSE,
-                            GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                            G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkRange:restrict-to-fill-level:
@@ -426,7 +428,7 @@ gtk_range_class_init (GtkRangeClass *class)
   properties[PROP_RESTRICT_TO_FILL_LEVEL] =
       g_param_spec_boolean ("restrict-to-fill-level", NULL, NULL,
                             TRUE,
-                            GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                            G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkRange:fill-level:
@@ -437,7 +439,7 @@ gtk_range_class_init (GtkRangeClass *class)
       g_param_spec_double ("fill-level", NULL, NULL,
                            -G_MAXDOUBLE, G_MAXDOUBLE,
                            G_MAXDOUBLE,
-                           GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                           G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkRange:round-digits:
@@ -451,7 +453,7 @@ gtk_range_class_init (GtkRangeClass *class)
       g_param_spec_int ("round-digits", NULL, NULL,
                         -1, G_MAXINT,
                         -1,
-                        GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                        G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   g_object_class_install_properties (gobject_class, LAST_PROP, properties);
 
@@ -634,7 +636,7 @@ gtk_range_set_orientation (GtkRange       *range,
       gtk_widget_update_orientation (GTK_WIDGET (range), priv->orientation);
       gtk_widget_queue_resize (GTK_WIDGET (range));
 
-      g_object_notify (G_OBJECT (range), "orientation");
+      g_object_notify_by_pspec (G_OBJECT (range), properties[PROP_ORIENTATION]);
     }
 }
 
@@ -1361,16 +1363,13 @@ gtk_range_dispose (GObject *object)
       g_signal_handlers_disconnect_by_func (priv->adjustment,
 					    gtk_range_adjustment_value_changed,
 					    range);
-      g_object_unref (priv->adjustment);
-      priv->adjustment = NULL;
+      g_clear_object (&priv->adjustment);
     }
 
   if (priv->n_marks)
     {
-      g_free (priv->marks);
-      priv->marks = NULL;
-      g_free (priv->mark_pos);
-      priv->mark_pos = NULL;
+      g_clear_pointer (&priv->marks, g_free);
+      g_clear_pointer (&priv->mark_pos, g_free);
       priv->n_marks = 0;
     }
 
@@ -2915,7 +2914,7 @@ second_timeout (gpointer data)
   return G_SOURCE_CONTINUE;
 }
 
-static gboolean
+static void
 initial_timeout (gpointer data)
 {
   GtkRange *range = GTK_RANGE (data);
@@ -2923,7 +2922,6 @@ initial_timeout (gpointer data)
 
   priv->timer->timeout_id = g_timeout_add (TIMEOUT_REPEAT, second_timeout, range);
   gdk_source_set_static_name_by_id (priv->timer->timeout_id, "[gtk] second_timeout");
-  return G_SOURCE_REMOVE;
 }
 
 static void
@@ -2937,7 +2935,7 @@ gtk_range_add_step_timer (GtkRange      *range,
 
   priv->timer = g_new (GtkRangeStepTimer, 1);
 
-  priv->timer->timeout_id = g_timeout_add (TIMEOUT_INITIAL, initial_timeout, range);
+  priv->timer->timeout_id = g_timeout_add_once (TIMEOUT_INITIAL, initial_timeout, range);
   gdk_source_set_static_name_by_id (priv->timer->timeout_id, "[gtk] initial_timeout");
   priv->timer->step = step;
 
@@ -2954,9 +2952,8 @@ gtk_range_remove_step_timer (GtkRange *range)
       if (priv->timer->timeout_id != 0)
         g_source_remove (priv->timer->timeout_id);
 
-      g_free (priv->timer);
+      g_clear_pointer (&priv->timer, g_free);
 
-      priv->timer = NULL;
     }
 }
 

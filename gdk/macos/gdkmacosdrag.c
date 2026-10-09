@@ -214,8 +214,7 @@ gdk_macos_drag_cancel (GdkDrag             *drag,
 }
 
 static void
-gdk_macos_drag_drop_performed (GdkDrag *drag,
-                               guint32  time)
+gdk_macos_drag_drop_performed (GdkDrag *drag)
 {
   GdkMacosDrag *self = (GdkMacosDrag *)drag;
 
@@ -356,7 +355,7 @@ gdk_macos_drag_class_init (GdkMacosDragClass *klass)
   properties [PROP_DRAG_SURFACE] =
     g_param_spec_object ("drag-surface", NULL, NULL,
                          GDK_TYPE_MACOS_DRAG_SURFACE,
-                         G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY | G_PARAM_STATIC_STRINGS);
+                         G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY | G_PARAM_STATIC_NAME);
 
   g_object_class_install_properties (object_class, N_PROPS, properties);
 }

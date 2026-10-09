@@ -71,13 +71,9 @@
 #include "gtktestatcontextprivate.h"
 
 #include "inspector/window.h"
-#ifdef HAVE_ACCESSKIT
-#include "a11y/gtkaccesskitcontextprivate.h"
-#endif
 
 #include "gdk/gdkdisplayprivate.h"
 #include "gdk/gdkeventsprivate.h"
-#include "gdk/gdkprofilerprivate.h"
 #include "gdk/gdkmonitorprivate.h"
 #include "gsk/gskdebugprivate.h"
 #include "gsk/gskrendererprivate.h"
@@ -575,10 +571,9 @@ enum {
   PROP_CSS_CLASSES,
   PROP_LAYOUT_MANAGER,
   PROP_LIMIT_EVENTS,
-  NUM_PROPERTIES,
-
   /* GtkAccessible */
-  PROP_ACCESSIBLE_ROLE
+  PROP_ACCESSIBLE_ROLE,
+  NUM_PROPERTIES,
 };
 
 
@@ -920,7 +915,7 @@ gtk_widget_set_accessible_role (GtkWidget         *self,
       if (priv->at_context != NULL)
         gtk_at_context_set_accessible_role (priv->at_context, role);
 
-      g_object_notify (G_OBJECT (self), "accessible-role");
+      g_object_notify_by_pspec (G_OBJECT (self), widget_props[PROP_ACCESSIBLE_ROLE]);
     }
   else
     {
@@ -1212,6 +1207,7 @@ static void
 gtk_widget_class_init (GtkWidgetClass *klass)
 {
   GObjectClass *gobject_class = G_OBJECT_CLASS (klass);
+  gpointer iface;
 
   g_type_class_adjust_private_offset (klass, &GtkWidget_private_offset);
   gtk_widget_parent_class = g_type_class_peek_parent (klass);
@@ -1262,7 +1258,7 @@ gtk_widget_class_init (GtkWidgetClass *klass)
   widget_props[PROP_NAME] =
       g_param_spec_string ("name", NULL, NULL,
                            NULL,
-                           GTK_PARAM_READWRITE);
+                           G_PARAM_READWRITE | G_PARAM_STATIC_NAME);
 
   /**
    * GtkWidget:parent:
@@ -1272,7 +1268,7 @@ gtk_widget_class_init (GtkWidgetClass *klass)
   widget_props[PROP_PARENT] =
       g_param_spec_object ("parent", NULL, NULL,
                            GTK_TYPE_WIDGET,
-                           GTK_PARAM_READABLE|G_PARAM_EXPLICIT_NOTIFY);
+                           G_PARAM_READABLE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkWidget:root:
@@ -1284,7 +1280,7 @@ gtk_widget_class_init (GtkWidgetClass *klass)
   widget_props[PROP_ROOT] =
       g_param_spec_object ("root", NULL, NULL,
                            GTK_TYPE_ROOT,
-                           GTK_PARAM_READABLE|G_PARAM_EXPLICIT_NOTIFY);
+                           G_PARAM_READABLE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkWidget:width-request:
@@ -1297,7 +1293,7 @@ gtk_widget_class_init (GtkWidgetClass *klass)
       g_param_spec_int ("width-request", NULL, NULL,
                         -1, G_MAXINT,
                         -1,
-                        GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                        G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkWidget:height-request:
@@ -1310,7 +1306,7 @@ gtk_widget_class_init (GtkWidgetClass *klass)
       g_param_spec_int ("height-request", NULL, NULL,
                         -1, G_MAXINT,
                         -1,
-                        GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                        G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkWidget:visible: (getter get_visible)
@@ -1320,7 +1316,7 @@ gtk_widget_class_init (GtkWidgetClass *klass)
   widget_props[PROP_VISIBLE] =
       g_param_spec_boolean ("visible", NULL, NULL,
                             TRUE,
-                            GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                            G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkWidget:sensitive: (getter get_sensitive)
@@ -1330,7 +1326,7 @@ gtk_widget_class_init (GtkWidgetClass *klass)
   widget_props[PROP_SENSITIVE] =
       g_param_spec_boolean ("sensitive", NULL, NULL,
                             TRUE,
-                            GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                            G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkWidget:can-focus:
@@ -1344,7 +1340,7 @@ gtk_widget_class_init (GtkWidgetClass *klass)
   widget_props[PROP_CAN_FOCUS] =
       g_param_spec_boolean ("can-focus", NULL, NULL,
                             TRUE,
-                            GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                            G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkWidget:focusable:
@@ -1354,7 +1350,7 @@ gtk_widget_class_init (GtkWidgetClass *klass)
   widget_props[PROP_FOCUSABLE] =
       g_param_spec_boolean ("focusable", NULL, NULL,
                             FALSE,
-                            GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                            G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkWidget:has-focus:
@@ -1364,7 +1360,7 @@ gtk_widget_class_init (GtkWidgetClass *klass)
   widget_props[PROP_HAS_FOCUS] =
       g_param_spec_boolean ("has-focus", NULL, NULL,
                             FALSE,
-                            GTK_PARAM_READABLE|G_PARAM_EXPLICIT_NOTIFY);
+                            G_PARAM_READABLE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkWidget:can-target:
@@ -1374,7 +1370,7 @@ gtk_widget_class_init (GtkWidgetClass *klass)
   widget_props[PROP_CAN_TARGET] =
       g_param_spec_boolean ("can-target", NULL, NULL,
                             TRUE,
-                            GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                            G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkWidget:focus-on-click:
@@ -1386,7 +1382,7 @@ gtk_widget_class_init (GtkWidgetClass *klass)
   widget_props[PROP_FOCUS_ON_CLICK] =
       g_param_spec_boolean ("focus-on-click", NULL, NULL,
                             TRUE,
-                            GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                            G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkWidget:has-default:
@@ -1396,7 +1392,7 @@ gtk_widget_class_init (GtkWidgetClass *klass)
   widget_props[PROP_HAS_DEFAULT] =
       g_param_spec_boolean ("has-default", NULL, NULL,
                             FALSE,
-                            GTK_PARAM_READABLE|G_PARAM_EXPLICIT_NOTIFY);
+                            G_PARAM_READABLE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkWidget:receives-default:
@@ -1406,7 +1402,7 @@ gtk_widget_class_init (GtkWidgetClass *klass)
   widget_props[PROP_RECEIVES_DEFAULT] =
       g_param_spec_boolean ("receives-default", NULL, NULL,
                             FALSE,
-                            GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                            G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
 /**
  * GtkWidget:cursor:
@@ -1416,7 +1412,7 @@ gtk_widget_class_init (GtkWidgetClass *klass)
   widget_props[PROP_CURSOR] =
       g_param_spec_object("cursor", NULL, NULL,
                           GDK_TYPE_CURSOR,
-                          GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                          G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
 /**
  * GtkWidget:has-tooltip:
@@ -1431,7 +1427,7 @@ gtk_widget_class_init (GtkWidgetClass *klass)
   widget_props[PROP_HAS_TOOLTIP] =
       g_param_spec_boolean ("has-tooltip", NULL, NULL,
                             FALSE,
-                            GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                            G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkWidget:tooltip-text:
@@ -1452,7 +1448,7 @@ gtk_widget_class_init (GtkWidgetClass *klass)
   widget_props[PROP_TOOLTIP_TEXT] =
       g_param_spec_string ("tooltip-text", NULL, NULL,
                            NULL,
-                           GTK_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY);
+                           G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkWidget:tooltip-markup:
@@ -1474,7 +1470,7 @@ gtk_widget_class_init (GtkWidgetClass *klass)
   widget_props[PROP_TOOLTIP_MARKUP] =
       g_param_spec_string ("tooltip-markup", NULL, NULL,
                            NULL,
-                           GTK_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY);
+                           G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkWidget:halign:
@@ -1485,7 +1481,7 @@ gtk_widget_class_init (GtkWidgetClass *klass)
       g_param_spec_enum ("halign", NULL, NULL,
                          GTK_TYPE_ALIGN,
                          GTK_ALIGN_FILL,
-                         GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                         G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkWidget:valign:
@@ -1496,7 +1492,7 @@ gtk_widget_class_init (GtkWidgetClass *klass)
       g_param_spec_enum ("valign", NULL, NULL,
                          GTK_TYPE_ALIGN,
                          GTK_ALIGN_FILL,
-                         GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                         G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkWidget:margin-start:
@@ -1514,7 +1510,7 @@ gtk_widget_class_init (GtkWidgetClass *klass)
       g_param_spec_int ("margin-start", NULL, NULL,
                         0, G_MAXINT16,
                         0,
-                        GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                        G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkWidget:margin-end:
@@ -1532,7 +1528,7 @@ gtk_widget_class_init (GtkWidgetClass *klass)
       g_param_spec_int ("margin-end", NULL, NULL,
                         0, G_MAXINT16,
                         0,
-                        GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                        G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkWidget:margin-top:
@@ -1547,7 +1543,7 @@ gtk_widget_class_init (GtkWidgetClass *klass)
       g_param_spec_int ("margin-top", NULL, NULL,
                         0, G_MAXINT16,
                         0,
-                        GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                        G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkWidget:margin-bottom:
@@ -1562,7 +1558,7 @@ gtk_widget_class_init (GtkWidgetClass *klass)
       g_param_spec_int ("margin-bottom", NULL, NULL,
                         0, G_MAXINT16,
                         0,
-                        GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                        G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkWidget:hexpand:
@@ -1572,7 +1568,7 @@ gtk_widget_class_init (GtkWidgetClass *klass)
   widget_props[PROP_HEXPAND] =
       g_param_spec_boolean ("hexpand", NULL, NULL,
                             FALSE,
-                            GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                            G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkWidget:hexpand-set:
@@ -1582,7 +1578,7 @@ gtk_widget_class_init (GtkWidgetClass *klass)
   widget_props[PROP_HEXPAND_SET] =
       g_param_spec_boolean ("hexpand-set", NULL, NULL,
                             FALSE,
-                            GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                            G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkWidget:vexpand:
@@ -1592,7 +1588,7 @@ gtk_widget_class_init (GtkWidgetClass *klass)
   widget_props[PROP_VEXPAND] =
       g_param_spec_boolean ("vexpand", NULL, NULL,
                             FALSE,
-                            GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                            G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkWidget:vexpand-set:
@@ -1602,7 +1598,7 @@ gtk_widget_class_init (GtkWidgetClass *klass)
   widget_props[PROP_VEXPAND_SET] =
       g_param_spec_boolean ("vexpand-set", NULL, NULL,
                             FALSE,
-                            GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                            G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkWidget:opacity:
@@ -1613,7 +1609,7 @@ gtk_widget_class_init (GtkWidgetClass *klass)
       g_param_spec_double ("opacity", NULL, NULL,
                            0.0, 1.0,
                            1.0,
-                           GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                           G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkWidget:overflow:
@@ -1627,7 +1623,7 @@ gtk_widget_class_init (GtkWidgetClass *klass)
       g_param_spec_enum ("overflow", NULL, NULL,
                          GTK_TYPE_OVERFLOW,
                          GTK_OVERFLOW_VISIBLE,
-                         GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                         G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkWidget:scale-factor:
@@ -1638,7 +1634,7 @@ gtk_widget_class_init (GtkWidgetClass *klass)
       g_param_spec_int ("scale-factor", NULL, NULL,
                         1, G_MAXINT,
                         1,
-                        GTK_PARAM_READABLE);
+                        G_PARAM_READABLE | G_PARAM_STATIC_NAME);
 
   /**
    * GtkWidget:css-name:
@@ -1651,7 +1647,7 @@ gtk_widget_class_init (GtkWidgetClass *klass)
   widget_props[PROP_CSS_NAME] =
       g_param_spec_string ("css-name", NULL, NULL,
                            NULL,
-                           GTK_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY);
+                           G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_CONSTRUCT_ONLY);
 
   /**
    * GtkWidget:css-classes:
@@ -1661,7 +1657,7 @@ gtk_widget_class_init (GtkWidgetClass *klass)
   widget_props[PROP_CSS_CLASSES] =
       g_param_spec_boxed ("css-classes", NULL, NULL,
                           G_TYPE_STRV,
-                          GTK_PARAM_READWRITE);
+                          G_PARAM_READWRITE | G_PARAM_STATIC_NAME);
 
   /**
    * GtkWidget:layout-manager:
@@ -1675,7 +1671,7 @@ gtk_widget_class_init (GtkWidgetClass *klass)
   widget_props[PROP_LAYOUT_MANAGER] =
     g_param_spec_object ("layout-manager", NULL, NULL,
                          GTK_TYPE_LAYOUT_MANAGER,
-                         GTK_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY);
+                         G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkWidget:limit-events:
@@ -1692,11 +1688,15 @@ gtk_widget_class_init (GtkWidgetClass *klass)
   widget_props[PROP_LIMIT_EVENTS] =
       g_param_spec_boolean ("limit-events", NULL, NULL,
                             FALSE,
-                            GTK_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY);
+                            G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
+
+  /* GtkAccessible */
+  iface = g_type_default_interface_peek (GTK_TYPE_ACCESSIBLE);
+  widget_props[PROP_ACCESSIBLE_ROLE] =
+      g_param_spec_override ("accessible-role",
+                             g_object_interface_find_property (iface, "accessible-role"));
 
   g_object_class_install_properties (gobject_class, NUM_PROPERTIES, widget_props);
-
-  g_object_class_override_property (gobject_class, PROP_ACCESSIBLE_ROLE, "accessible-role");
 
   /**
    * GtkWidget::destroy:
@@ -3083,8 +3083,7 @@ unref_tick_callback_info (GtkWidget           *widget,
   if (priv->tick_callbacks == NULL && priv->clock_tick_id)
     {
       GdkFrameClock *frame_clock = gtk_widget_get_frame_clock (widget);
-      g_signal_handler_disconnect (frame_clock, priv->clock_tick_id);
-      priv->clock_tick_id = 0;
+      g_clear_signal_handler (&priv->clock_tick_id, frame_clock);
       gdk_frame_clock_end_updating (frame_clock);
     }
 }
@@ -3183,7 +3182,9 @@ static guint tick_callback_id;
  * don't have to worry about when a frame clock is assigned to a widget.
  *
  * To remove a tick callback, pass the ID that is returned by this function
- * to [method@Gtk.Widget.remove_tick_callback].
+ * to [method@Gtk.Widget.remove_tick_callback]. Tick callbacks will be
+ * removed automatically when the widget is destroyed, so you do not have
+ * to remove it yourself.
  *
  * Returns: an ID for this callback
  */
@@ -3877,8 +3878,15 @@ get_box_padding (GtkCssStyle *style,
  * @allocation: position and size to be allocated to @widget
  * @baseline: the baseline of the child, or -1
  *
- * Allocates widget with a transformation that translates
- * the origin to the position in @allocation.
+ * Allocates widget with a transformation that translates the origin to
+ * the position in @allocation.
+ *
+ * The given allocation must be large enough for the widget's minimum
+ * size, as well as at least 0×0 in size. See [method@Gtk.Widget.measure]
+ * for querying a minimum size.
+ *
+ * This function is only used by widget implementations to allocate a size
+ * for their direct children.
  *
  * This is a simple form of [method@Gtk.Widget.allocate].
  */
@@ -4158,11 +4166,12 @@ gtk_widget_ensure_allocate_on_children (GtkWidget *widget)
  * Assigns size, position, (optionally) a baseline and transform
  * to a child widget.
  *
- * In this function, the allocation and baseline may be adjusted.
- * The given allocation will be forced to be bigger than the
- * widget's minimum size, as well as at least 0×0 in size.
+ * The given allocation must be large enough for the widget's minimum
+ * size, as well as at least 0×0 in size. See [method@Gtk.Widget.measure]
+ * for querying a minimum size.
  *
- * This function is only used by widget implementations.
+ * This function is only used by widget implementations to allocate a size
+ * for their direct children.
  *
  * For a version that does not take a transform, see
  * [method@Gtk.Widget.size_allocate].
@@ -4557,6 +4566,11 @@ gtk_widget_compute_point (GtkWidget              *widget,
  * initialization. It does not provide for user data, if you need that,
  * you will have to use [method@Gtk.WidgetClass.add_shortcut] with a custom
  * shortcut.
+ *
+ * Note: Since 4.24, this function takes key aliases into account.
+ * See [func@Gdk.keyval_get_aliases] for more information on key aliases.
+ * To make a shortcut for an individual key, use
+ * [method@Gtk.WidgetClass.add_shortcut].
  */
 void
 gtk_widget_class_add_binding (GtkWidgetClass  *widget_class,
@@ -4567,23 +4581,35 @@ gtk_widget_class_add_binding (GtkWidgetClass  *widget_class,
                               ...)
 {
   GtkShortcut *shortcut;
+  const guint *keys;
+  guint n_keys;
 
   g_return_if_fail (GTK_IS_WIDGET_CLASS (widget_class));
 
-  shortcut = gtk_shortcut_new (gtk_keyval_trigger_new (keyval, mods),
-                               gtk_callback_action_new (callback, NULL, NULL));
-  if (format_string)
+  keys = gdk_keyval_get_aliases (keyval, &n_keys);
+  if (keys == NULL)
     {
-      va_list args;
-      va_start (args, format_string);
-      gtk_shortcut_set_arguments (shortcut,
-                                  g_variant_new_va (format_string, NULL, &args));
-      va_end (args);
+      keys = &keyval;
+      n_keys = 1;
     }
 
-  gtk_widget_class_add_shortcut (widget_class, shortcut);
+  for (unsigned int i = 0; i < n_keys; i++)
+    {
+      shortcut = gtk_shortcut_new (gtk_keyval_trigger_new (keys[n_keys - i - 1], mods),
+                                   gtk_callback_action_new (callback, NULL, NULL));
+      if (format_string)
+        {
+          va_list args;
+          va_start (args, format_string);
+          gtk_shortcut_set_arguments (shortcut,
+                                      g_variant_new_va (format_string, NULL, &args));
+          va_end (args);
+        }
 
-  g_object_unref (shortcut);
+      gtk_widget_class_add_shortcut (widget_class, shortcut);
+
+      g_object_unref (shortcut);
+    }
 }
 
 /**
@@ -4604,6 +4630,11 @@ gtk_widget_class_add_binding (GtkWidgetClass  *widget_class,
  * This function is a convenience wrapper around
  * [method@Gtk.WidgetClass.add_shortcut] and must be called during class
  * initialization.
+ *
+ * Note: Since 4.24, this function takes key aliases into account.
+ * See [func@Gdk.keyval_get_aliases] for more information on key aliases.
+ * To make a shortcut for an individual key, use
+ * [method@Gtk.WidgetClass.add_shortcut].
  */
 void
 gtk_widget_class_add_binding_signal (GtkWidgetClass  *widget_class,
@@ -4614,25 +4645,39 @@ gtk_widget_class_add_binding_signal (GtkWidgetClass  *widget_class,
                                      ...)
 {
   GtkShortcut *shortcut;
+  const guint *keys;
+  guint n_keys;
 
   g_return_if_fail (GTK_IS_WIDGET_CLASS (widget_class));
   g_return_if_fail (g_signal_lookup (signal, G_TYPE_FROM_CLASS (widget_class)));
   /* XXX: validate variant format for signal */
 
-  shortcut = gtk_shortcut_new (gtk_keyval_trigger_new (keyval, mods),
-                               gtk_signal_action_new (signal));
-  if (format_string)
+  g_return_if_fail (GTK_IS_WIDGET_CLASS (widget_class));
+
+  keys = gdk_keyval_get_aliases (keyval, &n_keys);
+  if (keys == NULL)
     {
-      va_list args;
-      va_start (args, format_string);
-      gtk_shortcut_set_arguments (shortcut,
-                                  g_variant_new_va (format_string, NULL, &args));
-      va_end (args);
+      keys = &keyval;
+      n_keys = 1;
     }
 
-  gtk_widget_class_add_shortcut (widget_class, shortcut);
+  for (unsigned int i = 0; i < n_keys; i++)
+    {
+      shortcut = gtk_shortcut_new (gtk_keyval_trigger_new (keys[n_keys - i - 1], mods),
+                                   gtk_signal_action_new (signal));
+      if (format_string)
+        {
+          va_list args;
+          va_start (args, format_string);
+          gtk_shortcut_set_arguments (shortcut,
+                                      g_variant_new_va (format_string, NULL, &args));
+          va_end (args);
+        }
 
-  g_object_unref (shortcut);
+      gtk_widget_class_add_shortcut (widget_class, shortcut);
+
+      g_object_unref (shortcut);
+    }
 }
 
 /**
@@ -4653,6 +4698,11 @@ gtk_widget_class_add_binding_signal (GtkWidgetClass  *widget_class,
  * This function is a convenience wrapper around
  * [method@Gtk.WidgetClass.add_shortcut] and must be called during class
  * initialization.
+ *
+ * Note: Since 4.24, this function takes key aliases into account.
+ * See [func@Gdk.keyval_get_aliases] for more information on key aliases.
+ * To make a shortcut for an individual key, use
+ * [method@Gtk.WidgetClass.add_shortcut].
  */
 void
 gtk_widget_class_add_binding_action (GtkWidgetClass  *widget_class,
@@ -4663,24 +4713,36 @@ gtk_widget_class_add_binding_action (GtkWidgetClass  *widget_class,
                                      ...)
 {
   GtkShortcut *shortcut;
+  const guint *keys;
+  guint n_keys;
 
   g_return_if_fail (GTK_IS_WIDGET_CLASS (widget_class));
-  /* XXX: validate variant format for action */
+  /* XXX: validate variant format for signal */
 
-  shortcut = gtk_shortcut_new (gtk_keyval_trigger_new (keyval, mods),
-                               gtk_named_action_new (action_name));
-  if (format_string)
+  keys = gdk_keyval_get_aliases (keyval, &n_keys);
+  if (keys == NULL)
     {
-      va_list args;
-      va_start (args, format_string);
-      gtk_shortcut_set_arguments (shortcut,
-                                  g_variant_new_va (format_string, NULL, &args));
-      va_end (args);
+      keys = &keyval;
+      n_keys = 1;
     }
 
-  gtk_widget_class_add_shortcut (widget_class, shortcut);
+  for (unsigned int i = 0; i < n_keys; i++)
+    {
+      shortcut = gtk_shortcut_new (gtk_keyval_trigger_new (keys[n_keys - i - 1], mods),
+                                   gtk_named_action_new (action_name));
+      if (format_string)
+        {
+          va_list args;
+          va_start (args, format_string);
+          gtk_shortcut_set_arguments (shortcut,
+                                      g_variant_new_va (format_string, NULL, &args));
+          va_end (args);
+        }
 
-  g_object_unref (shortcut);
+      gtk_widget_class_add_shortcut (widget_class, shortcut);
+
+      g_object_unref (shortcut);
+    }
 }
 
 /**
@@ -5708,10 +5770,13 @@ gtk_widget_has_default (GtkWidget *widget)
 }
 
 void
-_gtk_widget_set_has_default (GtkWidget *widget,
-                             gboolean   has_default)
+gtk_widget_set_has_default (GtkWidget *widget,
+                            gboolean   has_default)
 {
   GtkWidgetPrivate *priv = gtk_widget_get_instance_private (widget);
+
+  if (priv->has_default == has_default)
+    return;
 
   priv->has_default = has_default;
 
@@ -5719,6 +5784,8 @@ _gtk_widget_set_has_default (GtkWidget *widget,
     gtk_widget_add_css_class (widget, "default");
   else
     gtk_widget_remove_css_class (widget, "default");
+
+  g_object_notify_by_pspec (G_OBJECT (widget), widget_props[PROP_HAS_DEFAULT]);
 }
 
 /**
@@ -5808,7 +5875,7 @@ _gtk_widget_set_has_grab (GtkWidget *widget,
  * Setting a name allows you to refer to the widget from a
  * CSS file. You can apply a style to widgets with a particular name
  * in the CSS file. See the documentation for the CSS syntax (on the
- * same page as the docs for [class@Gtk.StyleContext].
+ * same page as the docs for [class@Gtk.StyleContext]).
  *
  * Note that the CSS syntax has certain special characters to delimit
  * and represent elements in a selector (period, #, >, *...), so using
@@ -8034,8 +8101,7 @@ gtk_widget_real_unrealize (GtkWidget *widget)
     {
       GdkFrameClock *frame_clock = gtk_widget_get_frame_clock (widget);
 
-      g_signal_handler_disconnect (frame_clock, priv->clock_tick_id);
-      priv->clock_tick_id = 0;
+      g_clear_signal_handler (&priv->clock_tick_id, frame_clock);
       gdk_frame_clock_end_updating (frame_clock);
     }
 
@@ -10200,7 +10266,7 @@ gtk_widget_set_tooltip_text (GtkWidget  *widget,
   priv->tooltip_markup = tooltip_text != NULL ? g_markup_escape_text (tooltip_text, -1) : NULL;
 
   gtk_widget_set_has_tooltip (widget, priv->tooltip_text != NULL);
-  if (_gtk_widget_get_visible (widget))
+  if (gtk_widget_get_mapped (widget))
     gtk_widget_trigger_tooltip_query (widget);
 
   g_object_notify_by_pspec (object, widget_props[PROP_TOOLTIP_TEXT]);
@@ -10288,7 +10354,7 @@ gtk_widget_set_tooltip_markup (GtkWidget  *widget,
                                   -1);
 
   gtk_widget_set_has_tooltip (widget, tooltip_markup != NULL);
-  if (_gtk_widget_get_visible (widget))
+  if (gtk_widget_get_mapped (widget))
     gtk_widget_trigger_tooltip_query (widget);
 
   g_object_notify_by_pspec (object, widget_props[PROP_TOOLTIP_TEXT]);
@@ -11859,12 +11925,7 @@ gtk_widget_activate_action_variant (GtkWidget  *widget,
   if (muxer == NULL)
     return FALSE;
 
-  if (!gtk_action_muxer_has_action (muxer, name))
-    return FALSE;
-
-  gtk_action_muxer_activate_action (muxer, name, args);
-
-  return TRUE;
+  return gtk_action_muxer_activate_action (muxer, name, args);
 }
 
 /**
@@ -12136,6 +12197,7 @@ gtk_widget_create_render_node (GtkWidget   *widget,
           gtk_snapshot_push_repeat2 (snapshot,
                                      &enlarged,
                                      &bounds,
+                                     GSK_RECT_SNAP_NONE,
                                      GSK_REPEAT_REFLECT);
           gtk_snapshot_append_paste (snapshot,
                                      &bounds,
@@ -12229,68 +12291,6 @@ gtk_widget_snapshot (GtkWidget   *widget,
 
   if (priv->render_node)
     gtk_snapshot_append_node (snapshot, priv->render_node);
-}
-
-void
-gtk_widget_render (GtkWidget            *widget,
-                   GdkSurface           *surface,
-                   const cairo_region_t *region)
-{
-  GtkWidgetPrivate *priv = gtk_widget_get_instance_private (widget);
-#ifdef HAVE_ACCESSKIT
-  GtkATContext *at_ctx;
-#endif
-  GtkSnapshot *snapshot;
-  GskRenderer *renderer;
-  GskRenderNode *root;
-  double x, y;
-  gint64 before_snapshot G_GNUC_UNUSED;
-  gint64 before_render G_GNUC_UNUSED;
-
-  before_snapshot = GDK_PROFILER_CURRENT_TIME;
-  before_render = 0;
-
-  if (!GTK_IS_NATIVE (widget))
-    return;
-
-#ifdef HAVE_ACCESSKIT
-  at_ctx = gtk_accessible_get_at_context (GTK_ACCESSIBLE (widget));
-  if (GTK_IS_ACCESSKIT_CONTEXT (at_ctx))
-    gtk_accesskit_context_update_tree (GTK_ACCESSKIT_CONTEXT (at_ctx));
-  g_object_unref (at_ctx);
-#endif
-
-  renderer = gtk_native_get_renderer (GTK_NATIVE (widget));
-  if (renderer == NULL)
-    return;
-
-  snapshot = gtk_snapshot_new ();
-  gtk_native_get_surface_transform (GTK_NATIVE (widget), &x, &y);
-  gtk_snapshot_translate (snapshot, &GRAPHENE_POINT_INIT (x, y));
-  gtk_widget_snapshot (widget, snapshot);
-  root = gtk_snapshot_free_to_node (snapshot);
-
-  if (GDK_PROFILER_IS_RUNNING)
-    {
-      before_render = GDK_PROFILER_CURRENT_TIME;
-      gdk_profiler_add_mark (before_snapshot, (before_render - before_snapshot), "Widget snapshot", "");
-    }
-
-  if (root != NULL)
-    {
-      root = gtk_inspector_prepare_render (widget,
-                                           renderer,
-                                           surface,
-                                           region,
-                                           root,
-                                           priv->render_node);
-
-      gsk_renderer_render (renderer, root, region);
-
-      gsk_render_node_unref (root);
-
-      gdk_profiler_end_mark (before_render, "Widget render", "");
-    }
 }
 
 static void

@@ -4,6 +4,7 @@
 
 #include "gskgpuopprivate.h"
 #include "gskgpuutilsprivate.h"
+#include "gskgpuglobalsopprivate.h"
 #include "gskvulkanbufferprivate.h"
 #include "gskvulkandeviceprivate.h"
 #include "gskvulkanimageprivate.h"
@@ -56,6 +57,9 @@ struct _GskVulkanFramePrivate
   gsize pool_n_sets;
   gsize pool_n_images;
   gsize pool_n_buffers;
+
+  VkDescriptorSet vk_globals_descriptor_set;
+  gsize           globals_pool_id;
 };
 
 G_DEFINE_TYPE_WITH_PRIVATE (GskVulkanFrame, gsk_vulkan_frame, GSK_TYPE_GPU_FRAME)
@@ -158,22 +162,20 @@ gsk_vulkan_frame_cleanup (GskGpuFrame *frame)
   GSK_GPU_FRAME_CLASS (gsk_vulkan_frame_parent_class)->cleanup (frame);
 }
 
-static void
+static GdkDrawContextFrame *
 gsk_vulkan_frame_begin (GskGpuFrame           *frame,
                         GdkDrawContext        *context,
-                        GdkMemoryDepth         depth,
-                        const cairo_region_t  *region,
-                        const graphene_rect_t *opaque)
+                        GskRenderNode         *node,
+                        const cairo_region_t  *region)
 {
   GskVulkanFrame *self = GSK_VULKAN_FRAME (frame);
   GskVulkanFramePrivate *priv = gsk_vulkan_frame_get_instance_private (self);
 
-  gdk_draw_context_begin_frame_full (context,
-                                     /* We pass a pointer here for 32bit architectures */
-                                     &priv->vk_acquire_semaphore,
-                                     depth,
-                                     region,
-                                     opaque);
+  return gdk_draw_context_begin_frame_full (context,
+                                            /* We pass a pointer here for 32bit architectures */
+                                            &priv->vk_acquire_semaphore,
+                                            node,
+                                            region);
 }
 
 static GskGpuImage *
@@ -272,7 +274,7 @@ static GskGpuBuffer *
 gsk_vulkan_frame_create_globals_buffer (GskGpuFrame *frame,
                                         gsize        size)
 {
-  return NULL;
+  return gsk_vulkan_buffer_new_globals (GSK_VULKAN_DEVICE (gsk_gpu_frame_get_device (frame)), size);
 }
 
 static GskGpuBuffer *
@@ -354,6 +356,31 @@ gsk_vulkan_frame_submit (GskGpuFrame       *frame,
   state.blend = GSK_GPU_BLEND_OVER; /* should we have a BLEND_NONE? */
   state.semaphores = &semaphores;
 
+  if (globals_buffer != NULL)
+    {
+      if (priv->vk_globals_descriptor_set == VK_NULL_HANDLE)
+        priv->vk_globals_descriptor_set = gsk_vulkan_device_allocate_descriptor (device,
+                                           gsk_vulkan_device_get_vk_globals_set_layout (device),
+                                           &priv->globals_pool_id);
+      vkUpdateDescriptorSets (gsk_vulkan_device_get_vk_device (device),
+                              1,
+                              &(VkWriteDescriptorSet) {
+                                  .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                                  .dstSet = priv->vk_globals_descriptor_set,
+                                  .dstBinding = 0,
+                                  .descriptorCount = 1,
+                                  .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
+                                  .pBufferInfo = &(VkDescriptorBufferInfo) {
+                                      .buffer = gsk_vulkan_buffer_get_vk_buffer (GSK_VULKAN_BUFFER (globals_buffer)),
+                                      .offset = 0,
+                                      .range = sizeof (GskGpuGlobalsInstance),
+                                  },
+                              },
+                              0,
+                              NULL);
+      state.vk_globals_descriptor_set = priv->vk_globals_descriptor_set;
+    }
+
   GSK_VULKAN_FRAME_GET_CLASS (self)->submit_ops (self, &state, op);
 
   GSK_VK_CHECK (vkEndCommandBuffer, priv->vk_command_buffer);
@@ -396,6 +423,12 @@ gsk_vulkan_frame_finalize (GObject *object)
   vk_device = gsk_vulkan_device_get_vk_device (device);
   vk_command_pool = gsk_vulkan_device_get_vk_command_pool (device);
 
+  if (priv->vk_globals_descriptor_set != VK_NULL_HANDLE)
+    {
+      gsk_vulkan_device_free_descriptor (device,
+                                         priv->globals_pool_id,
+                                         priv->vk_globals_descriptor_set);
+    }
   vkFreeCommandBuffers (vk_device,
                         vk_command_pool,
                         1, &priv->vk_command_buffer);
@@ -445,7 +478,7 @@ gsk_vulkan_frame_init (GskVulkanFrame *self)
 void
 gsk_vulkan_semaphores_add_wait (GskVulkanSemaphores  *self,
                                 VkSemaphore           semaphore,
-                                guint64               semaphore_wait,
+                                uint64_t              semaphore_wait,
                                 VkPipelineStageFlags  stage)
 {
   gsk_semaphores_append (&self->wait_semaphores, semaphore);

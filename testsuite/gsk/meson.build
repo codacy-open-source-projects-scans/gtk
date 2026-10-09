@@ -1,6 +1,6 @@
 compare_render = executable('compare-render',
-  ['compare-render.c', '../reftests/reftest-compare.c', 'replay-node.c', '../gdk/udmabuf.c'],
-  dependencies: libgtk_static_dep,
+  ['compare-render.c', '../reftests/reftest-compare.c', 'replay-node.c'],
+  dependencies: libgtk_private_dep,
   c_args: common_cflags + ['-DGTK_COMPILATION'],
 )
 
@@ -19,6 +19,8 @@ serialize = executable('serialize',
 )
 
 compare_render_tests = [
+  'arithmetic-bounds',
+  'arithmetic-bounds-k3',
   'big-box-glyph',
   'big-checkerboard',
   'big-checkerboard-scaled-down',
@@ -33,6 +35,8 @@ compare_render_tests = [
   'blur-child-bounds-oversize',
   'blur-contents-outside-of-clip',
   'blur-huge-contents-outside-of-clip',
+  'blur-scaled',
+  'blur-separable',
   'border-bottom-right',
   'border-circle-with-non-pixel-aligned-center',
   'border-colorstates',
@@ -45,6 +49,7 @@ compare_render_tests = [
   'cairo-coordinates',
   'cairo-translations',
   'clip-all-clipped-issue-7044',
+  'clip-all-snaps',
   'clip-contained',
   'clip-coordinates-2d',
   'clip-coordinates-nocairo',
@@ -73,6 +78,7 @@ compare_render_tests = [
   'color-states',
   'composite-rotated-mask',
   'composite-source-all-opaque-with-complex-mask',
+  'container-bilevel-opacity',
   'copy-paste',
   'copy-paste-transformed',
   'copy-transform-order',
@@ -90,6 +96,7 @@ compare_render_tests = [
   'css-background',
   'dihedral',
   'dihedral-f',
+  'dmabuf-mipmap',
   'empty-blend',
   'empty-blur',
   'empty-border',
@@ -127,9 +134,9 @@ compare_render_tests = [
   'fill-subpixel-offsets-horizontal-nocairo',
   'fill-subpixel-offsets-vertical-nocairo',
   'fill-subpixel-shift-nocairo',
+  'fill-tiny-3d-scale-nocairo',
   'fill-with-3d-contents-nocairo',
-  'gradient-premultiply-end-values',
-  'gradient-with-lots-of-colorstops-double-clips',
+  'globals-stress',
   'glyph-cache-overflow',
   'glyph-cache-overflow-slices',
   'glyph-hinting-none',
@@ -138,6 +145,8 @@ compare_render_tests = [
   'glyph-subpixel-position',
   'glyph-scaling',
   'glyph-antialias',
+  'gradient-premultiply-end-values',
+  'gradient-with-lots-of-colorstops-double-clips',
   'huge-height',
   'huge-height-hdr',
   'huge-width',
@@ -148,6 +157,7 @@ compare_render_tests = [
   'invalid-transform',
   'isolation',
   'issue-3615',
+  'issue-8184',
   'linear-gradient-averages-nocairo',
   'linear-gradient-interpolation-nocairo',
   'linear-gradient-3d-nocairo',
@@ -211,13 +221,18 @@ compare_render_tests = [
   'repeat-no-repeat',
   'repeat-node-tiling-horizontal',
   'repeat-node-tiling-vertical',
+  'repeat-none-child-bounds',
   'repeat-noninteger-nocairo',
+  'repeat-pad-noninteger-child-bounds',
+  'repeat-reflect-pixel-alignment',
   'repeat-repeat',
   'repeat-repeats',
   'repeat-repeats-nested',
   'repeat-scaling',
+  'repeat-snap',
   'repeat-texture',
   'repeat-tiny-nocairo',
+  'repeat-unaligned-bounds',
   'repeating-gradient-scaled',
   'reuse-of-texture-nested-in-offscreens',
   'rounded-clip-intersection-background',
@@ -248,13 +263,17 @@ compare_render_tests = [
   'stroke-huge-path',
   'stroke-opacity',
   'stroke-scale-alignment-nocairo',
+  'stroke-tiny-3d-scale-nocairo',
   'stroke-with-3d-contents-nocairo',
   'subpixel-positioning',
   'subpixel-positioning-hidpi-nocairo',
+  'subpixel-positioning-via-translate',
   'text-color-mix',
   'text-glyph-lsb',
   'text-mixed-color-nocairo',
   'text-mixed-color-colrv1',
+  'text-tiny-3d-scale-nocairo',
+  'texture-all-snaps',
   'texture-coords',
   'texture-offscreen-mipmap',
   'texture-scale-filters-nocairo',
@@ -279,6 +298,17 @@ compare_render_tests = [
   'yuv-matrix-memory-yuyv',
   'z-transform-clipping-bounds-nocairo',
   'zero-length-path-stroke',
+]
+
+tests_with_rounding_issues = [
+  'turbulence-basic',
+  'turbulence-clouds',
+  'turbulence-coarse',
+  'turbulence-fine',
+  'turbulence-fractal',
+  'turbulence-seed1',
+  'turbulence-turbulence',
+  'turbulence-transformed',
 ]
 
 # These tests use dmabufs and fail in testrunners that have
@@ -375,55 +405,70 @@ compare_xfails = {
   }
 }
 
-foreach renderer : renderers
-  renderer_name = renderer.get('name')
-  renderer_xfails = compare_xfails.get(renderer_name, { })
+testlists = [
+  {
+    'tests': compare_render_tests,
+    'extra_args': [],
+  },
+  {
+    'tests': tests_with_rounding_issues,
+    'extra_args': ['--tolerance=2'],
+  }
+]
 
-  foreach testname : compare_render_tests
-    test_xfails = renderer_xfails.get(testname, [])
-    exclude_term = '-no' + renderer_name
+foreach testlist : testlists
+  foreach renderer : renderers
+    renderer_name = renderer.get('name')
+    renderer_xfails = compare_xfails.get(renderer_name, { })
 
-    suites = [
-      'gsk',
-      'gsk-compare',
-      'gsk-' + renderer_name,
-      'gsk-compare-' + renderer_name,
-    ]
+    foreach testname : testlist.get('tests')
+      test_xfails = renderer_xfails.get(testname, [])
+      exclude_term = '-no' + renderer_name
 
-    test_env = [
-      'GSK_RENDERER=' + renderer_name,
-      'GTK_A11Y=test',
-      'G_TEST_SRCDIR=@0@'.format(meson.current_source_dir()),
-      'G_TEST_BUILDDIR=@0@'.format(meson.current_build_dir()),
-      'TEST_FONT_DIR=@0@/fonts'.format(meson.current_source_dir())
-    ]
+      suites = [
+        'gsk',
+        'gsk-compare',
+        'gsk-' + renderer_name,
+        'gsk-compare-' + renderer_name,
+      ]
 
-    if ((not testname.contains(exclude_term)))
+      test_env = [
+        'GSK_RENDERER=' + renderer_name,
+        'GTK_A11Y=test',
+        'G_TEST_SRCDIR=@0@'.format(meson.current_source_dir()),
+        'G_TEST_BUILDDIR=@0@'.format(meson.current_build_dir()),
+        'TEST_FONT_DIR=@0@/fonts'.format(meson.current_source_dir())
+      ]
 
-      foreach variant : variants.keys()
-        extra_suites = [ 'gsk-compare-' + variant + '-' + renderer_name ]
-        if test_xfails.contains(variant) or (renderer_name == 'cairo' and variant == 'clip')
-          extra_suites += ['failing']
-        endif
-        if needs_udmabuf.contains(testname)
-          extra_suites += ['needs-udmabuf']
-        endif
-        test('compare ' + renderer_name + ' ' + testname + ' ' + variant, compare_render,
-          protocol: 'tap',
-          args: [
-            '--tap',
-            '-k',
-            variants.get(variant),
-            '--output', join_paths(meson.current_build_dir(), 'compare', renderer_name),
-            join_paths(meson.current_source_dir(), 'compare', testname + '.node'),
-            join_paths(meson.current_source_dir(), 'compare', testname + '.png'),
-          ],
-          env: test_env,
-          suite: suites + extra_suites,
-          is_parallel: not demanding_tests.contains (testname),
-        )
-      endforeach
-    endif
+      if ((not testname.contains(exclude_term)))
+
+        foreach variant : variants.keys()
+          extra_suites = [ 'gsk-compare-' + variant + '-' + renderer_name ]
+          if test_xfails.contains(variant) or (renderer_name == 'cairo' and variant == 'clip')
+            extra_suites += ['failing']
+          endif
+          if needs_udmabuf.contains(testname)
+            extra_suites += ['needs-udmabuf']
+          endif
+          test('compare ' + renderer_name + ' ' + testname + ' ' + variant, compare_render,
+            protocol: 'tap',
+            args: [
+              '--tap',
+              '-k',
+            ] + testlist.get('extra_args') +
+            [
+              variants.get(variant),
+              '--output', join_paths(meson.current_build_dir(), 'compare', renderer_name),
+              join_paths(meson.current_source_dir(), 'compare', testname + '.node'),
+              join_paths(meson.current_source_dir(), 'compare', testname + '.png'),
+            ],
+            env: test_env,
+            suite: suites + extra_suites,
+            is_parallel: not demanding_tests.contains (testname),
+          )
+        endforeach
+      endif
+    endforeach
   endforeach
 endforeach
 
@@ -537,10 +582,22 @@ node_parser_tests = [
   'empty-texture-scale.ref.node',
   'empty-transform.node',
   'empty-transform.ref.node',
+  'empty-turbulence.node',
   'fill.node',
   'fill.ref.node',
   'fill2.node',
   'fill2.ref.node',
+  'fill3.node',
+  'fill3.ref.node',
+  'fill4.node',
+  'fill4.ref.node',
+  'fill5.node',
+  'fill5.ref.node',
+  'fill6.node',
+  'fill6.ref.node',
+  'fill-not-a-path.node',
+  'fill-not-a-path.ref.node',
+  'fill-not-a-path.errors',
   'glshader.node',
   'glshader.ref.node',
   'glshader.errors',
@@ -607,6 +664,8 @@ node_parser_tests = [
   'transform-fail.node',
   'transform-fail.ref.node',
   'transform-fail.errors',
+  'turbulence.node',
+  'turbulence.ref.node',
   # this fails in f40 since libpng changes the pngs while reencoding
   #'widgetfactory.node',
 ]
@@ -635,7 +694,7 @@ if os_linux
   offload = executable('offload',
     [ 'offload.c', 'gskrendernodeattach.c' ],
     link_with: testutils_lib,
-    dependencies : libgtk_static_dep,
+    dependencies : libgtk_private_dep,
     c_args: common_cflags + [ '-DGTK_COMPILATION=1' ],
   )
 
@@ -763,6 +822,7 @@ internal_tests = [
   [ 'curve', [ ], [ 'flaky' ]],
   [ 'curve-special-cases' ],
   [ 'curve-intersect' ],
+  [ 'diff' ],
   [ 'half-float' ],
   [ 'not-diff' ],
   [ 'misc'],
@@ -780,7 +840,7 @@ foreach t : internal_tests
 
   test_exe = executable(test_name,
     sources: test_srcs,
-    dependencies : libgtk_static_dep,
+    dependencies : libgtk_private_dep,
     c_args : test_cargs + common_cflags + ['-DGTK_COMPILATION'],
   )
 
@@ -796,5 +856,4 @@ foreach t : internal_tests
     suite: [ 'gsk' ] + test_extra_suites,
   )
 endforeach
-
 

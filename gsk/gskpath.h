@@ -83,7 +83,7 @@ typedef gboolean (* GskPathForeachFunc) (GskPathOperation        op,
 #define GSK_TYPE_PATH (gsk_path_get_type ())
 
 GDK_AVAILABLE_IN_4_14
-GType                   gsk_path_get_type                       (void) G_GNUC_CONST;
+GType                   gsk_path_get_type                       (void);
 
 GDK_AVAILABLE_IN_4_14
 GskPath *               gsk_path_ref                            (GskPath                *self);
@@ -156,6 +156,12 @@ gboolean                gsk_path_foreach                        (GskPath        
 GDK_AVAILABLE_IN_4_22
 gboolean                gsk_path_equal                          (const GskPath          *path1,
                                                                  const GskPath          *path2);
+GDK_AVAILABLE_IN_4_26
+gboolean                gsk_path_translatable                   (const GskPath          *path1,
+                                                                 const GskPath          *path2);
+GDK_AVAILABLE_IN_4_26
+guint                   gsk_path_hash                           (const GskPath          *self);
+
 /**
  * GskPathIntersection:
  * @GSK_PATH_INTERSECTION_NONE: No intersection

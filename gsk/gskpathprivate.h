@@ -29,11 +29,11 @@ G_BEGIN_DECLS
 typedef enum
 {
   /* path has only lines */
-  GSK_PATH_FLAT,
+  GSK_PATH_FLAT          = 1 << 0,
   /* all points of the path are identical */
-  GSK_PATH_ZERO_LENGTH,
+  GSK_PATH_ZERO_LENGTH   = 1 << 1,
   /* all contours are closed */
-  GSK_PATH_CLOSED
+  GSK_PATH_CLOSED        = 1 << 2,
 } GskPathFlags;
 
 typedef struct _GskContour GskContour;
@@ -70,7 +70,7 @@ void                    gsk_path_builder_add_op                 (GskPathBuilder 
 /* implemented in gskstrokenode.c */
 void                    gsk_cairo_stroke_path                   (cairo_t                *cr,
                                                                  GskPath                *path,
-                                                                 GskStroke              *stroke);
+                                                                 const GskStroke        *stroke);
 
 static inline void
 gsk_cairo_set_fill_rule (cairo_t     *cr,
@@ -110,18 +110,24 @@ typedef struct
                               float                   x,
                               float                   y,
                               gpointer                user_data);
-  gboolean (* add_rect)      (const graphene_rect_t  *rect,
-                              gpointer                user_data);
-  gboolean (* add_circle)    (const graphene_point_t *center,
-                              float                   radius,
-                              gpointer                user_data);
-  gboolean (* add_rounded_rect)
-                             (const GskRoundedRect   *rect,
-                              gpointer                user_data);
 } GskPathParser;
 
 gboolean gsk_path_parse_full (const char    *string,
                               GskPathParser *callbacks,
                               gpointer       data);
+
+typedef enum
+{
+  GSK_PATH_EMPTY,
+  GSK_PATH_RECT,
+  GSK_PATH_ROUNDED_RECT,
+  GSK_PATH_CIRCLE,
+  GSK_PATH_APPROXIMATE_ROUNDED_RECT,
+  GSK_PATH_APPROXIMATE_CIRCLE,
+  GSK_PATH_GENERAL,
+} GskPathClassification;
+
+GskPathClassification gsk_path_classify (GskPath        *path,
+                                         GskRoundedRect *rect);
 
 G_END_DECLS

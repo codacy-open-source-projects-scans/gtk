@@ -283,6 +283,32 @@ gtk_inscription_update_layout_attributes (GtkInscription *self,
 }
 
 static void
+gtk_inscription_root (GtkWidget *widget)
+{
+  GtkInscription *self = GTK_INSCRIPTION (widget);
+  PangoLayout *old_layout;
+
+  GTK_WIDGET_CLASS (gtk_inscription_parent_class)->root (widget);
+
+  /* FIXME: GtkWidget really should not throw away Pango contexts when
+   * unrooting, so that users do not need to recreate their layouts here.
+   */
+  if (pango_layout_get_context (self->layout) == gtk_widget_get_pango_context (widget))
+    return;
+
+  old_layout = self->layout;
+  self->layout = gtk_widget_create_pango_layout (widget, pango_layout_get_text (old_layout));
+  pango_layout_set_attributes (self->layout, pango_layout_get_attributes (old_layout));
+  pango_layout_set_wrap (self->layout, pango_layout_get_wrap (old_layout));
+  pango_layout_set_ellipsize (self->layout, pango_layout_get_ellipsize (old_layout));
+  pango_layout_set_width (self->layout, pango_layout_get_width (old_layout));
+  pango_layout_set_height (self->layout, pango_layout_get_height (old_layout));
+  pango_layout_set_alignment (self->layout, pango_layout_get_alignment (old_layout));
+
+  g_object_unref (old_layout);
+}
+
+static void
 gtk_inscription_css_changed (GtkWidget         *widget,
                              GtkCssStyleChange *change)
 {
@@ -583,6 +609,7 @@ gtk_inscription_class_init (GtkInscriptionClass *klass)
   gobject_class->set_property = gtk_inscription_set_property;
 
   widget_class->css_changed = gtk_inscription_css_changed;
+  widget_class->root = gtk_inscription_root;
   widget_class->direction_changed = gtk_inscription_direction_changed;
   widget_class->measure = gtk_inscription_measure;
   widget_class->size_allocate = gtk_inscription_allocate;
@@ -598,7 +625,7 @@ gtk_inscription_class_init (GtkInscriptionClass *klass)
   properties[PROP_ATTRIBUTES] =
       g_param_spec_boxed ("attributes", NULL, NULL,
                           PANGO_TYPE_ATTR_LIST,
-                          G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_STRINGS);
+                          G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_NAME);
 
   /**
    * GtkInscription:markup:
@@ -616,7 +643,7 @@ gtk_inscription_class_init (GtkInscriptionClass *klass)
   properties[PROP_MARKUP] =
     g_param_spec_string ("markup", NULL, NULL,
                          NULL,
-                         G_PARAM_WRITABLE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_STRINGS);
+                         G_PARAM_WRITABLE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_NAME);
 
   /**
    * GtkInscription:min-chars:
@@ -639,7 +666,7 @@ gtk_inscription_class_init (GtkInscriptionClass *klass)
       g_param_spec_uint ("min-chars", NULL, NULL,
                          0, G_MAXUINT,
                          DEFAULT_MIN_CHARS,
-                         G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_STRINGS);
+                         G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_NAME);
 
   /**
    * GtkInscription:min-lines:
@@ -661,7 +688,7 @@ gtk_inscription_class_init (GtkInscriptionClass *klass)
       g_param_spec_uint ("min-lines", NULL, NULL,
                          0, G_MAXUINT,
                          DEFAULT_MIN_LINES,
-                         G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_STRINGS);
+                         G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_NAME);
 
   /**
    * GtkInscription:nat-chars:
@@ -681,7 +708,7 @@ gtk_inscription_class_init (GtkInscriptionClass *klass)
       g_param_spec_uint ("nat-chars", NULL, NULL,
                          0, G_MAXUINT,
                          DEFAULT_NAT_CHARS,
-                         G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_STRINGS);
+                         G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_NAME);
 
   /**
    * GtkInscription:nat-lines:
@@ -701,7 +728,7 @@ gtk_inscription_class_init (GtkInscriptionClass *klass)
       g_param_spec_uint ("nat-lines", NULL, NULL,
                          0, G_MAXUINT,
                          DEFAULT_NAT_LINES,
-                         G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_STRINGS);
+                         G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_NAME);
 
   /**
    * GtkInscription:text:
@@ -713,7 +740,7 @@ gtk_inscription_class_init (GtkInscriptionClass *klass)
   properties[PROP_TEXT] =
     g_param_spec_string ("text", NULL, NULL,
                          NULL,
-                         G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_STRINGS);
+                         G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_NAME);
 
   /**
    * GtkInscription:text-overflow:
@@ -726,7 +753,7 @@ gtk_inscription_class_init (GtkInscriptionClass *klass)
     g_param_spec_enum ("text-overflow", NULL, NULL,
                        GTK_TYPE_INSCRIPTION_OVERFLOW,
                        GTK_INSCRIPTION_OVERFLOW_CLIP,
-                       G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_STRINGS);
+                       G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_NAME);
 
   /**
    * GtkInscription:wrap-mode:
@@ -741,7 +768,7 @@ gtk_inscription_class_init (GtkInscriptionClass *klass)
       g_param_spec_enum ("wrap-mode", NULL, NULL,
                          PANGO_TYPE_WRAP_MODE,
                          PANGO_WRAP_WORD_CHAR,
-                         G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_STRINGS);
+                         G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_NAME);
 
   /**
    * GtkInscription:xalign:
@@ -757,7 +784,7 @@ gtk_inscription_class_init (GtkInscriptionClass *klass)
       g_param_spec_float ("xalign", NULL, NULL,
                           0.0, 1.0,
                           DEFAULT_XALIGN,
-                          G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_STRINGS);
+                          G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_NAME);
 
   /**
    * GtkInscription:yalign:
@@ -773,7 +800,7 @@ gtk_inscription_class_init (GtkInscriptionClass *klass)
       g_param_spec_float ("yalign", NULL, NULL,
                           0.0, 1.0,
                           DEFAULT_YALIGN,
-                          G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_STRINGS);
+                          G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_NAME);
 
   g_object_class_install_properties (gobject_class, N_PROPS, properties);
 
@@ -1443,18 +1470,28 @@ gtk_inscription_accessible_text_get_attributes (GtkAccessibleText        *self,
   gtk_pango_get_run_attributes (layout, offset, &names, &values, &start, &end);
 
   *n_ranges = g_strv_length (names);
-  *ranges = g_new (GtkAccessibleTextRange, *n_ranges);
 
-  for (unsigned i = 0; i < *n_ranges; i++)
+  if (ranges != NULL)
     {
-      GtkAccessibleTextRange *range = &(*ranges)[i];
+      *ranges = g_new (GtkAccessibleTextRange, *n_ranges);
+      for (unsigned int i = 0; i < *n_ranges; i++)
+        {
+          GtkAccessibleTextRange *range = &(*ranges)[i];
 
-      range->start = start;
-      range->length = end - start;
+          range->start = start;
+          range->length = end - start;
+        }
     }
 
-  *attribute_names = names;
-  *attribute_values = values;
+  if (attribute_names != NULL)
+    *attribute_names = names;
+  else
+    g_strfreev (names);
+
+  if (attribute_values != NULL)
+    *attribute_values = values;
+  else
+    g_strfreev (values);
 
   return TRUE;
 }
@@ -1469,8 +1506,15 @@ gtk_inscription_accessible_text_get_default_attributes (GtkAccessibleText   *sel
 
   gtk_pango_get_default_attributes (layout, &names, &values);
 
-  *attribute_names = names;
-  *attribute_values = values;
+  if (attribute_names != NULL)
+    *attribute_names = names;
+  else
+    g_strfreev (names);
+
+  if (attribute_values != NULL)
+    *attribute_values = values;
+  else
+    g_strfreev (values);
 }
 
 static gboolean

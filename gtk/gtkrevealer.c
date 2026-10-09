@@ -42,7 +42,7 @@
  * [method@Gtk.Revealer.set_transition_type].
  *
  * These animations respect the [property@Gtk.Settings:gtk-enable-animations]
- * setting.
+ * and [property@GTk.Settings:gtk-interface-reduced-motion] settings.
  *
  * # CSS nodes
  *
@@ -265,10 +265,10 @@ gtk_revealer_animate_cb (GtkWidget     *widget,
   if (gtk_progress_tracker_get_state (&revealer->tracker) == GTK_PROGRESS_STATE_AFTER)
     {
       revealer->tick_id = 0;
-      return FALSE;
+      return G_SOURCE_REMOVE;
     }
 
-  return TRUE;
+  return G_SOURCE_CONTINUE;
 }
 
 static void
@@ -277,6 +277,8 @@ gtk_revealer_start_animation (GtkRevealer *revealer,
 {
   GtkWidget *widget = GTK_WIDGET (revealer);
   GtkRevealerTransitionType transition;
+  GtkSettings* settings;
+  GtkReducedMotion reduced_motion;
 
   if (revealer->target_pos == target)
     return;
@@ -284,11 +286,15 @@ gtk_revealer_start_animation (GtkRevealer *revealer,
   revealer->target_pos = target;
   g_object_notify_by_pspec (G_OBJECT (revealer), props[PROP_REVEAL_CHILD]);
 
+  settings = gtk_widget_get_settings (widget);
+  g_object_get (settings, "gtk-interface-reduced-motion", &reduced_motion, NULL);
+
   transition = effective_transition (revealer);
   if (gtk_widget_get_mapped (widget) &&
       revealer->transition_duration != 0 &&
       transition != GTK_REVEALER_TRANSITION_TYPE_NONE &&
-      gtk_settings_get_enable_animations (gtk_widget_get_settings (widget)))
+      reduced_motion != GTK_REDUCED_MOTION_REDUCE &&
+      gtk_settings_get_enable_animations (settings))
     {
       if (transition == GTK_REVEALER_TRANSITION_TYPE_SLIDE_UP ||
           transition == GTK_REVEALER_TRANSITION_TYPE_SLIDE_DOWN ||
@@ -700,7 +706,7 @@ gtk_revealer_class_init (GtkRevealerClass *klass)
     g_param_spec_enum ("transition-type", NULL, NULL,
                        GTK_TYPE_REVEALER_TRANSITION_TYPE,
                        GTK_REVEALER_TRANSITION_TYPE_SLIDE_DOWN,
-                       GTK_PARAM_READWRITE | G_PARAM_CONSTRUCT | G_PARAM_EXPLICIT_NOTIFY);
+                       G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_CONSTRUCT | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkRevealer:transition-duration:
@@ -710,7 +716,7 @@ gtk_revealer_class_init (GtkRevealerClass *klass)
   props[PROP_TRANSITION_DURATION] =
     g_param_spec_uint ("transition-duration", NULL, NULL,
                        0, G_MAXUINT, 250,
-                       GTK_PARAM_READWRITE | G_PARAM_CONSTRUCT | G_PARAM_EXPLICIT_NOTIFY);
+                       G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_CONSTRUCT | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkRevealer:reveal-child:
@@ -720,7 +726,7 @@ gtk_revealer_class_init (GtkRevealerClass *klass)
   props[PROP_REVEAL_CHILD] =
     g_param_spec_boolean ("reveal-child", NULL, NULL,
                           FALSE,
-                          GTK_PARAM_READWRITE | G_PARAM_CONSTRUCT | G_PARAM_EXPLICIT_NOTIFY);
+                          G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_CONSTRUCT | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkRevealer:child-revealed:
@@ -730,7 +736,7 @@ gtk_revealer_class_init (GtkRevealerClass *klass)
   props[PROP_CHILD_REVEALED] =
     g_param_spec_boolean ("child-revealed", NULL, NULL,
                           FALSE,
-                          GTK_PARAM_READABLE);
+                          G_PARAM_READABLE | G_PARAM_STATIC_NAME);
 
   /**
    * GtkRevealer:child:
@@ -740,7 +746,7 @@ gtk_revealer_class_init (GtkRevealerClass *klass)
   props[PROP_CHILD] =
     g_param_spec_object ("child", NULL, NULL,
                          GTK_TYPE_WIDGET,
-                         GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                         G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
 
   g_object_class_install_properties (object_class, LAST_PROP, props);

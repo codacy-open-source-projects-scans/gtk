@@ -119,11 +119,18 @@ gsk_pango_renderer_draw_glyph_item (PangoRenderer  *renderer,
   GtkCssValue *text_shadow;
   gboolean has_color_glyphs;
   gboolean has_alpha;
+  PangoRenderComponent components;
 
   if (!glyph_item->item->analysis.font)
     return;
 
   has_color_glyphs = gtk_pango_glyph_item_has_color_glyphs (glyph_item);
+
+  /* FIXME: We assume that runs don't contain mixed color/plain glyphs */
+  components = pango_renderer_get_components (renderer);
+  if ((components & (has_color_glyphs ? PANGO_RENDER_COMPONENT_COLOR_GLYPH
+                                      : PANGO_RENDER_COMPONENT_PLAIN_GLYPH)) == 0)
+    return;
 
   if (crenderer->shadow_style)
     text_shadow = crenderer->shadow_style->used->text_shadow;
@@ -544,6 +551,8 @@ gsk_pango_renderer_acquire (void)
       renderer = g_object_new (GSK_TYPE_PANGO_RENDERER, NULL);
     }
 
+  pango_renderer_set_components (PANGO_RENDERER (renderer), PANGO_RENDER_COMPONENT_ALL);
+
   return renderer;
 }
 
@@ -556,11 +565,7 @@ gsk_pango_renderer_release (GskPangoRenderer *renderer)
       renderer->snapshot = NULL;
       renderer->shadow_style = NULL;
 
-      if (renderer->error_color)
-        {
-          gdk_rgba_free (renderer->error_color);
-          renderer->error_color = NULL;
-        }
+      g_clear_pointer (&renderer->error_color, gdk_rgba_free);
 
       G_UNLOCK (cached_renderer);
     }

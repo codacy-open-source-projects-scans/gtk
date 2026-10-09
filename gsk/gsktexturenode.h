@@ -31,12 +31,14 @@ typedef struct _GskTextureNode                    GskTextureNode;
 #define GSK_TYPE_TEXTURE_NODE (gsk_texture_node_get_type())
 
 GDK_AVAILABLE_IN_ALL
-GType                   gsk_texture_node_get_type               (void) G_GNUC_CONST;
+GType                   gsk_texture_node_get_type               (void);
 GDK_AVAILABLE_IN_ALL
 GskRenderNode *         gsk_texture_node_new                    (GdkTexture               *texture,
                                                                  const graphene_rect_t    *bounds);
 GDK_AVAILABLE_IN_ALL
 GdkTexture *            gsk_texture_node_get_texture            (const GskRenderNode      *node) G_GNUC_PURE;
+GDK_AVAILABLE_IN_4_24
+GskRectSnap             gsk_texture_node_get_snap               (const GskRenderNode      *node) G_GNUC_PURE;
 
 G_END_DECLS
 

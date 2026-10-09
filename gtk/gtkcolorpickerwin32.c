@@ -193,11 +193,7 @@ ensure_mouse_hook (void)
 static void
 remove_hook (void)
 {
-  if (hook)
-    {
-      UnhookWindowsHookEx (hook);
-      hook = NULL;
-    }
+  g_clear_pointer (&hook, UnhookWindowsHookEx);
 }
 
 static void
@@ -211,6 +207,7 @@ gtk_color_picker_win32_pick (GtkColorPicker      *cp,
     return;
 
   picker->task = g_task_new (picker, NULL, callback, user_data);
+  g_task_set_source_tag (picker->task, gtk_color_picker_win32_pick);
   g_task_set_name (picker->task, "GtkColorPicker");
   g_signal_connect (picker->task, "notify::completed",
                     G_CALLBACK (on_task_completed),

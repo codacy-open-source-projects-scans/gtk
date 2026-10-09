@@ -10,6 +10,15 @@ include:
     inputs:
       dist-job-name: "release-build"
       tarball-artifact-path: "_build/meson-dist/$CI_PROJECT_NAME-$CI_COMMIT_TAG.tar.xz"
+  - component: "gitlab.gnome.org/GNOME/citemplates/goblint@master"
+    inputs:
+      job-stage: "analysis"
+  - component: "gitlab.gnome.org/GNOME/citemplates/goblint@master"
+    inputs:
+      job-stage: "analysis"
+      job-name: "gobject-linter-latest"
+      image-ref: "ghcr.io/bilelmoussaoui/gobject-linter:latest"
+      allow-failure: true
 
 stages:
   - prepare
@@ -35,7 +44,7 @@ stages:
 # Common variables
 variables:
   FDO_UPSTREAM_REPO: GNOME/gtk
-  COMMON_MESON_FLAGS: "-Dwerror=true -Dcairo:werror=false -Dgi-docgen:werror=false -Dgraphene:werror=false -Dlibepoxy:werror=false -Dlibsass:werror=false -Dpango:werror=false -Dsassc:werror=false -Dgdk-pixbuf:werror=false -Dglib:werror=false -Dlibcloudproviders:werror=false -Dlibpng:werror=false -Dlibtiff:werror=false -Dsysprof:werror=false -Dwayland:werror=false -Dwayland-protocols:werror=false -Dharfbuzz:werror=false -Dfreetype2:werror=false -Dfontconfig:werror=false -Dfribidi:werror=false -Dlibffi:werror=false -Dlibjpeg-turbo:werror=false -Dmutest:werror=false -Dpcre2:werror=false -Dpixman:werror=false -Dproxy-libintl:werror=false -Dgperf:werror=false -Dlibxml2:werror=false"
+  COMMON_MESON_FLAGS: "-Dwerror=true -Dcairo:werror=false -Dgi-docgen:werror=false -Dgraphene:werror=false -Dlibepoxy:werror=false -Dlibsass:werror=false -Dpango:werror=false -Dsassc:werror=false -Dgdk-pixbuf:werror=false -Dglib:werror=false -Dlibcloudproviders:werror=false -Dlibpng:werror=false -Dlibtiff:werror=false -Dsysprof:werror=false -Dwayland:werror=false -Dwayland-protocols:werror=false -Dharfbuzz:werror=false -Dfreetype2:werror=false -Dfontconfig:werror=false -Dfribidi:werror=false -Dlibffi:werror=false -Dlibjpeg-turbo:werror=false -Dmutest:werror=false -Dpcre2:werror=false -Dpixman:werror=false -Dproxy-libintl:werror=false -Dgperf:werror=false -Dlibxml2:werror=false -Dfribidi:docs=false"
   BACKEND_FLAGS: "-Dx11-backend=true -Dwayland-backend=true -Dbroadway-backend=true"
   FEATURE_FLAGS: "-Dvulkan=enabled -Dcloudproviders=enabled -Dbuild-testsuite=true -Dintrospection=enabled"
   MESON_TEST_TIMEOUT_MULTIPLIER: 3
@@ -66,8 +75,8 @@ default:
 
 .container.fedora:
   variables:
-    BASE_TAG: '2026-04-04.0'
-    FDO_DISTRIBUTION_VERSION: 44
+    BASE_TAG: '2026-08-09.0'
+    FDO_DISTRIBUTION_VERSION: 45
     FDO_DISTRIBUTION_TAG: "x86_64-${BASE_TAG}"
     FDO_DISTRIBUTION_PACKAGES:
       ccache
@@ -96,6 +105,7 @@ default:
       mingw64-glib2
       mingw64-libepoxy
       mingw64-pango
+      mold
       mutter
       python-devel
       python3-jinja2
@@ -105,6 +115,7 @@ default:
       python3-pygments
       python3-typogrify
       sassc
+      tinysparql-devel
       vulkan-validation-layers
       weston
       xorg-x11-server-Xvfb
@@ -132,7 +143,7 @@ container:fedora:
 
 .container.android:
   variables:
-    BASE_TAG: '2026-04-27.0'
+    BASE_TAG: '2026-07-30.1'
     FDO_DISTRIBUTION_VERSION: sid
     FDO_DISTRIBUTION_TAG: "x86_64-${BASE_TAG}"
     FDO_DISTRIBUTION_PACKAGES:
@@ -215,6 +226,7 @@ style-check-diff:
       - "${CI_PROJECT_DIR}/_build/gtk/GdkX11-4.0.gir"
       - "${CI_PROJECT_DIR}/_build/gtk/GdkWayland-4.0.gir"
       - "${CI_PROJECT_DIR}/_build/meson-dist/*.tar.xz"
+      - "${CI_PROJECT_DIR}/_build/testsuite/*.md"
 
 .build-fedora-default:
   extends:
@@ -233,7 +245,7 @@ gnomeos-x86_64:
     - .test-runner
   needs: []
   stage: build
-  image: "quay.io/gnome_infrastructure/gnome-build-meta:core-nightly"
+  image: "quay.io/gnome_infrastructure/gnome-build-meta:gnomeos-devel-nightly"
   variables:
     EXTRA_MESON_FLAGS: "--buildtype=debug --default-library=both"
   script:
@@ -245,6 +257,7 @@ gnomeos-x86_64:
             ${EXTRA_MESON_FLAGS}
             _build
     - meson compile -C _build
+    - .gitlab-ci/collect-info-gtk.sh _build
     - .gitlab-ci/run-tests.sh _build wayland gtk failing
 
 fedora-x86_64:
@@ -259,6 +272,7 @@ fedora-x86_64:
   script:
     - .gitlab-ci/show-info-linux.sh
     - export PATH="$HOME/.local/bin:$PATH"
+    - export CC_LD=mold
     - meson setup
             ${COMMON_MESON_FLAGS}
             ${EXTRA_MESON_FLAGS}
@@ -266,6 +280,7 @@ fedora-x86_64:
             ${FEATURE_FLAGS}
             _build
     - meson compile -C _build
+    - .gitlab-ci/collect-info-gtk.sh _build
     - .gitlab-ci/run-tests.sh _build x11 gtk failing
     # only repeat test runs that are likely affected by test setups
     - .gitlab-ci/run-tests.sh _build wayland_gl gtk:gdk,gtk:gsk-gl failing
@@ -277,13 +292,10 @@ release-build:
   stage: build
   needs: ['container:fedora']
   variables:
-    EXTRA_MESON_FLAGS: "--buildtype=release"
+    EXTRA_MESON_FLAGS: "--buildtype=release -Dtracker=enabled"
   script:
     - .gitlab-ci/show-info-linux.sh
     - mkdir _install
-    # don't use catch by default, since it causes sporadic test failures
-    # - export PATH="$HOME/.local/bin:${CI_PROJECT_DIR}/_install/bin:$PATH"
-    # - .gitlab-ci/install-meson-project.sh --prefix ${CI_PROJECT_DIR}/_install https://gitlab.gnome.org/jadahl/catch.git main
     - git config --global --add safe.directory $CI_PROJECT_DIR
     - meson setup
             --prefix=${CI_PROJECT_DIR}/_install
@@ -294,6 +306,7 @@ release-build:
             _build
     - meson compile -C _build
     - meson install -C _build
+    - .gitlab-ci/collect-info-gtk.sh _build
     - PKG_CONFIG_PATH=${CI_PROJECT_DIR}/_install/lib64/pkgconfig:${CI_PROJECT_DIR}/_install/share/pkgconfig meson setup _build_hello examples/hello
     - LD_LIBRARY_PATH=${CI_PROJECT_DIR}/_install/lib64 meson compile -C _build_hello
     - .gitlab-ci/run-tests.sh _build wayland gtk failing
@@ -312,6 +325,7 @@ fedora-clang:
     - .gitlab-ci/show-info-linux.sh
     - export PATH="$HOME/.local/bin:$PATH"
     - export CC=clang
+    - export CC_LD=mold
     - meson setup
             ${COMMON_MESON_FLAGS}
             ${EXTRA_MESON_FLAGS}
@@ -319,6 +333,7 @@ fedora-clang:
             ${FEATURE_FLAGS}
             _build
     - meson compile -C _build
+    - .gitlab-ci/collect-info-gtk.sh _build
     - .gitlab-ci/run-tests.sh _build wayland_minimal gtk:gsk failing
 
 fedora-mingw64:
@@ -338,6 +353,10 @@ fedora-mingw64:
   stage: build
   tags:
     - win32-ps
+  # Downloading subprojects can fail, see .container.fedora
+  retry:
+    max: 2
+    exit_codes: 137
   script:
     - C:\msys64\usr\bin\pacman --noconfirm -Syyuu
     - C:\msys64\usr\bin\bash -lc "bash -x ./.gitlab-ci/test-msys2.sh"
@@ -362,6 +381,7 @@ msys2-ucrt64:
     when: always
     expose_as: 'Windows_DLL_MSYS2_UCRT64_toolchain'
     paths:
+      - "${CI_PROJECT_DIR}/_build/meson-logs"
       - "${CI_PROJECT_DIR}/_build/gtkdll.tar.gz"
       - "${CI_PROJECT_DIR}/_build/gtk/GdkWin32-4.0.gir"
 
@@ -375,10 +395,12 @@ msys2-clang64:
     when: always
     expose_as: 'Windows_DLL_MSYS2_CLANG64_toolchain'
     paths:
+      - "${CI_PROJECT_DIR}/_build/meson-logs"
       - "${CI_PROJECT_DIR}/_build/gtkdll.tar.gz"
       - "${CI_PROJECT_DIR}/_build/gtk/GdkWin32-4.0.gir"
 
 macos-arm64:
+  allow_failure: true
   stage: build
   tags:
     - macos
@@ -483,9 +505,8 @@ android:
     FEATURE_FLAGS: "-Dmedia-gstreamer=disabled"
   before_script:
     - .gitlab-ci/show-info-linux.sh
-    # We aren't actually using pixiewood here, we just make get the ${ARCH}.cross, android.cross, fontconfig.wrap and glib/hack.patch files.
+    # We aren't actually using pixiewood here, we just make get the ${ARCH}.cross, android.cross, and glib/hack.patch files.
     - git clone https://github.com/sp1ritCS/gtk-android-builder.git --branch android36 pixiewood
-    - cp -f pixiewood/prepare/wraps/fontconfig/fontconfig.wrap subprojects/
     # glib/hack makes the g_set_user_dirs public. Drop once glib has android support
     - mkdir -p subprojects/packagefiles/
     - cp -f pixiewood/prepare/wraps/glib/hack.patch subprojects/packagefiles/glib_hack.patch
@@ -627,20 +648,6 @@ flatpak:node-editor:aarch64:
   variables:
     APPID: org.gtk.gtk4.NodeEditor
 
-flatpak:icon-editor:
-  extends: '.flatpak-defaults'
-  needs: []
-  variables:
-    APPID: org.gtk.Shaper
-
-flatpak:icon-editor:aarch64:
-  extends: '.flatpak-defaults'
-  needs: []
-  tags:
-    - flatpak-aarch64
-  variables:
-    APPID: org.gtk.Shaper
-
 # Publish the demo apps to the GNOME Nightly repo
 # https://wiki.gnome.org/Apps/Nightly
 # https://gitlab.gnome.org/GNOME/Initiatives/-/wikis/DevOps-with-Flatpak
@@ -668,14 +675,6 @@ nightly node-editor aarch64:
     extends: '.publish_nightly'
     needs: ['flatpak:node-editor:aarch64']
 
-nightly icon-editor:
-    extends: '.publish_nightly'
-    needs: ['flatpak:icon-editor']
-
-nightly icon-editor aarch64:
-    extends: '.publish_nightly'
-    needs: ['flatpak:icon-editor:aarch64']
-
 static-scan:
   extends:
     - .distribution.fedora
@@ -685,6 +684,7 @@ static-scan:
     EXTRA_MESON_FLAGS: "--buildtype=debug"
   script:
     - export PATH="$HOME/.local/bin:$PATH"
+    - export CC_LD=mold
     - meson setup
             ${COMMON_MESON_FLAGS}
             ${EXTRA_MESON_FLAGS}
@@ -697,9 +697,18 @@ static-scan:
       - _scan_build/meson-logs
   allow_failure: true
 
-# Run tests with the address sanitizer. We need to turn off introspection
-# and f16c, since they are incompatible with asan
-asan-build:
+# Run tests with the address and undefined behavior sanitizers. We need to
+# turn off introspection and f16c, since they are incompatible with asan.
+#
+# Two ubsan checks are turned off:
+#
+#  - "function", since GObject dispatches signal handlers through the generic
+#    prototypes that glib-genmarshal generates, which the check flags for
+#    every handler with a concrete signature.
+#
+#  - "object-size", since GtkTextLineSegment is allocated with room for just
+#    one member of its body union, which the check flags on every access.
+sanitizer-build:
   extends:
     - .test-runner
     - .build-fedora-default
@@ -708,9 +717,11 @@ asan-build:
   needs: ['container:fedora']
   script:
     - export PATH="$HOME/.local/bin:$PATH"
-    - CC=clang meson setup
+    - export CC=clang
+    - meson setup
             --buildtype=debugoptimized
-            -Db_sanitize=address
+            -Db_sanitize=address,undefined
+            -Dc_args=-fno-sanitize=function,object-size
             -Db_lundef=false
             -Dbuild-demos=false
             -Dbuild-tests=false
@@ -722,11 +733,6 @@ asan-build:
     # Work around https://gitlab.freedesktop.org/mesa/mesa/-/issues/12666
     - rm -rf _build/subprojects/wayland/src/libwayland-server*
     - .gitlab-ci/run-tests.sh _build wayland gtk
-  artifacts:
-    when: on_failure
-    name: "gtk-asan-${CI_COMMIT_REF_NAME}"
-    paths:
-      - "${CI_PROJECT_DIR}/_build/meson-logs"
 
 reference:
   extends:

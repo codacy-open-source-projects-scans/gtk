@@ -27,11 +27,12 @@
 #include "gdkglcontext-wayland.h"
 #include "gdkmonitor-wayland.h"
 #include "gdkpopupprivate.h"
+#include "gdkprofilerprivate.h"
 #include "gdkseat-wayland.h"
 #include "gdksurfaceprivate.h"
 #include "gdktoplevelprivate.h"
 #include "gdkdevice-wayland-private.h"
-#include "gdkeventsource.h"
+#include "gdkeventsourceprivate.h"
 
 #include <wayland/presentation-time-client-protocol.h>
 #include <wayland/xdg-shell-unstable-v6-client-protocol.h>
@@ -1408,8 +1409,7 @@ gdk_wayland_toplevel_set_icon_list (GdkWaylandToplevel *self,
     return;
 
   g_clear_pointer (&self->display_server.toplevel_icon, xdg_toplevel_icon_v1_destroy);
-  g_list_free_full (self->icons, (GDestroyNotify) wl_buffer_destroy);
-  self->icons = NULL;
+  g_clear_list (&self->icons, NULL);
 
   self->display_server.toplevel_icon = xdg_toplevel_icon_manager_v1_create_icon (display_wayland->toplevel_icon);
 
@@ -1541,7 +1541,7 @@ gdk_wayland_toplevel_get_property (GObject    *object,
       break;
 
     case LAST_PROP + GDK_TOPLEVEL_PROP_STARTUP_ID:
-      g_value_set_string (value, "");
+      g_value_set_static_string (value, "");
       break;
 
     case LAST_PROP + GDK_TOPLEVEL_PROP_TRANSIENT_FOR:
@@ -1611,7 +1611,7 @@ gdk_wayland_toplevel_finalize (GObject *object)
   g_clear_pointer (&self->idle_inhibitor, zwp_idle_inhibitor_v1_destroy);
 
   g_clear_pointer (&self->display_server.toplevel_icon, xdg_toplevel_icon_v1_destroy);
-  g_list_free_full (self->icons, (GDestroyNotify) wl_buffer_destroy);
+  g_list_free (self->icons);
 
   g_clear_pointer (&self->a11y.dbus_name, g_free);
   g_clear_pointer (&self->a11y.toplevel_object_path, g_free);
@@ -2031,6 +2031,7 @@ gdk_wayland_toplevel_real_export_handle (GdkToplevel          *toplevel,
   GTask *task;
 
   task = g_task_new (toplevel, cancellable, callback, user_data);
+  g_task_set_source_tag (task, gdk_wayland_toplevel_real_export_handle);
 
   if (display_wayland->xdg_exporter_v2)
     {
@@ -2912,8 +2913,7 @@ gdk_wayland_toplevel_remove_from_session (GdkToplevel *toplevel)
   if (display_wayland->session && wayland_toplevel->toplevel_session)
     {
       xdg_session_v1_remove_toplevel (display_wayland->session, wayland_toplevel->session_id);
-      xdg_toplevel_session_v1_destroy (wayland_toplevel->toplevel_session);
-      wayland_toplevel->toplevel_session = NULL;
+      g_clear_pointer (&wayland_toplevel->toplevel_session, xdg_toplevel_session_v1_destroy);
     }
 }
 

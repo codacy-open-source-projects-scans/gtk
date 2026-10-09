@@ -274,7 +274,7 @@ gtk_event_controller_scroll_end (GtkEventController *controller)
     }
 }
 
-static gboolean
+static void
 gtk_event_controller_scroll_hold_timeout (gpointer user_data)
 {
   GtkEventController *controller;
@@ -285,8 +285,6 @@ gtk_event_controller_scroll_hold_timeout (gpointer user_data)
 
   gtk_event_controller_scroll_end (controller);
   scroll->hold_timeout_id = 0;
-
-  return G_SOURCE_REMOVE;
 }
 
 static gboolean
@@ -323,9 +321,7 @@ gtk_event_controller_scroll_handle_hold_event (GtkEventController *controller,
       if (scroll->hold_timeout_id == 0)
         {
           scroll->hold_timeout_id =
-              g_timeout_add (HOLD_TIMEOUT_MS,
-                             gtk_event_controller_scroll_hold_timeout,
-                             controller);
+              g_timeout_add_once (HOLD_TIMEOUT_MS, gtk_event_controller_scroll_hold_timeout, controller);
         }
       break;
 
@@ -529,7 +525,7 @@ gtk_event_controller_scroll_class_init (GtkEventControllerScrollClass *klass)
     g_param_spec_flags ("flags", NULL, NULL,
                         GTK_TYPE_EVENT_CONTROLLER_SCROLL_FLAGS,
                         GTK_EVENT_CONTROLLER_SCROLL_NONE,
-                        GTK_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY);
+                        G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkEventControllerScroll::scroll-begin:

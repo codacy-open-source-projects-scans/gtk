@@ -25,9 +25,19 @@
  * dvalue=-1: generate random value within value range
  * dvalue=+2: initialize value from default_value
  */
+/* SELECT_VALUE computes in double, so the result may not be representable in
+ * the property's type (e.g. (double) G_MAXUINT64 rounds up to 2^64). Assign
+ * the bounds directly when we hit them.
+ */
 #define ASSIGN_VALUE(__g_value_set_func, value__, PSPECTYPE, __pspec, __default_value, __minimum, __maximum, __dvalue) do { \
   PSPECTYPE __p = (PSPECTYPE) __pspec; \
-  __g_value_set_func (value__, SELECT_VALUE (__dvalue, __p->__default_value, __p->__minimum, __p->__maximum)); \
+  double __v = SELECT_VALUE (__dvalue, (double) __p->__default_value, (double) __p->__minimum, (double) __p->__maximum); \
+  if (__v >= (double) __p->__maximum) \
+    __g_value_set_func (value__, __p->__maximum); \
+  else if (__v <= (double) __p->__minimum) \
+    __g_value_set_func (value__, __p->__minimum); \
+  else \
+    __g_value_set_func (value__, __v); \
 } while (0)
 #define SELECT_VALUE(__dvalue, __default_value, __minimum, __maximum) ( \
   __dvalue >= 0 && __dvalue <= 1 ? __minimum * (1 - __dvalue) + __dvalue * __maximum : \
@@ -116,7 +126,7 @@ pspec_select_value (GParamSpec *pspec,
       if (dvalue > 0 && sspec->cset_first && sspec->cset_nth)
         g_value_take_string (value, g_strdup_printf ("%c%c", sspec->cset_first[0], sspec->cset_nth[0]));
       else /* if (sspec->ensure_non_null) */
-        g_value_set_string (value, "");
+        g_value_set_static_string (value, "");
     }
   else if (G_IS_PARAM_SPEC_ENUM (pspec))
     {
@@ -212,7 +222,7 @@ object_test_property (GObject           *object,
       /* ignore untestable properties */
       ignore_properties = list_ignore_properties (FALSE);
       for (i = 0; ignore_properties[i].name; i++)
-        if (g_strcmp0 ("", ignore_properties[i].name) ||
+        if (g_strcmp0 ("", ignore_properties[i].name) != 0 ||
             (g_type_is_a (G_OBJECT_TYPE (object), g_type_from_name (ignore_properties[i].type_name)) &&
              strcmp (pspec->name, ignore_properties[i].name) == 0 &&
              (MATCH_ANY_VALUE == ignore_properties[i].value ||

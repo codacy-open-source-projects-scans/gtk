@@ -183,9 +183,15 @@ svg_element_type_is_clip_path_content (SvgElementType type)
 }
 
 gboolean
-svg_element_type_is_graphical (SvgElementType type)
+svg_element_type_is_renderable (SvgElementType type)
 {
-  return svg_element_type_is_path (type) || svg_element_type_is_text (type);
+  if (type == SVG_ELEMENT_IMAGE || type == SVG_ELEMENT_USE)
+    return TRUE;
+
+  if (element_types[type].flags & ELEMENT_IS_NEVER_RENDERED)
+    return FALSE;
+
+  return (element_types[type].flags & (ELEMENT_IS_PATH | ELEMENT_IS_TEXT | ELEMENT_IS_CONTAINER)) != 0;
 }
 
 static unsigned int

@@ -61,6 +61,9 @@
 #include "gtksearchbar.h"
 #include "gtksearchentry.h"
 #include "gtkeventcontrollerkey.h"
+#include "gtksvgwidgetprivate.h"
+#include "gtkspinnerprivate.h"
+
 
 G_GNUC_BEGIN_IGNORE_DEPRECATIONS
 
@@ -131,6 +134,30 @@ object_tree_widget_get_children (GObject *object)
   g_object_unref (sublist);
 
   return G_LIST_MODEL (gtk_flatten_list_model_new (G_LIST_MODEL (list)));
+}
+
+static GListModel *
+object_tree_svg_widget_get_children (GObject *object)
+{
+  GtkSvgWidget *svg = GTK_SVG_WIDGET (object);
+  GListStore *store;
+
+  store = g_list_store_new (G_TYPE_OBJECT);
+  g_list_store_append (store, gtk_svg_widget_get_svg (svg));
+
+  return G_LIST_MODEL (store);
+}
+
+static GListModel *
+object_tree_spinner_get_children (GObject *object)
+{
+  GtkSpinner *spinner = GTK_SPINNER (object);
+  GListStore *store;
+
+  store = g_list_store_new (G_TYPE_OBJECT);
+  g_list_store_append (store, gtk_spinner_get_svg (spinner));
+
+  return G_LIST_MODEL (store);
 }
 
 static GObject *
@@ -331,7 +358,7 @@ object_tree_tree_view_get_children (GObject *object)
   props = list_model_for_properties (object, (const char *[2]) { "model", NULL });
 
   columns = g_list_store_new (GTK_TYPE_TREE_VIEW_COLUMN);
-  g_signal_connect_object (treeview, "columns-changed", G_CALLBACK (treeview_columns_changed), columns, 0);
+  g_signal_connect_object (treeview, "columns-changed", G_CALLBACK (treeview_columns_changed), columns, G_CONNECT_DEFAULT);
   for (i = 0; i < gtk_tree_view_get_n_columns (treeview); i++)
     g_list_store_append (columns, gtk_tree_view_get_column (treeview, i));
 
@@ -476,8 +503,8 @@ object_tree_text_tag_table_get_children (GObject *object)
 {
   GListStore *store = g_list_store_new (GTK_TYPE_TEXT_TAG);
 
-  g_signal_connect_object (object, "tag-added", G_CALLBACK (text_tag_added), store, 0);
-  g_signal_connect_object (object, "tag-removed", G_CALLBACK (text_tag_removed), store, 0);
+  g_signal_connect_object (object, "tag-added", G_CALLBACK (text_tag_added), store, G_CONNECT_DEFAULT);
+  g_signal_connect_object (object, "tag-removed", G_CALLBACK (text_tag_removed), store, G_CONNECT_DEFAULT);
   gtk_text_tag_table_foreach (GTK_TEXT_TAG_TABLE (object), text_tag_foreach, store);
 
   return NULL;
@@ -510,6 +537,16 @@ static const ObjectTreeClassFuncs object_tree_class_funcs[] = {
     gtk_text_tag_table_get_type,
     object_tree_get_parent_default,
     object_tree_text_tag_table_get_children
+  },
+  {
+    gtk_svg_widget_get_type,
+    object_tree_widget_get_parent,
+    object_tree_svg_widget_get_children
+  },
+  {
+    gtk_spinner_get_type,
+    object_tree_widget_get_parent,
+    object_tree_spinner_get_children
   },
   {
     gtk_text_buffer_get_type,
@@ -805,9 +842,6 @@ destroy_controller (GtkEventController *controller)
 {
   gtk_widget_remove_controller (gtk_event_controller_get_widget (controller), controller);
 }
-
-static gboolean toplevel_filter_func (gpointer item,
-                                      gpointer data);
 
 static void
 map (GtkWidget *widget)

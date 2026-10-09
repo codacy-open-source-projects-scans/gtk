@@ -61,7 +61,6 @@ gdk_public_sources = files([
   'gdkrectangle.c',
   'gdkrgba.c',
   'gdkseat.c',
-  'gdkseatdefault.c',
   'gdksnapshot.c',
   'gdksubsurface.c',
   'gdksurface.c',
@@ -142,7 +141,6 @@ gdk_private_h_sources = files([
   'gdkeventsprivate.h',
   'gdkhslaprivate.h',
   'gdkmonitorprivate.h',
-  'gdkseatdefaultprivate.h',
   'gdktoplevelsizeprivate.h',
 ])
 
@@ -302,6 +300,7 @@ libgdk = static_library('gdk',
   include_directories: [confinc, gdkx11_inc, wlinc],
   c_args: libgdk_c_args + common_cflags,
   link_whole: gdk_backends,
+  gnu_symbol_visibility: symbol_visibility,
 )
 
 # We don't have link_with: to internal static libs here on purpose, just

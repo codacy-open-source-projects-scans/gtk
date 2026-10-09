@@ -319,6 +319,7 @@ collect_reused_child_nodes (GskRenderer *renderer,
     case GSK_ISOLATION_NODE:
     case GSK_DISPLACEMENT_NODE:
     case GSK_ARITHMETIC_NODE:
+    case GSK_TURBULENCE_NODE:
 
     default:
 
@@ -924,6 +925,7 @@ gsk_broadway_renderer_add_node (GskRenderer *renderer,
     case GSK_ISOLATION_NODE:
     case GSK_DISPLACEMENT_NODE:
     case GSK_ARITHMETIC_NODE:
+    case GSK_TURBULENCE_NODE:
     default:
       break; /* Fallback */
     }
@@ -977,7 +979,7 @@ gsk_broadway_renderer_render (GskRenderer          *renderer,
 
   self->node_lookup = g_hash_table_new (g_direct_hash, g_direct_equal);
 
-  gdk_draw_context_begin_frame_full (GDK_DRAW_CONTEXT (self->draw_context), NULL, GDK_MEMORY_U8, update_area, NULL);
+  gdk_draw_context_begin_frame_full (GDK_DRAW_CONTEXT (self->draw_context), NULL, root, update_area);
 
   /* These are owned by the draw context between begin and end, but
      cache them here for easier access during the render */

@@ -122,14 +122,9 @@ gtk_css_image_fallback_dispose (GObject *object)
 
   for (i = 0; i < fallback->n_images; i++)
     g_object_unref (fallback->images[i]);
-  g_free (fallback->images);
-  fallback->images = NULL;
+  g_clear_pointer (&fallback->images, g_free);
 
-  if (fallback->color)
-    {
-      gtk_css_value_unref (fallback->color);
-      fallback->color = NULL;
-    }
+  g_clear_pointer (&fallback->color, gtk_css_value_unref);
 
   G_OBJECT_CLASS (_gtk_css_image_fallback_parent_class)->dispose (object);
 }

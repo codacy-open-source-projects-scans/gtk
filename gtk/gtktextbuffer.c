@@ -229,7 +229,7 @@ struct _GtkTextBufferContentClass
   GdkContentProviderClass parent_class;
 };
 
-GType gtk_text_buffer_content_get_type (void) G_GNUC_CONST;
+GType gtk_text_buffer_content_get_type (void);
 
 G_DEFINE_TYPE (GtkTextBufferContent, gtk_text_buffer_content, GDK_TYPE_CONTENT_PROVIDER)
 
@@ -528,7 +528,7 @@ gtk_text_buffer_class_init (GtkTextBufferClass *klass)
   text_buffer_props[PROP_TAG_TABLE] =
       g_param_spec_object ("tag-table", NULL, NULL,
                            GTK_TYPE_TEXT_TAG_TABLE,
-                           GTK_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY);
+                           G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_CONSTRUCT_ONLY);
 
   /* Normal properties */
 
@@ -543,7 +543,7 @@ gtk_text_buffer_class_init (GtkTextBufferClass *klass)
   text_buffer_props[PROP_TEXT] =
       g_param_spec_string ("text", NULL, NULL,
                            "",
-                           GTK_PARAM_READWRITE);
+                           G_PARAM_READWRITE | G_PARAM_STATIC_NAME);
 
   /**
    * GtkTextBuffer:has-selection:
@@ -553,7 +553,7 @@ gtk_text_buffer_class_init (GtkTextBufferClass *klass)
   text_buffer_props[PROP_HAS_SELECTION] =
       g_param_spec_boolean ("has-selection", NULL, NULL,
                             FALSE,
-                            GTK_PARAM_READABLE);
+                            G_PARAM_READABLE | G_PARAM_STATIC_NAME);
 
   /**
    * GtkTextBuffer:can-undo:
@@ -563,7 +563,7 @@ gtk_text_buffer_class_init (GtkTextBufferClass *klass)
   text_buffer_props[PROP_CAN_UNDO] =
     g_param_spec_boolean ("can-undo", NULL, NULL,
                           FALSE,
-                          GTK_PARAM_READABLE);
+                          G_PARAM_READABLE | G_PARAM_STATIC_NAME);
 
   /**
    * GtkTextBuffer:can-redo:
@@ -573,7 +573,7 @@ gtk_text_buffer_class_init (GtkTextBufferClass *klass)
   text_buffer_props[PROP_CAN_REDO] =
     g_param_spec_boolean ("can-redo", NULL, NULL,
                           FALSE,
-                          GTK_PARAM_READABLE);
+                          G_PARAM_READABLE | G_PARAM_STATIC_NAME);
 
   /**
    * GtkTextBuffer:enable-undo:
@@ -583,7 +583,7 @@ gtk_text_buffer_class_init (GtkTextBufferClass *klass)
   text_buffer_props[PROP_ENABLE_UNDO] =
     g_param_spec_boolean ("enable-undo", NULL, NULL,
                           TRUE,
-                          GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                          G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkTextBuffer:cursor-position:
@@ -597,7 +597,7 @@ gtk_text_buffer_class_init (GtkTextBufferClass *klass)
       g_param_spec_int ("cursor-position", NULL, NULL,
 			0, G_MAXINT,
                         0,
-                        GTK_PARAM_READABLE);
+                        G_PARAM_READABLE | G_PARAM_STATIC_NAME);
 
   g_object_class_install_properties (object_class, LAST_PROP, text_buffer_props);
 
@@ -1153,15 +1153,10 @@ gtk_text_buffer_finalize (GObject *object)
   if (priv->tag_table)
     {
       _gtk_text_tag_table_remove_buffer (priv->tag_table, buffer);
-      g_object_unref (priv->tag_table);
-      priv->tag_table = NULL;
+      g_clear_object (&priv->tag_table);
     }
 
-  if (priv->btree)
-    {
-      _gtk_text_btree_unref (priv->btree);
-      priv->btree = NULL;
-    }
+  g_clear_pointer (&priv->btree, _gtk_text_btree_unref);
 
   if (priv->log_attr_cache)
     free_log_attr_cache (priv->log_attr_cache);
@@ -1607,8 +1602,7 @@ insert_range_untagged (GtkTextBuffer     *buffer,
 
                   gtk_text_buffer_insert_paintable (buffer, iter, paintable);
 
-                  restore_range (r);
-                  r = NULL;
+                  g_clear_pointer (&r, restore_range);
 
                   gtk_text_iter_forward_char (&range_end);
 
@@ -1657,8 +1651,7 @@ insert_range_untagged (GtkTextBuffer     *buffer,
                              &range_end,
                              interactive);
 
-          restore_range (r);
-          r = NULL;
+          g_clear_pointer (&r, restore_range);
 
           range_start = range_end;
         }
@@ -1722,8 +1715,7 @@ insert_range_not_inside_self (GtkTextBuffer     *buffer,
 
       insert_range_untagged (buffer, iter, &range_start, &range_end, interactive);
 
-      restore_range (r);
-      r = NULL;
+      g_clear_pointer (&r, restore_range);
 
       if (insert_tags)
         {
@@ -4042,8 +4034,7 @@ remove_all_selection_clipboards (GtkTextBuffer *buffer)
       g_free (selection_clipboard);
     }
 
-  g_slist_free (priv->selection_clipboards);
-  priv->selection_clipboards = NULL;
+  g_clear_slist (&priv->selection_clipboards, NULL);
 }
 
 /**
@@ -4200,7 +4191,7 @@ gtk_text_buffer_backspace (GtkTextBuffer *buffer,
 					  default_editable))
     {
       /* special case \r\n, since we never want to reinsert \r */
-      if (backspace_deletes_character && strcmp ("\r\n", cluster_text))
+      if (backspace_deletes_character && strcmp ("\r\n", cluster_text) != 0)
 	{
 	  char *normalized_text = g_utf8_normalize (cluster_text,
 						     strlen (cluster_text),
@@ -4460,8 +4451,7 @@ clear_log_attr_cache (GtkTextLogAttrCache *cache)
 
   for (i = 0; i < ATTR_CACHE_SIZE; i++)
     {
-      g_free (cache->entries[i].attrs);
-      cache->entries[i].attrs = NULL;
+      g_clear_pointer (&cache->entries[i].attrs, g_free);
     }
 }
 
@@ -4767,6 +4757,11 @@ insert_tags_for_attributes (GtkTextBuffer     *buffer,
         case PANGO_ATTR_STRETCH:
           INT_ATTR (stretch);
           break;
+
+#if PANGO_VERSION_CHECK (1, 58, 0)
+        case PANGO_ATTR_WIDTH:
+          break; /* FIXME: add width to GtkTextTag */
+#endif
 
         case PANGO_ATTR_SIZE:
           INT_ATTR (size);
@@ -5477,9 +5472,9 @@ gtk_text_buffer_add_run_attributes (GtkTextBuffer *buffer,
 
           g_object_get (tag, "foreground-rgba", &rgba, NULL);
           value = g_strdup_printf ("%u,%u,%u",
-                                   (guint) rgba->red * 65535,
-                                   (guint) rgba->green * 65535,
-                                   (guint) rgba->blue * 65535);
+                                   (guint) (rgba->red * 65535),
+                                   (guint) (rgba->green * 65535),
+                                   (guint) (rgba->blue * 65535));
           gdk_rgba_free (rgba);
 
           g_hash_table_insert (attributes, g_strdup ("fg-color"), value);
@@ -5501,9 +5496,9 @@ gtk_text_buffer_add_run_attributes (GtkTextBuffer *buffer,
 
           g_object_get (tag, "background-rgba", &rgba, NULL);
           value = g_strdup_printf ("%u,%u,%u",
-                                   (guint) rgba->red * 65535,
-                                   (guint) rgba->green * 65535,
-                                   (guint) rgba->blue * 65535);
+                                   (guint) (rgba->red * 65535),
+                                   (guint) (rgba->green * 65535),
+                                   (guint) (rgba->blue * 65535));
           gdk_rgba_free (rgba);
 
           g_hash_table_insert (attributes, g_strdup ("bg-color"), value);

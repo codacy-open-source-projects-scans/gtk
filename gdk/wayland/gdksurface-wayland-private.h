@@ -20,17 +20,9 @@
 #include "gdkwaylandsurface.h"
 #include "gdkfractionalscale-private.h"
 #include "gdkwaylandcolor-private.h"
-#include "gdkwaylandpresentationtime-private.h"
 #include "gdkseat-wayland.h"
 
-
-typedef enum _PopupState
-{
-  POPUP_STATE_IDLE,
-  POPUP_STATE_WAITING_FOR_REPOSITIONED,
-  POPUP_STATE_WAITING_FOR_CONFIGURE,
-  POPUP_STATE_WAITING_FOR_FRAME,
-} PopupState;
+typedef struct _GdkWaylandSurfaceClass GdkWaylandSurfaceClass;
 
 struct _GdkWaylandSurface
 {
@@ -43,13 +35,11 @@ struct _GdkWaylandSurface
     struct zxdg_surface_v6 *zxdg_surface_v6;
     struct wp_fractional_scale_v1 *fractional_scale;
     struct wp_viewport *viewport;
+    struct ext_background_effect_surface_v1 *background_effect;
     GdkWaylandColorSurface *color;
   } display_server;
 
   struct wl_event_queue *event_queue;
-  struct wl_callback *frame_callback;
-
-  GdkWaylandPresentationTime *presentation_time;
 
   unsigned int color_state_changed : 1;
   unsigned int initial_configure_received : 1;
@@ -61,7 +51,6 @@ struct _GdkWaylandSurface
   int pending_buffer_offset_x;
   int pending_buffer_offset_y;
 
-  gint64 pending_frame_counter;
   GdkFractionalScale scale;
   gboolean buffer_is_fractional;
   gboolean buffer_scale_dirty;
@@ -77,6 +66,9 @@ struct _GdkWaylandSurface
 
   cairo_region_t *input_region;
   gboolean input_region_dirty;
+
+  cairo_region_t *background_blur;
+  gboolean background_effect_dirty;
 
   GdkRectangle last_sent_window_geometry;
 
@@ -97,14 +89,11 @@ struct _GdkWaylandSurface
   int state_freeze_count;
 };
 
-typedef struct _GdkWaylandSurfaceClass GdkWaylandSurfaceClass;
 struct _GdkWaylandSurfaceClass
 {
   GdkSurfaceClass parent_class;
 
   void (* handle_configure) (GdkWaylandSurface *surface);
-
-  void (* handle_frame) (GdkWaylandSurface *surface);
 
   void (* hide_surface) (GdkWaylandSurface *surface);
 };
@@ -118,7 +107,6 @@ void gdk_wayland_surface_update_size       (GdkSurface               *surface,
                                             int32_t                   height,
                                             const GdkFractionalScale *scale);
 void gdk_wayland_surface_create_xdg_surface_resources (GdkSurface *surface);
-void _gdk_wayland_surface_save_size (GdkSurface *surface);
 
 void gdk_wayland_surface_hide_surface (GdkSurface *surface);
 void gdk_wayland_surface_move_resize (GdkSurface *surface,
@@ -131,14 +119,14 @@ void gdk_wayland_surface_get_window_geometry (GdkSurface   *surface,
 void gdk_wayland_surface_freeze_state (GdkSurface *surface);
 void gdk_wayland_surface_thaw_state   (GdkSurface *surface);
 
-void gdk_wayland_surface_frame_callback (GdkSurface *surface,
-                                         uint32_t    time);
-
+void            gdk_wayland_surface_update_content         (GdkSurface           *surface);
 void            gdk_wayland_surface_sync                   (GdkSurface           *surface);
-void            gdk_wayland_surface_handle_empty_frame     (GdkSurface           *surface);
+gboolean        gdk_wayland_surface_handle_empty_frame     (GdkSurface           *surface,
+                                                            GdkDrawContextFrame  *frame);
 void            gdk_wayland_surface_commit                 (GdkSurface           *surface);
 void            gdk_wayland_surface_notify_committed       (GdkSurface           *surface);
-void            gdk_wayland_surface_request_frame          (GdkSurface           *surface);
+void            gdk_wayland_surface_request_frame          (GdkSurface           *surface,
+                                                            GdkDrawContextFrame  *frame);
 gboolean        gdk_wayland_surface_has_surface            (GdkSurface           *surface);
 void            gdk_wayland_surface_attach_image           (GdkSurface           *surface,
                                                             cairo_surface_t      *cairo_surface,

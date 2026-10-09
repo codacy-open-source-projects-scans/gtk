@@ -205,6 +205,8 @@ gdk_win32_hcursor_constructed (GObject *object)
 {
   GdkWin32HCursor *win32_hcursor;
 
+  G_OBJECT_CLASS (gdk_win32_hcursor_parent_class)->constructed (object);
+
   win32_hcursor = GDK_WIN32_HCURSOR (object);
 
   g_assert_nonnull (win32_hcursor->display);
@@ -284,7 +286,7 @@ _gdk_win32_display_hcursor_ref (GdkWin32Display *display,
   display->cursors_for_destruction = g_list_remove_all (display->cursors_for_destruction, handle);
 }
 
-static gboolean
+static void
 delayed_cursor_destruction (gpointer user_data)
 {
   GdkWin32Display *win32_display = GDK_WIN32_DISPLAY (user_data);
@@ -310,10 +312,7 @@ delayed_cursor_destruction (gpointer user_data)
         g_warning (G_STRLOC ": DestroyCursor (%p) failed: %lu", handle, GetLastError ());
     }
 
-  g_list_free (win32_display->cursors_for_destruction);
-  win32_display->cursors_for_destruction = NULL;
-
-  return G_SOURCE_REMOVE;
+  g_clear_list (&win32_display->cursors_for_destruction, NULL);
 }
 
 void
@@ -358,7 +357,7 @@ _gdk_win32_display_hcursor_unref (GdkWin32Display *display,
       display->cursors_for_destruction = g_list_prepend (display->cursors_for_destruction, handle);
 
       if (display->idle_cursor_destructor_id == 0)
-        display->idle_cursor_destructor_id = g_idle_add (delayed_cursor_destruction, display);
+        display->idle_cursor_destructor_id = g_idle_add_once (delayed_cursor_destruction, display);
     }
 }
 
@@ -750,8 +749,7 @@ _gdk_win32_display_finalize_cursors (GdkWin32Display *display)
 
   g_free (display->cursor_theme_name);
 
-  g_list_free (display->cursors_for_destruction);
-  display->cursors_for_destruction = NULL;
+  g_clear_list (&display->cursors_for_destruction, NULL);
 
   if (display->cursor_theme)
     win32_cursor_theme_destroy (display->cursor_theme);

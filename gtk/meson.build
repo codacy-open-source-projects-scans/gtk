@@ -28,6 +28,7 @@ gtk_private_sources = files([
   'gtkallocatedbitmask.c',
   'gtkapplicationaccels.c',
   'gtkapplicationimpl.c',
+  'gtkarraylistmodel.c',
   'gtkbookmarksmanager.c',
   'gtkbuilder-menus.c',
   'gtkbuilderprecompile.c',
@@ -108,6 +109,8 @@ gtk_private_sources = files([
   'gtkcssvariableset.c',
   'gtkcsswidgetnode.c',
   'gtkdrop.c',
+  'gtkemojidata.c',
+  'gtkemojiitem.c',
   'gtkfilechooserentry.c',
   'gtkfilechoosererrorstack.c',
   'gtkfilechoosernativeportal.c',
@@ -209,6 +212,7 @@ gtk_public_sources = files([
   'gtkcustomfilter.c',
   'gtkcustomlayout.c',
   'gtkcustomsorter.c',
+  'gtkdebug.c',
   'gtkdialogerror.c',
   'gtkdirectorylist.c',
   'gtkdragicon.c',
@@ -419,6 +423,7 @@ gtk_private_sources += print_backend_sources
 
 gtk_private_type_headers = files([
   'gtkcsstypesprivate.h',
+  'gtkenumsprivate.h',
   'gtkfontfilterprivate.h',
   'gtktexthandleprivate.h',
   'gtkplacessidebarprivate.h',
@@ -1066,6 +1071,7 @@ libgtk_static = static_library('gtk',
   include_directories: [confinc, gdkinc, gskinc, gtkinc],
   dependencies: gtk_deps + [libgtk_css_dep, libgtk_svg_dep, libgdk_dep, libgsk_dep, media_deps, print_backend_deps],
   link_with: [libgtk_css, libgtk_svg, libgdk, libgsk ],
+  gnu_symbol_visibility: symbol_visibility,
 )
 
 libgtk = shared_library('gtk-4',
@@ -1077,7 +1083,7 @@ libgtk = shared_library('gtk-4',
   soversion: gtk_soversion,
   version: gtk_library_version,
   darwin_versions: darwin_versions,
-  gnu_symbol_visibility: 'hidden',
+  gnu_symbol_visibility: symbol_visibility,
   install: true,
 )
 
@@ -1268,9 +1274,16 @@ libgtk_dep = declare_dependency(sources: gtk_dep_sources,
 
 libgtk_static_dep = declare_dependency(sources: gtk_dep_sources,
   include_directories: [confinc, gtkinc],
+  compile_args: ['-DGDK_STATIC_COMPILATION'],
   dependencies: gtk_deps + [libgtk_css_dep, libgtk_svg_dep, libgdk_dep, libgsk_dep],
   link_with: [libgtk_static, libgtk_css, libgdk, libgsk ],
   link_args: common_ldflags,
 )
+
+if get_option('symbol-visibility') == 'default'
+  libgtk_private_dep = libgtk_dep
+else
+  libgtk_private_dep = libgtk_static_dep
+endif
 
 subdir('compose')

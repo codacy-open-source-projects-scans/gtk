@@ -24,6 +24,61 @@
 #include "gtksvgelementinternal.h"
 #include "gtksvgtimespecprivate.h"
 #include "gtksvgutilsprivate.h"
+#include "gtksvgkeywordprivate.h"
+#include "gtksvgclipprivate.h"
+#include "gtksvgmaskprivate.h"
+#include "gtksvgfilterfunctionsprivate.h"
+#include "gtksvgpaintprivate.h"
+#include "gtksvghrefprivate.h"
+
+G_DEFINE_TYPE (SvgAnimation, svg_animation, G_TYPE_OBJECT)
+
+static void
+svg_animation_init (SvgAnimation *self)
+{
+}
+
+static void
+svg_animation_finalize (GObject *object)
+{
+  SvgAnimation *animation = SVG_ANIMATION (object);
+
+  g_free (animation->id);
+  g_free (animation->href);
+
+  g_clear_pointer (&animation->begin, g_ptr_array_unref);
+  g_clear_pointer (&animation->end, g_ptr_array_unref);
+
+  if (animation->type != ANIMATION_TYPE_MOTION)
+    {
+      for (unsigned int i = 0; i < animation->n_frames; i++)
+        svg_value_unref (animation->frames[i].value);
+    }
+  g_free (animation->frames);
+
+  g_free (animation->motion.path_ref);
+  g_clear_pointer (&animation->motion.path, gsk_path_unref);
+  g_clear_pointer (&animation->motion.measure, gsk_path_measure_unref);
+
+  g_clear_pointer (&animation->deps, g_ptr_array_unref);
+
+  G_OBJECT_CLASS (svg_animation_parent_class)->finalize (object);
+}
+
+static void
+svg_animation_dispose (GObject *object)
+{
+  G_OBJECT_CLASS (svg_animation_parent_class)->dispose (object);
+}
+
+static void
+svg_animation_class_init (SvgAnimationClass *class)
+{
+  GObjectClass *object_class = G_OBJECT_CLASS (class);
+
+  object_class->finalize = svg_animation_finalize;
+  object_class->dispose = svg_animation_dispose;
+}
 
 CalcMode
 svg_animation_type_default_calc_mode (AnimationType type)
@@ -37,14 +92,12 @@ svg_animation_type_default_calc_mode (AnimationType type)
 }
 
 static void
-svg_animation_init (SvgAnimation  *animation,
-                    AnimationType  type)
+svg_animation_setup (SvgAnimation  *animation,
+                     AnimationType  type)
 {
   animation->status = ANIMATION_STATUS_INACTIVE;
 
   animation->type = type;
-  animation->begin = NULL;
-  animation->end = NULL;
 
   animation->simple_duration = INDEFINITE;
   animation->repeat_count = REPEAT_FOREVER;
@@ -87,34 +140,17 @@ svg_animation_add_dep (SvgAnimation *base,
 SvgAnimation *
 svg_animation_new (AnimationType type)
 {
-  SvgAnimation *animation = g_new0 (SvgAnimation, 1);
-  svg_animation_init (animation, type);
+  SvgAnimation *animation = g_object_new (SVG_TYPE_ANIMATION, NULL);
+
+  svg_animation_setup (animation, type);
+
   return animation;
 }
 
 void
 svg_animation_free (SvgAnimation *animation)
 {
-  g_free (animation->id);
-  g_free (animation->href);
-
-  g_clear_pointer (&animation->begin, g_ptr_array_unref);
-  g_clear_pointer (&animation->end, g_ptr_array_unref);
-
-  if (animation->type != ANIMATION_TYPE_MOTION)
-    {
-      for (unsigned int i = 0; i < animation->n_frames; i++)
-        svg_value_unref (animation->frames[i].value);
-    }
-  g_free (animation->frames);
-
-  g_free (animation->motion.path_ref);
-  g_clear_pointer (&animation->motion.path, gsk_path_unref);
-  g_clear_pointer (&animation->motion.measure, gsk_path_measure_unref);
-
-  g_clear_pointer (&animation->deps, g_ptr_array_unref);
-
-  g_free (animation);
+  g_object_unref (animation);
 }
 
 void
@@ -129,7 +165,8 @@ svg_animation_drop_and_free (SvgAnimation *animation)
           time_spec_drop_animation (spec, animation);
         }
     }
-  svg_animation_free (animation);
+
+  g_object_unref (animation);
 }
 
 TimeSpec *
@@ -146,6 +183,66 @@ svg_animation_add_end (SvgAnimation *animation,
 {
   g_ptr_array_add (animation->end, spec);
   return spec;
+}
+
+void
+svg_animation_clear_begin (SvgAnimation *animation)
+{
+  for (unsigned int i = 0; i < animation->begin->len; i++)
+    {
+      TimeSpec *spec = g_ptr_array_index (animation->begin, i);
+      time_spec_drop_animation (spec, animation);
+    }
+
+  g_ptr_array_set_size (animation->begin, 0);
+}
+
+void
+svg_animation_set_begin (SvgAnimation *animation,
+                         Timeline     *timeline,
+                         GArray       *specs)
+{
+  svg_animation_clear_begin (animation);
+
+  for (unsigned int i = 0; i < specs->len; i++)
+    {
+      TimeSpec *spec = &g_array_index (specs, TimeSpec, i);
+      TimeSpec *begin;
+
+      animation->has_begin = 1;
+      begin = svg_animation_add_begin (animation, timeline_get_time_spec (timeline, spec));
+      time_spec_add_animation (begin, animation);
+   }
+}
+
+void
+svg_animation_clear_end (SvgAnimation *animation)
+{
+  for (unsigned int i = 0; i < animation->end->len; i++)
+    {
+      TimeSpec *spec = g_ptr_array_index (animation->end, i);
+      time_spec_drop_animation (spec, animation);
+    }
+
+  g_ptr_array_set_size (animation->end, 0);
+}
+
+void
+svg_animation_set_end (SvgAnimation *animation,
+                       Timeline     *timeline,
+                       GArray       *specs)
+{
+  svg_animation_clear_end (animation);
+
+  for (unsigned int i = 0; i < specs->len; i++)
+    {
+      TimeSpec *spec = &g_array_index (specs, TimeSpec, i);
+      TimeSpec *end;
+
+      animation->has_end = 1;
+      end = svg_animation_add_end (animation, timeline_get_time_spec (timeline, spec));
+      time_spec_add_animation (end, animation);
+   }
 }
 
 gboolean
@@ -360,10 +457,10 @@ svg_animation_clone (SvgAnimation *a,
                      SvgElement   *parent,
                      Timeline     *timeline)
 {
-  SvgAnimation *clone = g_new0 (SvgAnimation, 1);
+  SvgAnimation *clone = g_object_new (SVG_TYPE_ANIMATION, NULL);
 
   clone->type = a->type;
-  clone->status = ANIMATION_STATUS_INACTIVE;
+  clone->status = a->status;
 
   clone->id = NULL;
   clone->href = NULL;
@@ -432,8 +529,8 @@ svg_animation_clone (SvgAnimation *a,
       svg_animation_add_end (clone, p);
     }
 
-  clone->current.begin = INDEFINITE;
-  clone->current.end = INDEFINITE;
+  clone->current.begin = a->current.begin;
+  clone->current.end = a->current.end;
   clone->previous.begin = 0;
   clone->previous.end = 0;
 
@@ -451,7 +548,10 @@ svg_animation_clone (SvgAnimation *a,
   clone->frames = g_new (Frame, a->n_frames);
   memcpy (clone->frames, a->frames, sizeof (Frame) * a->n_frames);
   for (unsigned int i = 0; i < a->n_frames; i++)
-    svg_value_ref (clone->frames[i].value);
+    {
+      if (clone->frames[i].value)
+        svg_value_ref (clone->frames[i].value);
+    }
   clone->n_frames = a->n_frames;
 
   if (a->type == ANIMATION_TYPE_MOTION)
@@ -549,6 +649,7 @@ svg_animation_update_for_spec (SvgAnimation *animation,
             {
               dbg_print ("status", "Restarting %s at %s", animation->id, format_time (spec->time));
               animation->current.begin = spec->time;
+              animation_set_current_end (animation, INDEFINITE);
               changed = TRUE;
             }
         }
@@ -568,7 +669,7 @@ svg_animation_update_for_spec (SvgAnimation *animation,
               animation->current.begin = time;
               changed = TRUE;
 
-              animation_set_current_end (animation, animation->current.end);
+              animation_set_current_end (animation, find_first_time (animation->end, animation->current.begin));
             }
         }
     }
@@ -617,7 +718,7 @@ svg_animation_start (SvgAnimation *animation,
           animation->current.begin = current_time;
           changed = TRUE;
 
-          animation_set_current_end (animation, animation->current.end);
+          animation_set_current_end (animation, find_first_time (animation->end, animation->current.begin));
         }
     }
 
@@ -690,9 +791,6 @@ svg_animation_get_simple_duration (SvgAnimation *animation)
  * relative to the animations current start time.
  * Also what frame we are on, and how far into that
  * frame we are.
- *
- * Note: this assumes that the duration is finite
- * and the animation runs forever.
  */
 gboolean
 svg_animation_get_progress (SvgAnimation *a,
@@ -710,8 +808,20 @@ svg_animation_get_progress (SvgAnimation *a,
   int64_t cycle_start, cycle_end;
   int64_t frame_start, frame_end;
   unsigned int i;
+  int64_t begin, end;
 
-  start = a->current.begin;
+  if (a->status == ANIMATION_STATUS_RUNNING)
+    {
+      begin = a->current.begin;
+      end = a->current.end;
+    }
+  else
+    {
+      begin = a->previous.begin;
+      end = a->previous.end;
+    }
+
+  start = begin;
   //g_assert (start < INDEFINITE);
 
   simple_duration = compute_simple_duration (a);
@@ -723,8 +833,8 @@ svg_animation_get_progress (SvgAnimation *a,
       *out_rep = 0;
       *out_frame = 0;
       *out_frame_t = 0;
-      *out_frame_start = a->current.begin;
-      *out_frame_end = a->current.end;
+      *out_frame_start = begin;
+      *out_frame_end = end;
       return FALSE;
     }
 
@@ -882,7 +992,7 @@ svg_animation_update_state (SvgAnimation *a,
 }
 
 /* }}} */
-/* ((( Reference resolution */
+/* {{{ Reference resolution */
 
 void
 svg_animation_resolve_shadow_references (SvgAnimation *animation,
@@ -1036,5 +1146,17 @@ svg_animation_resolve_shadow_references (SvgAnimation *animation,
 }
 
 /* }}} */
+
+SvgAnimation *
+svg_animation_get_prev_sibling (SvgAnimation *animation)
+{
+  return animation->prev_sibling;
+}
+
+SvgAnimation *
+svg_animation_get_next_sibling (SvgAnimation *animation)
+{
+  return animation->next_sibling;
+}
 
 /* vim:set foldmethod=marker: */

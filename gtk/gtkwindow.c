@@ -192,7 +192,7 @@
 #define RESIZE_HANDLE_CORNER_SIZE 24 /* How resize corners extend */
 #define MNEMONICS_DELAY 300 /* ms */
 #define NO_CONTENT_CHILD_NAT 200 /* ms */
-#define VISIBLE_FOCUS_DURATION 3 /* s */
+#define DEFAULT_VISIBLE_FOCUS_DURATION 3 /* s */
 
 
 /* In case the content (excluding header bar and shadows) of the window
@@ -344,10 +344,10 @@ enum {
   PROP_MAXIMIZED,
   PROP_FULLSCREENED,
 
-  LAST_ARG
+  N_PROPS
 };
 
-static GParamSpec *window_props[LAST_ARG] = { NULL, };
+static GParamSpec *window_props[N_PROPS] = { NULL, };
 
 /* Must be kept in sync with GdkSurfaceEdge ! */
 typedef enum
@@ -416,16 +416,13 @@ static void     surface_state_changed     (GtkWidget          *widget);
 static void     surface_size_changed      (GtkWidget          *widget,
                                            int                 width,
                                            int                 height);
-static gboolean surface_render            (GdkSurface         *surface,
-                                           cairo_region_t     *region,
-                                           GtkWidget          *widget);
 static gboolean surface_event             (GdkSurface         *surface,
                                            GdkEvent           *event,
                                            GtkWidget          *widget);
 static void     after_paint               (GdkFrameClock      *clock,
                                            GtkWindow          *window);
 
-static int gtk_window_focus              (GtkWidget        *widget,
+static gboolean gtk_window_focus          (GtkWidget        *widget,
 				           GtkDirectionType  direction);
 static void gtk_window_move_focus         (GtkWidget         *widget,
                                            GtkDirectionType   dir);
@@ -578,42 +575,27 @@ gtk_window_accessible_interface_init (GtkAccessibleInterface *iface)
 
 static void
 add_tab_bindings (GtkWidgetClass   *widget_class,
-		  GdkModifierType   modifiers,
-		  GtkDirectionType  direction)
+                  GdkModifierType   modifiers,
+                  GtkDirectionType  direction)
 {
-  GtkShortcut *shortcut;
-
-  shortcut = gtk_shortcut_new_with_arguments (
-                 gtk_alternative_trigger_new (gtk_keyval_trigger_new (GDK_KEY_Tab, modifiers),
-                                              gtk_keyval_trigger_new (GDK_KEY_KP_Tab, modifiers)),
-                 gtk_signal_action_new ("move-focus"),
-                 "(i)", direction);
-
-  gtk_widget_class_add_shortcut (widget_class, shortcut);
-
-  g_object_unref (shortcut);
+  gtk_widget_class_add_binding_signal (widget_class,
+                                       GDK_KEY_Tab, modifiers,
+                                       "move-focus",
+                                       "(i)", direction);
 }
 
 static void
 add_arrow_bindings (GtkWidgetClass   *widget_class,
-		    guint             keysym,
-		    GtkDirectionType  direction)
+                    guint             keysym,
+                    GtkDirectionType  direction)
 {
-  guint keypad_keysym = keysym - GDK_KEY_Left + GDK_KEY_KP_Left;
-
-  gtk_widget_class_add_binding_signal (widget_class, keysym, 0,
+  gtk_widget_class_add_binding_signal (widget_class,
+                                       keysym, GDK_NO_MODIFIER_MASK,
                                        "move-focus",
                                        "(i)",
                                        direction);
-  gtk_widget_class_add_binding_signal (widget_class, keysym, GDK_CONTROL_MASK,
-                                       "move-focus",
-                                       "(i)",
-                                       direction);
-  gtk_widget_class_add_binding_signal (widget_class, keypad_keysym, 0,
-                                       "move-focus",
-                                       "(i)",
-                                       direction);
-  gtk_widget_class_add_binding_signal (widget_class, keypad_keysym, GDK_CONTROL_MASK,
+  gtk_widget_class_add_binding_signal (widget_class,
+                                       keysym, GDK_CONTROL_MASK,
                                        "move-focus",
                                        "(i)",
                                        direction);
@@ -882,7 +864,7 @@ gtk_window_class_init (GtkWindowClass *klass)
   window_props[PROP_TITLE] =
       g_param_spec_string ("title", NULL, NULL,
                            NULL,
-                           GTK_PARAM_READWRITE);
+                           G_PARAM_READWRITE | G_PARAM_STATIC_NAME);
 
   /**
    * GtkWindow:startup-id:
@@ -892,7 +874,7 @@ gtk_window_class_init (GtkWindowClass *klass)
   window_props[PROP_STARTUP_ID] =
       g_param_spec_string ("startup-id", NULL, NULL,
                            NULL,
-                           GTK_PARAM_WRITABLE);
+                           G_PARAM_WRITABLE | G_PARAM_STATIC_NAME);
 
   /**
    * GtkWindow:resizable:
@@ -902,7 +884,7 @@ gtk_window_class_init (GtkWindowClass *klass)
   window_props[PROP_RESIZABLE] =
       g_param_spec_boolean ("resizable", NULL, NULL,
                             TRUE,
-                            GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                            G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkWindow:modal:
@@ -912,7 +894,7 @@ gtk_window_class_init (GtkWindowClass *klass)
   window_props[PROP_MODAL] =
       g_param_spec_boolean ("modal", NULL, NULL,
                             FALSE,
-                            GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                            G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkWindow:default-width:
@@ -923,7 +905,7 @@ gtk_window_class_init (GtkWindowClass *klass)
       g_param_spec_int ("default-width", NULL, NULL,
                         -1, G_MAXINT,
                         0,
-                        GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                        G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkWindow:default-height:
@@ -934,7 +916,7 @@ gtk_window_class_init (GtkWindowClass *klass)
       g_param_spec_int ("default-height", NULL, NULL,
                         -1, G_MAXINT,
                         0,
-                        GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                        G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkWindow:destroy-with-parent:
@@ -944,7 +926,7 @@ gtk_window_class_init (GtkWindowClass *klass)
   window_props[PROP_DESTROY_WITH_PARENT] =
       g_param_spec_boolean ("destroy-with-parent", NULL, NULL,
                             FALSE,
-                            GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                            G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkWindow:hide-on-close:
@@ -955,7 +937,7 @@ gtk_window_class_init (GtkWindowClass *klass)
   window_props[PROP_HIDE_ON_CLOSE] =
       g_param_spec_boolean ("hide-on-close", NULL, NULL,
                             FALSE,
-                            GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                            G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkWindow:mnemonics-visible:
@@ -968,7 +950,7 @@ gtk_window_class_init (GtkWindowClass *klass)
   window_props[PROP_MNEMONICS_VISIBLE] =
       g_param_spec_boolean ("mnemonics-visible", NULL, NULL,
                             FALSE,
-                            GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                            G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkWindow:focus-visible:
@@ -981,7 +963,7 @@ gtk_window_class_init (GtkWindowClass *klass)
   window_props[PROP_FOCUS_VISIBLE] =
       g_param_spec_boolean ("focus-visible", NULL, NULL,
                             TRUE,
-                            GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                            G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkWindow:icon-name:
@@ -993,7 +975,7 @@ gtk_window_class_init (GtkWindowClass *klass)
   window_props[PROP_ICON_NAME] =
       g_param_spec_string ("icon-name", NULL, NULL,
                            NULL,
-                           GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                           G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkWindow:display:
@@ -1003,7 +985,7 @@ gtk_window_class_init (GtkWindowClass *klass)
   window_props[PROP_DISPLAY] =
       g_param_spec_object ("display", NULL, NULL,
                            GDK_TYPE_DISPLAY,
-                           GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                           G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkWindow:is-active:
@@ -1013,7 +995,7 @@ gtk_window_class_init (GtkWindowClass *klass)
   window_props[PROP_IS_ACTIVE] =
       g_param_spec_boolean ("is-active", NULL, NULL,
                             FALSE,
-                            GTK_PARAM_READABLE);
+                            G_PARAM_READABLE | G_PARAM_STATIC_NAME);
 
   /**
    * GtkWindow:decorated:
@@ -1023,7 +1005,7 @@ gtk_window_class_init (GtkWindowClass *klass)
   window_props[PROP_DECORATED] =
       g_param_spec_boolean ("decorated", NULL, NULL,
                             TRUE,
-                            GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                            G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkWindow:deletable:
@@ -1033,7 +1015,7 @@ gtk_window_class_init (GtkWindowClass *klass)
   window_props[PROP_DELETABLE] =
       g_param_spec_boolean ("deletable", NULL, NULL,
                             TRUE,
-                            GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                            G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkWindow:transient-for:
@@ -1043,7 +1025,7 @@ gtk_window_class_init (GtkWindowClass *klass)
   window_props[PROP_TRANSIENT_FOR] =
       g_param_spec_object ("transient-for", NULL, NULL,
                            GTK_TYPE_WINDOW,
-                           GTK_PARAM_READWRITE|G_PARAM_CONSTRUCT|G_PARAM_EXPLICIT_NOTIFY);
+                           G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_CONSTRUCT | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkWindow:maximized: (getter is_maximized)
@@ -1059,7 +1041,7 @@ gtk_window_class_init (GtkWindowClass *klass)
   window_props[PROP_MAXIMIZED] =
       g_param_spec_boolean ("maximized", NULL, NULL,
                             FALSE,
-                            GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                            G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkWindow:fullscreened: (getter is_fullscreen)
@@ -1075,7 +1057,7 @@ gtk_window_class_init (GtkWindowClass *klass)
   window_props[PROP_FULLSCREENED] =
       g_param_spec_boolean ("fullscreened", NULL, NULL,
                             FALSE,
-                            GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                            G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkWindow:suspended: (getter is_suspended)
@@ -1089,7 +1071,7 @@ gtk_window_class_init (GtkWindowClass *klass)
   window_props[PROP_SUSPENDED] =
       g_param_spec_boolean ("suspended", NULL, NULL,
                             FALSE,
-                            GTK_PARAM_READABLE|G_PARAM_EXPLICIT_NOTIFY);
+                            G_PARAM_READABLE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkWindow:application:
@@ -1107,7 +1089,7 @@ gtk_window_class_init (GtkWindowClass *klass)
   window_props[PROP_APPLICATION] =
       g_param_spec_object ("application", NULL, NULL,
                            GTK_TYPE_APPLICATION,
-                           GTK_PARAM_READWRITE|G_PARAM_STATIC_STRINGS|G_PARAM_EXPLICIT_NOTIFY);
+                           G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkWindow:default-widget:
@@ -1117,7 +1099,7 @@ gtk_window_class_init (GtkWindowClass *klass)
   window_props[PROP_DEFAULT_WIDGET] =
       g_param_spec_object ("default-widget", NULL, NULL,
                            GTK_TYPE_WIDGET,
-                           GTK_PARAM_READWRITE|G_PARAM_STATIC_STRINGS|G_PARAM_EXPLICIT_NOTIFY);
+                           G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkWindow:focus-widget: (getter get_focus) (setter set_focus)
@@ -1127,7 +1109,7 @@ gtk_window_class_init (GtkWindowClass *klass)
   window_props[PROP_FOCUS_WIDGET] =
       g_param_spec_object ("focus-widget", NULL, NULL,
                            GTK_TYPE_WIDGET,
-                           GTK_PARAM_READWRITE|G_PARAM_STATIC_STRINGS|G_PARAM_EXPLICIT_NOTIFY);
+                           G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkWindow:child:
@@ -1137,7 +1119,7 @@ gtk_window_class_init (GtkWindowClass *klass)
   window_props[PROP_CHILD] =
       g_param_spec_object ("child", NULL, NULL,
                            GTK_TYPE_WIDGET,
-                           GTK_PARAM_READWRITE|G_PARAM_STATIC_STRINGS|G_PARAM_EXPLICIT_NOTIFY);
+                           G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkWindow:titlebar:
@@ -1149,7 +1131,7 @@ gtk_window_class_init (GtkWindowClass *klass)
   window_props[PROP_TITLEBAR] =
       g_param_spec_object ("titlebar", NULL, NULL,
                            GTK_TYPE_WIDGET,
-                           GTK_PARAM_READWRITE|G_PARAM_STATIC_STRINGS|G_PARAM_EXPLICIT_NOTIFY);
+                           G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkWindow:handle-menubar-accel:
@@ -1162,7 +1144,7 @@ gtk_window_class_init (GtkWindowClass *klass)
   window_props[PROP_HANDLE_MENUBAR_ACCEL] =
       g_param_spec_boolean ("handle-menubar-accel", NULL, NULL,
                             TRUE,
-                            GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                            G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkWindow:gravity:
@@ -1180,9 +1162,9 @@ gtk_window_class_init (GtkWindowClass *klass)
       g_param_spec_enum ("gravity", NULL, NULL,
                          GTK_TYPE_WINDOW_GRAVITY,
                          GTK_WINDOW_GRAVITY_TOP_START,
-                         GTK_PARAM_READWRITE|G_PARAM_STATIC_STRINGS|G_PARAM_EXPLICIT_NOTIFY);
+                         G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
-  g_object_class_install_properties (gobject_class, LAST_ARG, window_props);
+  g_object_class_install_properties (gobject_class, N_PROPS, window_props);
 
   /**
    * GtkWindow::activate-focus:
@@ -1353,16 +1335,10 @@ gtk_window_class_init (GtkWindowClass *klass)
   gtk_widget_class_install_action (widget_class, "window.close", NULL,
                                    gtk_window_activate_close);
 
-  gtk_widget_class_add_binding_signal (widget_class, GDK_KEY_space, 0,
-                                       "activate-focus", NULL);
-  gtk_widget_class_add_binding_signal (widget_class, GDK_KEY_KP_Space, 0,
+  gtk_widget_class_add_binding_signal (widget_class, GDK_KEY_space, GDK_NO_MODIFIER_MASK,
                                        "activate-focus", NULL);
 
-  gtk_widget_class_add_binding_signal (widget_class, GDK_KEY_Return, 0,
-                                       "activate-default", NULL);
-  gtk_widget_class_add_binding_signal (widget_class, GDK_KEY_ISO_Enter, 0,
-                                       "activate-default", NULL);
-  gtk_widget_class_add_binding_signal (widget_class, GDK_KEY_KP_Enter, 0,
+  gtk_widget_class_add_binding_signal (widget_class, GDK_KEY_Return, GDK_NO_MODIFIER_MASK,
                                        "activate-default", NULL);
 
   gtk_widget_class_add_binding_signal (widget_class, GDK_KEY_I, GDK_CONTROL_MASK|GDK_SHIFT_MASK,
@@ -1878,7 +1854,7 @@ gtk_window_init (GtkWindow *window)
 
 #ifdef GDK_WINDOWING_X11
   g_signal_connect (gtk_settings_get_for_display (priv->display),
-                    "notify::gtk-application-prefer-dark-theme",
+                    "notify::gtk-interface-color-scheme",
                     G_CALLBACK (gtk_window_on_theme_variant_changed), window);
 #endif
 
@@ -2289,7 +2265,7 @@ gtk_window_root_set_focus (GtkRoot   *root,
       g_clear_object (&priv->move_focus_widget);
     }
 
-  g_object_notify (G_OBJECT (self), "focus-widget");
+  g_object_notify_by_pspec (G_OBJECT (self), window_props[PROP_FOCUS_WIDGET]);
 }
 
 static void
@@ -2487,20 +2463,14 @@ gtk_window_set_default_widget (GtkWindow *window,
 
   if (priv->default_widget != default_widget)
     {
-      GtkWidget *old_default_widget = NULL;
-
       if (default_widget)
 	g_object_ref (default_widget);
 
       if (priv->default_widget)
 	{
-          old_default_widget = priv->default_widget;
-
           if (priv->focus_widget != priv->default_widget ||
               !gtk_widget_get_receives_default (priv->default_widget))
-            _gtk_widget_set_has_default (priv->default_widget, FALSE);
-
-          gtk_widget_queue_draw (priv->default_widget);
+            gtk_widget_set_has_default (priv->default_widget, FALSE);
 	}
 
       priv->default_widget = default_widget;
@@ -2511,19 +2481,11 @@ gtk_window_set_default_widget (GtkWindow *window,
 	{
           if (priv->focus_widget == NULL ||
               !gtk_widget_get_receives_default (priv->focus_widget))
-            _gtk_widget_set_has_default (priv->default_widget, TRUE);
-
-          gtk_widget_queue_draw (priv->default_widget);
+            gtk_widget_set_has_default (priv->default_widget, TRUE);
 	}
-
-      if (old_default_widget)
-	g_object_notify (G_OBJECT (old_default_widget), "has-default");
 
       if (default_widget)
-	{
-	  g_object_notify (G_OBJECT (default_widget), "has-default");
-	  g_object_unref (default_widget);
-	}
+	g_object_unref (default_widget);
 
       g_object_notify_by_pspec (G_OBJECT (window), window_props[PROP_DEFAULT_WIDGET]);
     }
@@ -2547,23 +2509,17 @@ gtk_window_get_default_widget (GtkWindow *window)
   return priv->default_widget;
 }
 
-static gboolean
+static void
 handle_keys_changed (gpointer data)
 {
   GtkWindow *window = GTK_WINDOW (data);
   GtkWindowPrivate *priv = gtk_window_get_instance_private (window);
 
-  if (priv->keys_changed_handler)
-    {
-      g_source_remove (priv->keys_changed_handler);
-      priv->keys_changed_handler = 0;
-    }
+  g_clear_handle_id (&priv->keys_changed_handler, g_source_remove);
 
   if (priv->application_shortcut_controller)
     gtk_shortcut_controller_update_accels (GTK_SHORTCUT_CONTROLLER (priv->application_shortcut_controller));
   g_signal_emit (window, window_signals[KEYS_CHANGED], 0);
-
-  return FALSE;
 }
 
 void
@@ -2573,7 +2529,7 @@ _gtk_window_notify_keys_changed (GtkWindow *window)
 
   if (!priv->keys_changed_handler)
     {
-      priv->keys_changed_handler = g_idle_add (handle_keys_changed, window);
+      priv->keys_changed_handler = g_idle_add_once (handle_keys_changed, window);
       gdk_source_set_static_name_by_id (priv->keys_changed_handler, "[gtk] handle_keys_changed");
     }
 }
@@ -2751,8 +2707,7 @@ gtk_window_dispose (GObject *object)
 
   unset_fullscreen_monitor (window);
 
-  g_list_free_full (priv->foci, (GDestroyNotify) gtk_pointer_focus_unref);
-  priv->foci = NULL;
+  g_clear_list (&priv->foci, (GDestroyNotify) gtk_pointer_focus_unref);
 
   g_clear_object (&priv->move_focus_widget);
   gtk_window_set_focus (window, NULL);
@@ -3137,8 +3092,7 @@ unset_titlebar (GtkWindow *window)
 
   if (priv->title_box != NULL)
     {
-      gtk_widget_unparent (priv->title_box);
-      priv->title_box = NULL;
+      g_clear_pointer (&priv->title_box, gtk_widget_unparent);
       priv->titlebar = NULL;
     }
 }
@@ -3499,12 +3453,12 @@ icon_list_from_theme (GtkWindow   *window,
         info = gtk_icon_theme_lookup_icon (icon_theme, name, NULL,
                                            48, scale,
                                            gtk_widget_get_direction (GTK_WIDGET (window)),
-                                           0);
+                                           GTK_ICON_LOOKUP_NONE);
       else
         info = gtk_icon_theme_lookup_icon (icon_theme, name, NULL,
                                            sizes[i], scale,
                                            gtk_widget_get_direction (GTK_WIDGET (window)),
-                                           0);
+                                           GTK_ICON_LOOKUP_NONE);
 
       texture = render_paintable_to_texture (GDK_PAINTABLE (info));
       list = g_list_insert_sorted (list, texture, (GCompareFunc) icon_size_compare);
@@ -3577,7 +3531,7 @@ gtk_window_get_icon_for_size (GtkWindow *window,
   info = gtk_icon_theme_lookup_icon (gtk_icon_theme_get_for_display (gtk_widget_get_display (GTK_WIDGET (window))),
                                      name, NULL, size, scale,
                                      gtk_widget_get_direction (GTK_WIDGET (window)),
-                                     0);
+                                     GTK_ICON_LOOKUP_NONE);
   if (info == NULL)
     return NULL;
 
@@ -3951,16 +3905,9 @@ gtk_window_finalize (GObject *object)
   g_free (priv->title);
   gtk_window_release_application (window);
 
-  if (priv->geometry_info)
-    {
-      g_free (priv->geometry_info);
-    }
+  g_free (priv->geometry_info);
 
-  if (priv->keys_changed_handler)
-    {
-      g_source_remove (priv->keys_changed_handler);
-      priv->keys_changed_handler = 0;
-    }
+  g_clear_handle_id (&priv->keys_changed_handler, g_source_remove);
 
   seat = gdk_display_get_default_seat (priv->display);
   if (seat)
@@ -3974,17 +3921,9 @@ gtk_window_finalize (GObject *object)
 
   g_free (priv->startup_id);
 
-  if (priv->mnemonics_display_timeout_id)
-    {
-      g_source_remove (priv->mnemonics_display_timeout_id);
-      priv->mnemonics_display_timeout_id = 0;
-    }
+  g_clear_handle_id (&priv->mnemonics_display_timeout_id, g_source_remove);
 
-  if (priv->focus_visible_timeout)
-    {
-      g_source_remove (priv->focus_visible_timeout);
-      priv->focus_visible_timeout = 0;
-    }
+  g_clear_handle_id (&priv->focus_visible_timeout, g_source_remove);
 
   g_clear_object (&priv->constraint_solver);
   g_clear_object (&priv->renderer);
@@ -4160,8 +4099,7 @@ gtk_window_notify_startup (GtkWindow *window)
           if (!startup_id_is_fake (priv->startup_id))
             gdk_toplevel_set_startup_id (GDK_TOPLEVEL (priv->surface), priv->startup_id);
 
-          g_free (priv->startup_id);
-          priv->startup_id = NULL;
+          g_clear_pointer (&priv->startup_id, g_free);
         }
       else
         gdk_toplevel_set_startup_id (GDK_TOPLEVEL (priv->surface), NULL);
@@ -4586,7 +4524,6 @@ gtk_window_realize (GtkWidget *widget)
   g_signal_connect_swapped (surface, "notify::state", G_CALLBACK (surface_state_changed), widget);
   g_signal_connect_swapped (surface, "notify::mapped", G_CALLBACK (surface_state_changed), widget);
   g_signal_connect_swapped (surface, "notify::capabilities", G_CALLBACK (update_window_actions), widget);
-  g_signal_connect (surface, "render", G_CALLBACK (surface_render), widget);
   g_signal_connect (surface, "event", G_CALLBACK (surface_event), widget);
   g_signal_connect (surface, "compute-size", G_CALLBACK (toplevel_compute_size), widget);
 
@@ -4679,8 +4616,6 @@ gtk_window_unrealize (GtkWidget *widget)
       info->last.flags = 0;
     }
 
-  gsk_renderer_unrealize (priv->renderer);
-
   /* Icons */
   gtk_window_unrealize_icon (window);
 
@@ -4690,13 +4625,13 @@ gtk_window_unrealize (GtkWidget *widget)
   if (priv->child)
     gtk_widget_unrealize (priv->child);
 
+  gsk_renderer_unrealize (priv->renderer);
   g_clear_object (&priv->renderer);
 
   surface = priv->surface;
 
   g_signal_handlers_disconnect_by_func (surface, surface_state_changed, widget);
   g_signal_handlers_disconnect_by_func (surface, update_window_actions, widget);
-  g_signal_handlers_disconnect_by_func (surface, surface_render, widget);
   g_signal_handlers_disconnect_by_func (surface, surface_event, widget);
   g_signal_handlers_disconnect_by_func (surface, toplevel_compute_size, widget);
 
@@ -5000,16 +4935,6 @@ maybe_unset_focus_and_default (GtkWindow *window)
 
   if (priv->unset_default)
     gtk_window_set_default_widget (window, NULL);
-}
-
-static gboolean
-surface_render (GdkSurface     *surface,
-                cairo_region_t *region,
-                GtkWidget      *widget)
-{
-  gtk_widget_render (widget, surface, region);
-
-  return TRUE;
 }
 
 static void
@@ -5453,7 +5378,7 @@ _gtk_window_unset_focus_and_default (GtkWindow *window,
   child = priv->focus_widget;
   if (child && (child == widget || gtk_widget_is_ancestor (child, widget)))
     {
-      priv->move_focus_widget = g_object_ref (widget);
+      g_set_object (&priv->move_focus_widget, widget);
       priv->move_focus = TRUE;
     }
 
@@ -5787,8 +5712,7 @@ unset_fullscreen_monitor (GtkWindow *window)
   if (priv->initial_fullscreen_monitor)
     {
       g_signal_handlers_disconnect_by_func (priv->initial_fullscreen_monitor, unset_fullscreen_monitor, window);
-      g_object_unref (priv->initial_fullscreen_monitor);
-      priv->initial_fullscreen_monitor = NULL;
+      g_clear_object (&priv->initial_fullscreen_monitor);
     }
 }
 
@@ -6028,7 +5952,7 @@ gtk_window_set_display (GtkWindow  *window,
   g_signal_handlers_disconnect_by_func (gtk_settings_get_for_display (priv->display),
                                         gtk_window_on_theme_variant_changed, window);
   g_signal_connect (gtk_settings_get_for_display (display),
-                    "notify::gtk-application-prefer-dark-theme",
+                    "notify::gtk-interface-color-scheme",
                     G_CALLBACK (gtk_window_on_theme_variant_changed), window);
 #endif
 
@@ -6053,17 +5977,17 @@ gtk_window_set_theme_variant (GtkWindow *window)
 {
 #ifdef GDK_WINDOWING_X11
   GtkWindowPrivate *priv = gtk_window_get_instance_private (window);
-  gboolean   dark_theme_requested;
+  GtkInterfaceColorScheme color_scheme;
 
   g_object_get (gtk_settings_get_for_display (priv->display),
-                "gtk-application-prefer-dark-theme", &dark_theme_requested,
+                "gtk-interface-color-scheme", &color_scheme,
                 NULL);
 
 G_GNUC_BEGIN_IGNORE_DEPRECATIONS
 
   if (GDK_IS_X11_SURFACE (priv->surface))
     gdk_x11_surface_set_theme_variant (priv->surface,
-                                       dark_theme_requested ? "dark" : NULL);
+                                       color_scheme == GTK_INTERFACE_COLOR_SCHEME_DARK ? "dark" : NULL);
 
 G_GNUC_END_IGNORE_DEPRECATIONS
 
@@ -6328,14 +6252,10 @@ gtk_window_set_mnemonics_visible (GtkWindow *window,
       g_object_notify_by_pspec (G_OBJECT (window), window_props[PROP_MNEMONICS_VISIBLE]);
     }
 
-  if (priv->mnemonics_display_timeout_id)
-    {
-      g_source_remove (priv->mnemonics_display_timeout_id);
-      priv->mnemonics_display_timeout_id = 0;
-    }
+  g_clear_handle_id (&priv->mnemonics_display_timeout_id, g_source_remove);
 }
 
-static gboolean
+static void
 schedule_mnemonics_visible_cb (gpointer data)
 {
   GtkWindow *window = data;
@@ -6344,8 +6264,6 @@ schedule_mnemonics_visible_cb (gpointer data)
   priv->mnemonics_display_timeout_id = 0;
 
   gtk_window_set_mnemonics_visible (window, TRUE);
-
-  return FALSE;
 }
 
 void
@@ -6359,7 +6277,7 @@ _gtk_window_schedule_mnemonics_visible (GtkWindow *window)
     return;
 
   priv->mnemonics_display_timeout_id =
-    g_timeout_add (MNEMONICS_DELAY, schedule_mnemonics_visible_cb, window);
+    g_timeout_add_once (MNEMONICS_DELAY, schedule_mnemonics_visible_cb, window);
   gdk_source_set_static_name_by_id (priv->mnemonics_display_timeout_id, "[gtk] schedule_mnemonics_visible_cb");
 }
 
@@ -6382,7 +6300,7 @@ gtk_window_get_focus_visible (GtkWindow *window)
   return priv->focus_visible;
 }
 
-static gboolean
+static void
 unset_focus_visible (gpointer data)
 {
   GtkWindow *window = data;
@@ -6391,8 +6309,6 @@ unset_focus_visible (gpointer data)
   priv->focus_visible_timeout = 0;
 
   gtk_window_set_focus_visible (window, FALSE);
-
-  return G_SOURCE_REMOVE;
 }
 
 /**
@@ -6419,16 +6335,21 @@ gtk_window_set_focus_visible (GtkWindow *window,
 
   priv->focus_visible = setting;
 
-  if (priv->focus_visible_timeout)
-    {
-      g_source_remove (priv->focus_visible_timeout);
-      priv->focus_visible_timeout = 0;
-    }
+  g_clear_handle_id (&priv->focus_visible_timeout, g_source_remove);
 
   if (priv->focus_visible)
     {
-      priv->focus_visible_timeout = g_timeout_add_seconds (VISIBLE_FOCUS_DURATION, unset_focus_visible, window);
-      gdk_source_set_static_name_by_id (priv->focus_visible_timeout, "[gtk] unset_focus_visible");
+      GtkSettings *settings = gtk_widget_get_settings (GTK_WIDGET (window));
+      int keyboard_focus_visible_timeout;
+
+      g_object_get (settings, "gtk-keyboard-focus-visible-timeout", &keyboard_focus_visible_timeout, NULL);
+      if (keyboard_focus_visible_timeout != 0)
+        {
+          if (keyboard_focus_visible_timeout < 0)
+            keyboard_focus_visible_timeout = DEFAULT_VISIBLE_FOCUS_DURATION;
+          priv->focus_visible_timeout = g_timeout_add_seconds_once (keyboard_focus_visible_timeout, unset_focus_visible, window);
+          gdk_source_set_static_name_by_id (priv->focus_visible_timeout, "[gtk] unset_focus_visible");
+        }
     }
 
   if (changed)

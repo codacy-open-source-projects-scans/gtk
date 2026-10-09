@@ -28,17 +28,12 @@ G_BEGIN_DECLS
 
 typedef struct _GtkColorSwatch        GtkColorSwatch;
 
-GType       gtk_color_swatch_get_type         (void) G_GNUC_CONST;
+GType       gtk_color_swatch_get_type         (void);
 GtkWidget * gtk_color_swatch_new              (void);
 void        gtk_color_swatch_set_rgba         (GtkColorSwatch *swatch,
                                                const GdkRGBA  *color);
 gboolean    gtk_color_swatch_get_rgba         (GtkColorSwatch *swatch,
                                                GdkRGBA        *color);
-void        gtk_color_swatch_set_hsva         (GtkColorSwatch *swatch,
-                                               double          h,
-                                               double          s,
-                                               double          v,
-                                               double          a);
 void        gtk_color_swatch_set_can_drop     (GtkColorSwatch *swatch,
                                                gboolean        can_drop);
 void        gtk_color_swatch_set_can_drag     (GtkColorSwatch *swatch,

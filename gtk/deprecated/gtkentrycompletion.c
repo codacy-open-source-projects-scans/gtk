@@ -66,7 +66,7 @@
 
 #include "gtkentryprivate.h"
 #include "gtktextprivate.h"
-#include "gtkcelllayout.h"
+#include "gtkcelllayoutprivate.h"
 #include "gtkcellareabox.h"
 
 #include "gtkcellrenderertext.h"
@@ -305,7 +305,7 @@ gtk_entry_completion_class_init (GtkEntryCompletionClass *klass)
   entry_completion_props[PROP_MODEL] =
       g_param_spec_object ("model", NULL, NULL,
                            GTK_TYPE_TREE_MODEL,
-                           GTK_PARAM_READWRITE);
+                           G_PARAM_READWRITE | G_PARAM_STATIC_NAME);
 
   /**
    * GtkEntryCompletion:minimum-key-length:
@@ -315,7 +315,7 @@ gtk_entry_completion_class_init (GtkEntryCompletionClass *klass)
   entry_completion_props[PROP_MINIMUM_KEY_LENGTH] =
       g_param_spec_int ("minimum-key-length", NULL, NULL,
                         0, G_MAXINT, 1,
-                        GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                        G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkEntryCompletion:text-column:
@@ -327,7 +327,7 @@ gtk_entry_completion_class_init (GtkEntryCompletionClass *klass)
   entry_completion_props[PROP_TEXT_COLUMN] =
     g_param_spec_int ("text-column", NULL, NULL,
                       -1, G_MAXINT, -1,
-                      GTK_PARAM_READWRITE);
+                      G_PARAM_READWRITE | G_PARAM_STATIC_NAME);
 
   /**
    * GtkEntryCompletion:inline-completion:
@@ -341,7 +341,7 @@ gtk_entry_completion_class_init (GtkEntryCompletionClass *klass)
   entry_completion_props[PROP_INLINE_COMPLETION] =
       g_param_spec_boolean ("inline-completion", NULL, NULL,
                             FALSE,
-                            GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                            G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkEntryCompletion:popup-completion:
@@ -352,7 +352,7 @@ gtk_entry_completion_class_init (GtkEntryCompletionClass *klass)
   entry_completion_props[PROP_POPUP_COMPLETION] =
       g_param_spec_boolean ("popup-completion", NULL, NULL,
                             TRUE,
-                            GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                            G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkEntryCompletion:popup-set-width:
@@ -363,7 +363,7 @@ gtk_entry_completion_class_init (GtkEntryCompletionClass *klass)
   entry_completion_props[PROP_POPUP_SET_WIDTH] =
       g_param_spec_boolean ("popup-set-width", NULL, NULL,
                             TRUE,
-                            GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                            G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkEntryCompletion:popup-single-match:
@@ -377,7 +377,7 @@ gtk_entry_completion_class_init (GtkEntryCompletionClass *klass)
   entry_completion_props[PROP_POPUP_SINGLE_MATCH] =
       g_param_spec_boolean ("popup-single-match", NULL, NULL,
                             TRUE,
-                            GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                            G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkEntryCompletion:inline-selection:
@@ -388,7 +388,7 @@ gtk_entry_completion_class_init (GtkEntryCompletionClass *klass)
   entry_completion_props[PROP_INLINE_SELECTION] =
       g_param_spec_boolean ("inline-selection", NULL, NULL,
                             FALSE,
-                            GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                            G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkEntryCompletion:cell-area:
@@ -402,7 +402,7 @@ gtk_entry_completion_class_init (GtkEntryCompletionClass *klass)
   entry_completion_props[PROP_CELL_AREA] =
       g_param_spec_object ("cell-area", NULL, NULL,
                            GTK_TYPE_CELL_AREA,
-                           GTK_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY);
+                           G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_CONSTRUCT_ONLY);
 
   g_object_class_install_properties (object_class, NUM_PROPERTIES, entry_completion_props);
 }
@@ -734,7 +734,7 @@ gtk_entry_completion_default_completion_func (GtkEntryCompletion *completion,
         {
           case_normalized_string = g_utf8_casefold (normalized_string, -1);
 
-          if (!strncmp (key, case_normalized_string, strlen (key)))
+          if (strncmp (key, case_normalized_string, strlen (key)) == 0)
             ret = TRUE;
 
           g_free (case_normalized_string);
@@ -1075,7 +1075,7 @@ gtk_entry_completion_complete (GtkEntryCompletion *completion)
  * to have a list displaying all (and just) strings in the completion list,
  * and to get those strings from @column in the model of @completion.
  *
- * This functions creates and adds a `GtkCellRendererText` for the selected
+ * This function creates and adds a `GtkCellRendererText` for the selected
  * column. If you need to set the text column, but don't want the cell
  * renderer, use g_object_set() to set the
  * [property@Gtk.EntryCompletion:text-column] property directly.
@@ -1699,7 +1699,7 @@ gtk_entry_completion_get_inline_selection (GtkEntryCompletion *completion)
 }
 
 
-static int
+static void
 gtk_entry_completion_timeout (gpointer data)
 {
   GtkEntryCompletion *completion = GTK_ENTRY_COMPLETION (data);
@@ -1730,7 +1730,6 @@ gtk_entry_completion_timeout (gpointer data)
     }
   else if (gtk_widget_get_visible (completion->popup_window))
     _gtk_entry_completion_popdown (completion);
-  return G_SOURCE_REMOVE;
 }
 
 static inline gboolean
@@ -1771,11 +1770,7 @@ gtk_entry_completion_key_pressed (GtkEventControllerKey *controller,
       keyval == GDK_KEY_ISO_Enter ||
       keyval == GDK_KEY_Escape)
     {
-      if (completion->completion_timeout)
-        {
-          g_source_remove (completion->completion_timeout);
-          completion->completion_timeout = 0;
-        }
+      g_clear_handle_id (&completion->completion_timeout, g_source_remove);
     }
 
   if (!gtk_widget_get_mapped (completion->popup_window))
@@ -2010,11 +2005,7 @@ gtk_entry_completion_changed (GtkWidget *widget,
     return;
 
   /* (re)install completion timeout */
-  if (completion->completion_timeout)
-    {
-      g_source_remove (completion->completion_timeout);
-      completion->completion_timeout = 0;
-    }
+  g_clear_handle_id (&completion->completion_timeout, g_source_remove);
 
   if (!gtk_editable_get_text (GTK_EDITABLE (widget)))
     return;
@@ -2029,9 +2020,7 @@ gtk_entry_completion_changed (GtkWidget *widget,
     }
 
   completion->completion_timeout =
-    g_timeout_add (COMPLETION_TIMEOUT,
-                   gtk_entry_completion_timeout,
-                   completion);
+    g_timeout_add_once (COMPLETION_TIMEOUT, gtk_entry_completion_timeout, completion);
   gdk_source_set_static_name_by_id (completion->completion_timeout, "[gtk] gtk_entry_completion_timeout");
 }
 
@@ -2140,8 +2129,7 @@ disconnect_completion_signals (GtkEntryCompletion *completion)
   if (completion->changed_id > 0 &&
       g_signal_handler_is_connected (text, completion->changed_id))
     {
-      g_signal_handler_disconnect (text, completion->changed_id);
-      completion->changed_id = 0;
+      g_clear_signal_handler (&completion->changed_id, text);
     }
 
   g_clear_object (&completion->insert_text_signal_group);
@@ -2153,16 +2141,8 @@ disconnect_completion_signals (GtkEntryCompletion *completion)
 void
 _gtk_entry_completion_disconnect (GtkEntryCompletion *completion)
 {
-  if (completion->completion_timeout)
-    {
-      g_source_remove (completion->completion_timeout);
-      completion->completion_timeout = 0;
-    }
-  if (completion->check_completion_idle)
-    {
-      g_source_destroy (completion->check_completion_idle);
-      completion->check_completion_idle = NULL;
-    }
+  g_clear_handle_id (&completion->completion_timeout, g_source_remove);
+  g_clear_pointer (&completion->check_completion_idle, g_source_destroy);
 
   if (gtk_widget_get_mapped (completion->popup_window))
     _gtk_entry_completion_popdown (completion);

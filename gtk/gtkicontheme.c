@@ -798,6 +798,7 @@ gtk_icon_theme_load_in_thread (GtkIconTheme *self)
   GTask *task;
 
   task = g_task_new (self, NULL, NULL, NULL);
+  g_task_set_source_tag (task, gtk_icon_theme_load_in_thread);
   g_task_set_task_data (task, g_object_ref (self), g_object_unref);
   g_task_run_in_thread (task, load_theme_thread);
   g_object_unref (task);
@@ -969,7 +970,7 @@ gtk_icon_theme_class_init (GtkIconThemeClass *klass)
   props[PROP_ICON_NAMES] =
       g_param_spec_boxed ("icon-names", NULL, NULL,
                           G_TYPE_STRV,
-                          GTK_PARAM_READABLE);
+                          G_PARAM_READABLE | G_PARAM_STATIC_NAME);
 
   /**
    * GtkIconTheme:search-path:
@@ -985,7 +986,7 @@ gtk_icon_theme_class_init (GtkIconThemeClass *klass)
   props[PROP_SEARCH_PATH] =
       g_param_spec_boxed ("search-path", NULL, NULL,
                           G_TYPE_STRV,
-                          GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                          G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkIconTheme:resource-path:
@@ -1002,7 +1003,7 @@ gtk_icon_theme_class_init (GtkIconThemeClass *klass)
   props[PROP_RESOURCE_PATH] =
       g_param_spec_boxed ("resource-path", NULL, NULL,
                           G_TYPE_STRV,
-                          GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                          G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   /**
    * GtkIconTheme:theme-name:
@@ -1016,7 +1017,7 @@ gtk_icon_theme_class_init (GtkIconThemeClass *klass)
   props[PROP_THEME_NAME] =
       g_param_spec_string ("theme-name", NULL, NULL,
                            NULL,
-                           GTK_PARAM_READWRITE|G_PARAM_EXPLICIT_NOTIFY);
+                           G_PARAM_READWRITE | G_PARAM_STATIC_NAME | G_PARAM_EXPLICIT_NOTIFY);
 
   g_object_class_install_properties (gobject_class, LAST_PROP, props);
 }
@@ -1148,12 +1149,12 @@ gtk_icon_theme_set_display (GtkIconTheme *self,
                              G_CALLBACK (display_closed__mainthread_unlocked),
                              gtk_icon_theme_ref_ref (self->ref),
                              (GClosureNotify)gtk_icon_theme_ref_unref,
-                             0);
+                             G_CONNECT_DEFAULT);
       g_signal_connect_data (self->display_settings, "notify::gtk-icon-theme-name",
                              G_CALLBACK (theme_changed__mainthread_unlocked),
                              gtk_icon_theme_ref_ref (self->ref),
                              (GClosureNotify)gtk_icon_theme_ref_unref,
-                             0);
+                             G_CONNECT_DEFAULT);
 
       g_object_notify_by_pspec (G_OBJECT (self), props[PROP_DISPLAY]);
     }
@@ -1253,7 +1254,7 @@ theme_changed_idle__mainthread_unlocked (gpointer user_data)
       g_object_unref (self);
     }
 
-  return FALSE;
+  return G_SOURCE_REMOVE;
 }
 
 static void
@@ -1680,8 +1681,7 @@ insert_theme (GtkIconTheme *self,
                   g_key_file_set_list_separator (theme_file, ',');
                   if (!g_key_file_load_from_file (theme_file, file, 0, NULL))
                     {
-                      g_key_file_free (theme_file);
-                      theme_file = NULL;
+                      g_clear_pointer (&theme_file, g_key_file_free);
                     }
                 }
               g_free (file);
@@ -2385,6 +2385,7 @@ gtk_icon_theme_lookup_icon (GtkIconTheme       *self,
           if (!has_paintable)
             {
               GTask *task = g_task_new (icon, NULL, NULL, NULL);
+              g_task_set_source_tag (task, gtk_icon_theme_lookup_icon);
               g_task_run_in_thread (task, load_icon_thread);
               g_object_unref (task);
             }

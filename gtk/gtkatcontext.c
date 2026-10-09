@@ -100,19 +100,9 @@ gtk_at_context_dispose (GObject *gobject)
 
   gtk_at_context_unrealize (self);
 
-  if (self->accessible_parent != NULL)
-    {
-      g_object_remove_weak_pointer (G_OBJECT (self->accessible_parent),
-                                    (gpointer *) &self->accessible_parent);
-      self->accessible_parent = NULL;
-    }
+  g_clear_weak_pointer (&self->accessible_parent);
 
-  if (self->next_accessible_sibling != NULL)
-    {
-      g_object_remove_weak_pointer (G_OBJECT (self->next_accessible_sibling),
-                                    (gpointer *) &self->next_accessible_sibling);
-      self->next_accessible_sibling = NULL;
-    }
+  g_clear_weak_pointer (&self->next_accessible_sibling);
 
   G_OBJECT_CLASS (gtk_at_context_parent_class)->dispose (gobject);
 }
@@ -266,7 +256,7 @@ gtk_at_context_class_init (GtkATContextClass *klass)
                        GTK_ACCESSIBLE_ROLE_NONE,
                        G_PARAM_READWRITE |
                        G_PARAM_CONSTRUCT |
-                       G_PARAM_STATIC_STRINGS);
+                       G_PARAM_STATIC_NAME);
 
   /**
    * GtkATContext:accessible:
@@ -278,7 +268,7 @@ gtk_at_context_class_init (GtkATContextClass *klass)
                          GTK_TYPE_ACCESSIBLE,
                          G_PARAM_READWRITE |
                          G_PARAM_CONSTRUCT_ONLY |
-                         G_PARAM_STATIC_STRINGS);
+                         G_PARAM_STATIC_NAME);
 
   /**
    * GtkATContext:display:
@@ -289,7 +279,7 @@ gtk_at_context_class_init (GtkATContextClass *klass)
     g_param_spec_object ("display", NULL, NULL,
                          GDK_TYPE_DISPLAY,
                          G_PARAM_READWRITE |
-                         G_PARAM_STATIC_STRINGS |
+                         G_PARAM_STATIC_NAME |
                          G_PARAM_EXPLICIT_NOTIFY);
 
   /**
@@ -777,7 +767,7 @@ gtk_at_context_create (GtkAccessibleRole  accessible_role,
   /* Fall back to the test context, so we can get debugging data */
   if (res == NULL)
     res = g_object_new (GTK_TYPE_TEST_AT_CONTEXT,
-                        "accessible_role", accessible_role,
+                        "accessible-role", accessible_role,
                         "accessible", accessible,
                         "display", display,
                         NULL);

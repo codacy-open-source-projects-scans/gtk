@@ -21,6 +21,11 @@
 #error "Only <gsk/gsk.h> can be included directly."
 #endif
 
+#include <glib.h>
+#include <gdk/version/gdkversionmacros.h>
+
+G_BEGIN_DECLS
+
 /**
  * GskRenderNodeType:
  * @GSK_NOT_A_RENDER_NODE: Error type. No node will ever have this type.
@@ -150,6 +155,14 @@
  * Since: 4.22
  */
 
+/**
+ * GSK_TURBULENCE_NODE:
+ *
+ * A node that generates a Perlin noise or fractal Brownian motion pattern.
+ *
+ * Since: 4.24
+ */
+
 typedef enum {
   GSK_NOT_A_RENDER_NODE = 0,
   GSK_CONTAINER_NODE,
@@ -189,6 +202,7 @@ typedef enum {
   GSK_ISOLATION_NODE,
   GSK_DISPLACEMENT_NODE,
   GSK_ARITHMETIC_NODE,
+  GSK_TURBULENCE_NODE,
 } GskRenderNodeType;
 
 /**
@@ -313,6 +327,26 @@ typedef enum {
   GSK_CORNER_BOTTOM_RIGHT,
   GSK_CORNER_BOTTOM_LEFT
 } GskCorner;
+
+/**
+ * GskSide:
+ * @GSK_SIDE_TOP: The top side
+ * @GSK_SIDE_RIGHT: The right side
+ * @GSK_SIDE_BOTTOM: The bottom side
+ * @GSK_SIDE_LEFT: The left side
+ *
+ * The sides of a rectangle as used by `GskRectSnap` or `GskBorderNode`.
+ * 
+ * This is the order used by CSS shorthand arguments.
+ *
+ * Since: 4.24
+ */
+typedef enum {
+  GSK_SIDE_TOP GDK_AVAILABLE_ENUMERATOR_IN_4_24 = 0,
+  GSK_SIDE_RIGHT GDK_AVAILABLE_ENUMERATOR_IN_4_24 = 1,
+  GSK_SIDE_BOTTOM GDK_AVAILABLE_ENUMERATOR_IN_4_24 = 2,
+  GSK_SIDE_LEFT GDK_AVAILABLE_ENUMERATOR_IN_4_24 = 3
+} GskSide;
 
 /**
  * GskFillRule:
@@ -602,3 +636,27 @@ typedef enum
   GSK_MASK_MODE_LUMINANCE,
   GSK_MASK_MODE_INVERTED_LUMINANCE
 } GskMaskMode;
+
+/**
+ * GskSnapDirection:
+ * @GSK_SNAP_NONE: Don't snap the value
+ * @GSK_SNAP_FLOOR: Use floor() to snap
+ * @GSK_SNAP_CEIL: Use ceil() to snap
+ * @GSK_SNAP_ROUND: Use round() to snap
+ *
+ * Specifies how a coordinate should be snapped to the pixel grid.
+ *
+ * Note that the top and left sides of rectangles need to be snapped
+ * in the opposite direction from the bottom and right sides to make
+ * the rectangle grow or shrink.
+ *
+ * Since: 4.24
+ */
+typedef enum {
+  GSK_SNAP_NONE,
+  GSK_SNAP_FLOOR,
+  GSK_SNAP_CEIL,
+  GSK_SNAP_ROUND
+} GskSnapDirection;
+
+G_END_DECLS

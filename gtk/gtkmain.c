@@ -28,6 +28,7 @@
 #include "gdk/gdkdisplayprivate.h"
 #include "gdk/gdkprofilerprivate.h"
 #include "gdk/gdkdebugprivate.h"
+#include "gdk/gdkseatprivate.h"
 #include "gsk/gskprivate.h"
 #include "gsk/gskrendernodeprivate.h"
 #include "gtknative.h"
@@ -50,13 +51,13 @@
 
 #include <glib/gi18n-lib.h>
 
-#include "gtkdebug.h"
+#include "gtkdebugprivate.h"
 #include "gtkdropprivate.h"
 #include "gtkmain.h"
 #include "gtkmediafileprivate.h"
 #include "gtkmodulesprivate.h"
 #include "gtkprivate.h"
-#include "gtkrecentmanager.h"
+#include "gtkrecentmanagerprivate.h"
 #include "gtktooltipprivate.h"
 #include "gtkwidgetprivate.h"
 #include "gtkwindowprivate.h"
@@ -90,123 +91,7 @@ static int pre_initialized = FALSE;
 static int gtk_initialized = FALSE;
 static GList *current_events = NULL;
 
-typedef struct {
-  GdkDisplay *display;
-  guint flags;
-} DisplayDebugFlags;
-
-#define N_DEBUG_DISPLAYS 4
-
-DisplayDebugFlags debug_flags[N_DEBUG_DISPLAYS];
-
-/* This is a flag to speed up development builds. We set it to TRUE when
- * any of the debug displays has debug flags >0, but we never set it back
- * to FALSE. This way we don't need to call gtk_widget_get_display() in
- * hot paths.
- */
-gboolean any_display_debug_flags_set = FALSE;
-
-GtkDebugFlags
-gtk_get_display_debug_flags (GdkDisplay *display)
-{
-  int i;
-
-  if (display == NULL)
-    display = gdk_display_get_default ();
-
-  for (i = 0; i < N_DEBUG_DISPLAYS; i++)
-    {
-      if (debug_flags[i].display == display)
-        return (GtkDebugFlags)debug_flags[i].flags;
-    }
-
-  return 0;
-}
-
-gboolean
-gtk_get_any_display_debug_flag_set (void)
-{
-  return any_display_debug_flags_set;
-}
-
-void
-gtk_set_display_debug_flags (GdkDisplay    *display,
-                             GtkDebugFlags  flags)
-{
-  int i;
-
-  for (i = 0; i < N_DEBUG_DISPLAYS; i++)
-    {
-      if (debug_flags[i].display == NULL)
-        debug_flags[i].display = display;
-
-      if (debug_flags[i].display == display)
-        {
-          debug_flags[i].flags = flags;
-          if (flags > 0)
-            any_display_debug_flags_set = TRUE;
-
-          return;
-        }
-    }
-}
-
-/**
- * gtk_get_debug_flags:
- *
- * Returns the GTK debug flags that are currently active.
- *
- * This function is intended for GTK modules that want
- * to adjust their debug output based on GTK debug flags.
- *
- * Returns: the GTK debug flags.
- */
-GtkDebugFlags
-gtk_get_debug_flags (void)
-{
-  if (gtk_get_any_display_debug_flag_set ())
-    return gtk_get_display_debug_flags (gdk_display_get_default ());
-
-  return 0;
-}
-
-/**
- * gtk_set_debug_flags:
- * @flags: the debug flags to set
- *
- * Sets the GTK debug flags.
- */
-void
-gtk_set_debug_flags (GtkDebugFlags flags)
-{
-  gtk_set_display_debug_flags (gdk_display_get_default (), flags);
-}
-
-static const GdkDebugKey gtk_debug_keys[] = {
-  { "keybindings", GTK_DEBUG_KEYBINDINGS, "Information about keyboard shortcuts" },
-  { "modules", GTK_DEBUG_MODULES, "Information about modules and extensions" },
-  { "icontheme", GTK_DEBUG_ICONTHEME, "Information about icon themes" },
-  { "printing", GTK_DEBUG_PRINTING, "Information about printing" },
-  { "geometry", GTK_DEBUG_GEOMETRY, "Information about size allocation" },
-  { "size-request", GTK_DEBUG_SIZE_REQUEST, "Information about size requests" },
-  { "actions", GTK_DEBUG_ACTIONS, "Information about actions and menu models" },
-  { "constraints", GTK_DEBUG_CONSTRAINTS, "Information from the constraints solver" },
-  { "text", GTK_DEBUG_TEXT, "Information about GtkTextView" },
-  { "tree", GTK_DEBUG_TREE, "Information about GtkTreeView" },
-  { "layout", GTK_DEBUG_LAYOUT, "Information from layout managers" },
-  { "builder-trace", GTK_DEBUG_BUILDER_TRACE, "Trace GtkBuilder operation" },
-  { "builder-objects", GTK_DEBUG_BUILDER_OBJECTS, "Log unused GtkBuilder objects" },
-  { "no-css-cache", GTK_DEBUG_NO_CSS_CACHE, "Disable style property cache" },
-  { "interactive", GTK_DEBUG_INTERACTIVE, "Enable the GTK inspector" },
-  { "touch-ui", GTK_DEBUG_TOUCHSCREEN, "Show touch ui elements for pointer events" },
-  { "snapshot", GTK_DEBUG_SNAPSHOT, "Generate debug render nodes" },
-  { "accessibility", GTK_DEBUG_A11Y, "Information about accessibility state changes" },
-  { "iconfallback", GTK_DEBUG_ICONFALLBACK, "Information about icon fallback" },
-  { "invert-text-dir", GTK_DEBUG_INVERT_TEXT_DIR, "Invert the default text direction" },
-  { "css", GTK_DEBUG_CSS, "Information about deprecated CSS features" },
-  { "builder", GTK_DEBUG_BUILDER, "Information about deprecated GtkBuilder features" },
-  { "session-mgmt", GTK_DEBUG_SESSION, "Information about session saving" },
-};
+/* {{{ Initialization */
 
 /* This checks to see if the process is running suid or sgid
  * at the current time. If so, we don’t allow GTK to be initialized.
@@ -392,9 +277,7 @@ enum_locale_proc (LPSTR locale)
             {
               char str[300];
 
-              strcpy (str, language);
-              strcat (str, "_");
-              strcat (str, country);
+              g_snprintf (str, sizeof (str), "%s_%s", language, country);
 
               if (setlocale (LC_ALL, str) != NULL)
                 setlocale_called = TRUE;
@@ -557,13 +440,7 @@ do_pre_parse_initialization (void)
 
   gdk_pre_parse ();
 
-  debug_flags[0].flags = gdk_parse_debug_var ("GTK_DEBUG",
-      "GTK_DEBUG can be set to values that make GTK print out different\n"
-      "types of debugging information or change the behavior of GTK for\n"
-      "debugging purposes.\n",
-      gtk_debug_keys,
-      G_N_ELEMENTS (gtk_debug_keys));
-  any_display_debug_flags_set = debug_flags[0].flags > 0;
+  gtk_debug_init ();
 
   env_string = g_getenv ("GTK_SLOWDOWN");
   if (env_string)
@@ -590,7 +467,7 @@ gettext_initialization (void)
 static void
 default_display_notify_cb (GdkDisplayManager *dm)
 {
-  debug_flags[0].display = gdk_display_get_default ();
+  gtk_debug_init_display ();
 }
 
 static void
@@ -696,6 +573,9 @@ gtk_init_check (void)
 
   if (ret && (gtk_get_debug_flags () & GTK_DEBUG_INTERACTIVE))
     gtk_window_set_interactive_debugging (TRUE);
+
+  if (ret && (gtk_get_debug_flags () & GTK_DEBUG_GENERAL_INFO))
+    gtk_inspector_print_general_info (gdk_display_get_default ());
 
   return ret;
 }
@@ -817,6 +697,8 @@ gtk_is_initialized (void)
   return gtk_initialized;
 }
 
+/* }}} */
+/* {{{ Locale handling */
 
 /**
  * gtk_get_locale_direction:
@@ -910,6 +792,9 @@ gtk_get_default_language (void)
   return pango_language_get_default ();
 }
 
+/* }}} */
+/* {{{ Clipboard sync */
+
 typedef struct {
   GMainLoop *store_loop;
   guint n_clipboards;
@@ -941,12 +826,11 @@ clipboard_store_finished (GObject      *source,
     g_main_loop_quit (store->store_loop);
 }
 
-static gboolean
+static void
 sync_timed_out_cb (ClipboardStore *store)
 {
   store->timeout_id = 0;
   g_main_loop_quit (store->store_loop);
-  return G_SOURCE_REMOVE;
 }
 
 void
@@ -978,7 +862,7 @@ gtk_main_sync (void)
   g_slist_free (displays);
 
   store.store_loop = g_main_loop_new (NULL, TRUE);
-  store.timeout_id = g_timeout_add_seconds (10, (GSourceFunc) sync_timed_out_cb, &store);
+  store.timeout_id = g_timeout_add_seconds_once (10, (GSourceOnceFunc) sync_timed_out_cb, &store);
   gdk_source_set_static_name_by_id (store.timeout_id, "[gtk] gtk_main_sync clipboard store timeout");
 
   if (g_main_loop_is_running (store.store_loop))
@@ -992,6 +876,9 @@ gtk_main_sync (void)
   /* Synchronize the recent manager singleton */
   _gtk_recent_manager_sync ();
 }
+
+/* }}} */
+/* {{{ Event handling */
 
 static GdkEvent *
 rewrite_event_for_surface (GdkEvent  *event,
@@ -1077,21 +964,20 @@ rewrite_event_for_surface (GdkEvent  *event,
   return NULL;
 }
 
-/* If there is a pointer or keyboard grab in effect with owner_events = TRUE,
- * then what X11 does is deliver the event normally if it was going to this
- * client, otherwise, delivers it in terms of the grab surface. This function
- * rewrites events to the effect that events going to the same window group
- * are delivered normally, otherwise, the event is delivered in terms of the
- * grab window.
+/* If there is a seat grab in effect what GDK does is deliver the event normally
+ * if it was going to this client, otherwise, delivers it in terms of the grab
+ * surface.
+ *
+ * This function rewrites events to the effect that events going to the same
+ * window group are delivered normally, otherwise, the event is delivered in
+ * terms of the grab surface.
  */
 static GdkEvent *
 rewrite_event_for_grabs (GdkEvent *event)
 {
   GdkSurface *grab_surface;
   GtkWidget *event_widget, *grab_widget;
-  gboolean owner_events;
-  GdkDisplay *display;
-  GdkDevice *device;
+  GdkSeat *seat;
 
   switch ((guint) gdk_event_get_event_type (event))
     {
@@ -1110,10 +996,10 @@ rewrite_event_for_grabs (GdkEvent *event)
     case GDK_TOUCHPAD_SWIPE:
     case GDK_TOUCHPAD_PINCH:
     case GDK_TOUCHPAD_HOLD:
-      display = gdk_event_get_display (event);
-      device = gdk_event_get_device (event);
+      seat = gdk_event_get_seat (event);
+      grab_surface = gdk_seat_get_topmost_grab_surface (seat);
 
-      if (!gdk_device_grab_info (display, device, &grab_surface, &owner_events))
+      if (!grab_surface)
         return NULL;
       break;
     default:
@@ -1126,18 +1012,10 @@ rewrite_event_for_grabs (GdkEvent *event)
   if (!grab_widget)
     return NULL;
 
-  /* If owner_events was set, events in client surfaces get forwarded
+  /* Events in client surfaces get forwarded
    * as normal, but we consider other window groups foreign surfaces.
    */
-  if (owner_events &&
-      gtk_main_get_window_group (grab_widget) == gtk_main_get_window_group (event_widget))
-    return NULL;
-
-  /* If owner_events was not set, events only get sent to the grabbing
-   * surface.
-   */
-  if (!owner_events &&
-      grab_surface == gtk_native_get_surface (gtk_widget_get_native (event_widget)))
+  if (gtk_main_get_window_group (grab_widget) == gtk_main_get_window_group (event_widget))
     return NULL;
 
   return rewrite_event_for_surface (event, grab_surface);
@@ -2094,3 +1972,7 @@ gtk_event_treat_as_touch (GdkEvent *event)
       return GTK_DISPLAY_DEBUG_CHECK (gdk_event_get_display (event), TOUCHSCREEN);
     }
 }
+
+/* }}} */
+
+/* vim:set foldmethod=marker: */

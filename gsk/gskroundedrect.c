@@ -41,7 +41,6 @@
 #include "gskroundedrect.h"
 #include "gskroundedrectprivate.h"
 
-#include "gskdebugprivate.h"
 #include "gskrectprivate.h"
 
 #include <math.h>
@@ -988,13 +987,6 @@ gsk_rounded_rect_to_float (const GskRoundedRect   *self,
       rect[4 + i] = self->corner[i].width;
       rect[8 + i] = self->corner[i].height;
     }
-}
-
-static inline gboolean
-gsk_size_equal (const graphene_size_t *s1,
-                const graphene_size_t *s2)
-{
-  return s1->width == s2->width && s1->height == s2->height;
 }
 
 gboolean

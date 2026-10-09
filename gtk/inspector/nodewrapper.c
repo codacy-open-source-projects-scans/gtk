@@ -272,6 +272,7 @@ get_roles (GskRenderNodeType node_type)
     case GSK_TEXTURE_NODE:
     case GSK_TEXTURE_SCALE_NODE:
     case GSK_ISOLATION_NODE:
+    case GSK_TURBULENCE_NODE:
     case GSK_NOT_A_RENDER_NODE:
     default:
       return NULL;
@@ -499,6 +500,7 @@ render_heatmap_node (cairo_t               *cr,
     case GSK_ISOLATION_NODE:
     case GSK_DISPLACEMENT_NODE:
     case GSK_ARITHMETIC_NODE:
+    case GSK_TURBULENCE_NODE:
       {
         GskRenderNode **children;
         gsize i, n_children;
@@ -700,6 +702,7 @@ heatmap_from_mask (GskRenderNode        *mask,
                                                                       bounds.origin.y,
                                                                       bounds.size.width + 20,
                                                                       bounds.size.height),
+                                                 GSK_RECT_SNAP_NONE,
                                                  &GRAPHENE_POINT_INIT (bounds.origin.x,
                                                                        bounds.origin.y),
                                                  &GRAPHENE_POINT_INIT (bounds.origin.x + bounds.size.width,
@@ -708,6 +711,7 @@ heatmap_from_mask (GskRenderNode        *mask,
   gsk_gradient_free (gradient);
 
   displacement = gsk_displacement_node_new (&bounds,
+                                            GSK_RECT_SNAP_NONE,
                                             gradient_node,
                                             container,
                                             (GdkColorChannel[2]) { GDK_COLOR_CHANNEL_RED, GDK_COLOR_CHANNEL_GREEN },

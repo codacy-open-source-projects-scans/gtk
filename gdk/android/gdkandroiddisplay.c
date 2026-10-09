@@ -94,12 +94,10 @@ gdk_android_display_finalize (GObject *object)
   if (self->choreographer_source)
     {
       g_source_destroy (self->choreographer_source);
-      g_source_unref (self->choreographer_source);
-      self->choreographer_source = NULL;
+      g_clear_pointer (&self->choreographer_source, g_source_unref);
     }
 
-  g_list_free (self->visible_surfaces);
-  self->visible_surfaces = NULL;
+  g_clear_list (&self->visible_surfaces, NULL);
 
   g_clear_object (&display->clipboard);
 
@@ -233,9 +231,14 @@ gdk_android_display_get_setting (GdkDisplay *display,
       g_value_set_enum (value, color_schemes[self->night_mode]);
       return TRUE;
     }
+  else if (g_strcmp0 (name, "gtk-accent-color") == 0)
+    {
+      g_value_set_boxed (value, &self->accent_color_rgba);
+      return TRUE;
+    }
   else if (g_strcmp0 (name, "gtk-decoration-layout") == 0)
     {
-      g_value_set_string (value, ":");
+      g_value_set_static_string (value, ":");
       return TRUE;
     }
   else
@@ -285,7 +288,7 @@ gdk_android_display_class_init (GdkAndroidDisplayClass *klass)
    */
   obj_properties[PROP_NIGHT_MODE] = g_param_spec_enum ("night-mode", NULL, NULL,
                                                        GDK_TYPE_ANDROID_DISPLAY_NIGHT_MODE, GDK_ANDROID_DISPLAY_NIGHT_UNDEFINED,
-                                                       G_PARAM_STATIC_STRINGS | G_PARAM_READABLE | G_PARAM_EXPLICIT_NOTIFY);
+                                                       G_PARAM_STATIC_NAME | G_PARAM_READABLE | G_PARAM_EXPLICIT_NOTIFY);
 
    /**
    * GdkAndroidDisplay:accent-color: (getter get_accent_color)
@@ -296,7 +299,7 @@ gdk_android_display_class_init (GdkAndroidDisplayClass *klass)
    */
   obj_properties[PROP_ACCENT_COLOR] = g_param_spec_boxed ("accent-color", NULL, NULL,
                                                           GDK_TYPE_RGBA,
-                                                          G_PARAM_STATIC_STRINGS | G_PARAM_READABLE | G_PARAM_EXPLICIT_NOTIFY);
+                                                          G_PARAM_STATIC_NAME | G_PARAM_READABLE | G_PARAM_EXPLICIT_NOTIFY);
 
   g_object_class_install_properties (object_class, N_PROPERTIES, obj_properties);
 }
@@ -467,6 +470,7 @@ gdk_android_display_update_configuration (GdkAndroidDisplay *self, jobject conte
       self->accent_color = color;
       self->accent_color_rgba = GDK_RGBA_INIT_FROM_INT (color);
       g_debug ("accent color changed");
+      gdk_display_setting_changed ((GdkDisplay *) self, "gtk-accent-color");
       g_object_notify_by_pspec ((GObject *) self, obj_properties[PROP_ACCENT_COLOR]);
     }
 }

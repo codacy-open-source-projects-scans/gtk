@@ -183,7 +183,7 @@ svg_number_resolve (const SvgValue    *value,
                     SvgComputeContext *context)
 {
   const SvgNumber *n = (const SvgNumber *) value;
-  SvgElementType type = svg_element_get_type (shape);
+  SvgElementType type = svg_element_get_element_type (shape);
 
   switch (n->unit)
     {
@@ -456,7 +456,7 @@ svg_number_parse2 (GtkCssParser        *parser,
            gtk_css_token_is (token, GTK_CSS_TOKEN_SIGNED_DIMENSION) ||
            gtk_css_token_is (token, GTK_CSS_TOKEN_SIGNLESS_DIMENSION))
     {
-      guint i;
+      unsigned int i;
 
       number = token->dimension.value;
 

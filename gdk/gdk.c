@@ -163,6 +163,7 @@ static const GdkDebugKey gdk_feature_keys[] = {
   { "d3d12",      GDK_FEATURE_D3D12,            "Disable Direct3D 12" },
   { "offload",    GDK_FEATURE_OFFLOAD,          "Disable graphics offload" },
   { "threads",    GDK_FEATURE_THREADS,          "Disable threads where possible" },
+  { "throttling", GDK_FEATURE_THROTTLING,       "Ignore compositor throttling hints" },
 };
 
 static GdkFeatures gdk_features;
@@ -402,10 +403,23 @@ gdk_get_startup_notification_id (void)
   return startup_notification_id;
 }
 
+static gboolean
+is_running_in_flatpak (void)
+{
+  return g_file_test ("/.flatpak-info", G_FILE_TEST_EXISTS);
+}
+
+static gboolean
+is_running_in_snap (void)
+{
+  return g_getenv ("SNAP") != NULL;
+}
+
 gboolean
 gdk_running_in_sandbox (void)
 {
-  return g_file_test ("/.flatpak-info", G_FILE_TEST_EXISTS);
+  return is_running_in_flatpak () ||
+         is_running_in_snap (); // TODO: snaps could be unsandboxed
 }
 
 #define DBUS_BUS_NAME "org.freedesktop.DBus"
@@ -609,7 +623,7 @@ ensure_portals_app_id_registered (void)
  * - If we are in a sandbox, we always want to use portals
  * - Otherwise, we want to use the portal if it is available
  *
- * The upshot is: if this functions return true and using the
+ * The upshot is: if this function returns true and using the
  * portal fails, we should treat it as an error, not fall back
  * to something else.
  */
@@ -629,7 +643,7 @@ gdk_display_should_use_portal (GdkDisplay *display,
   if (portals_disabled)
     return FALSE;
 
-  if (disabled_portals != NULL &&
+  if (disabled_portals != NULL && portal_interface != NULL &&
       g_hash_table_contains (disabled_portals, portal_interface))
     return FALSE;
 

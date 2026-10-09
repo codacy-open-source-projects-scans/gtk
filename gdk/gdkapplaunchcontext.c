@@ -63,8 +63,11 @@ static void    gdk_app_launch_context_launch_failed (GAppLaunchContext *context,
 enum
 {
   PROP_0,
-  PROP_DISPLAY
+  PROP_DISPLAY,
+  N_PROPS
 };
+
+static GParamSpec *props[N_PROPS] = { NULL, };
 
 G_DEFINE_TYPE (GdkAppLaunchContext, gdk_app_launch_context, G_TYPE_APP_LAUNCH_CONTEXT)
 
@@ -110,7 +113,7 @@ gdk_app_launch_context_class_init (GdkAppLaunchContextClass *klass)
   GObjectClass *gobject_class = G_OBJECT_CLASS (klass);
   GAppLaunchContextClass *context_class = G_APP_LAUNCH_CONTEXT_CLASS (klass);
 
-  gobject_class->set_property = gdk_app_launch_context_set_property,
+  gobject_class->set_property = gdk_app_launch_context_set_property;
   gobject_class->get_property = gdk_app_launch_context_get_property;
 
   gobject_class->finalize = gdk_app_launch_context_finalize;
@@ -124,10 +127,11 @@ gdk_app_launch_context_class_init (GdkAppLaunchContextClass *klass)
    *
    * The display that the `GdkAppLaunchContext` is on.
    */
-  g_object_class_install_property (gobject_class, PROP_DISPLAY,
-    g_param_spec_object ("display", NULL, NULL,
-                         GDK_TYPE_DISPLAY,
-                         G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY | G_PARAM_STATIC_STRINGS));
+  props[PROP_DISPLAY] = g_param_spec_object ("display", NULL, NULL,
+                                             GDK_TYPE_DISPLAY,
+                                             G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY | G_PARAM_STATIC_NAME);
+
+  g_object_class_install_properties (gobject_class, N_PROPS, props);
 }
 
 static void
@@ -256,11 +260,7 @@ gdk_app_launch_context_set_icon (GdkAppLaunchContext *context,
   g_return_if_fail (GDK_IS_APP_LAUNCH_CONTEXT (context));
   g_return_if_fail (icon == NULL || G_IS_ICON (icon));
 
-  if (context->icon)
-    {
-      g_object_unref (context->icon);
-      context->icon = NULL;
-    }
+  g_clear_object (&context->icon);
 
   if (icon)
     context->icon = g_object_ref (icon);

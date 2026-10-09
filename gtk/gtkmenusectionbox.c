@@ -505,19 +505,11 @@ gtk_menu_section_box_dispose (GObject *object)
 {
   GtkMenuSectionBox *box = GTK_MENU_SECTION_BOX (object);
 
-  if (box->separator_sync_idle)
-    {
-      g_source_remove (box->separator_sync_idle);
-      box->separator_sync_idle = 0;
-    }
+  g_clear_handle_id (&box->separator_sync_idle, g_source_remove);
 
   g_clear_object (&box->separator);
 
-  if (box->tracker)
-    {
-      gtk_menu_tracker_free (box->tracker);
-      box->tracker = NULL;
-    }
+  g_clear_pointer (&box->tracker, gtk_menu_tracker_free);
 
   g_clear_object (&box->indicators);
   g_clear_pointer (&box->custom_slots, g_hash_table_unref);

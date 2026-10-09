@@ -31,14 +31,16 @@ typedef struct _GskBlurNode                    GskBlurNode;
 #define GSK_TYPE_BLUR_NODE (gsk_blur_node_get_type())
 
 GDK_AVAILABLE_IN_ALL
-GType                   gsk_blur_node_get_type                  (void) G_GNUC_CONST;
+GType                   gsk_blur_node_get_type                  (void);
 GDK_AVAILABLE_IN_ALL
 GskRenderNode *         gsk_blur_node_new                       (GskRenderNode            *child,
                                                                  float                     radius);
 GDK_AVAILABLE_IN_ALL
 GskRenderNode *         gsk_blur_node_get_child                 (const GskRenderNode      *node) G_GNUC_PURE;
-GDK_AVAILABLE_IN_ALL
+GDK_DEPRECATED_IN_4_26_FOR(gsk_blur_node_get_blur_radius)
 float                   gsk_blur_node_get_radius                (const GskRenderNode      *node) G_GNUC_PURE;
+GDK_AVAILABLE_IN_4_26
+const graphene_size_t * gsk_blur_node_get_blur_radius           (const GskRenderNode      *node) G_GNUC_PURE;
 
 G_END_DECLS
 

@@ -120,6 +120,8 @@ struct _GtkInspectorGeneral
   GtkWidget *media_backend;
   GtkWidget *im_module;
   GtkWidget *a11y_backend;
+  GtkWidget *symbol_visibility;
+  GtkWidget *symbol_visibility_warning;
   GtkWidget *gl_backend_version;
   GtkWidget *gl_backend_version_row;
   GtkWidget *gl_backend_vendor;
@@ -493,7 +495,7 @@ init_im_module (GtkInspectorGeneral *gen)
   g_signal_connect_object (settings,
                            "notify::gtk-im-module",
                            G_CALLBACK (im_module_changed),
-                           gen, 0);
+                           gen, G_CONNECT_DEFAULT);
 }
 
 static void
@@ -545,6 +547,23 @@ dump_a11y_backend (GdkDisplay *display,
                    GString    *string)
 {
   g_string_append_printf (string, "| Accessibility backend | %s |\n", get_a11y_backend (display));
+}
+
+/* }}} */
+/* {{{ Symbol Visibility */
+
+static void
+init_symbol_visibility (GtkInspectorGeneral *gen)
+{
+  gtk_label_set_label (GTK_LABEL (gen->symbol_visibility), SYMBOL_VISIBILITY);
+  gtk_widget_set_visible (gen->symbol_visibility_warning, strcmp (SYMBOL_VISIBILITY, "hidden") != 0);
+}
+
+static void
+dump_symbol_visibility (GdkDisplay *display,
+                        GString    *string)
+{
+  g_string_append_printf (string, "| Symbol Visibility | %s |\n", SYMBOL_VISIBILITY);
 }
 
 /* }}} */
@@ -699,7 +718,7 @@ init_gl (GtkInspectorGeneral *gen)
 
       gtk_label_set_text (GTK_LABEL (gen->gl_backend_vendor), eglQueryString (egl_display, EGL_VENDOR));
 
-      gtk_label_set_text (GTK_LABEL (gen->egl_extensions_row_name), "EGL extensions");
+      gtk_label_set_text (GTK_LABEL (gen->egl_extensions_row_name), _("EGL extensions"));
       append_extensions (gen->egl_extensions_list, eglQueryString (egl_display, EGL_EXTENSIONS));
     }
   else
@@ -725,7 +744,7 @@ G_GNUC_BEGIN_IGNORE_DEPRECATIONS
 G_GNUC_BEGIN_IGNORE_DEPRECATIONS
       screen = XScreenNumberOfScreen (gdk_x11_display_get_xscreen (gen->display));
 G_GNUC_END_IGNORE_DEPRECATIONS
-      gtk_label_set_text (GTK_LABEL (gen->egl_extensions_row_name), "GLX extensions");
+      gtk_label_set_text (GTK_LABEL (gen->egl_extensions_row_name), _("GLX extensions"));
       append_extensions (gen->egl_extensions_list, glXQueryExtensionsString (dpy, screen));
     }
   else
@@ -739,19 +758,19 @@ G_GNUC_END_IGNORE_DEPRECATIONS
     {
       PFNWGLGETEXTENSIONSSTRINGARBPROC my_wglGetExtensionsStringARB;
 
-      gtk_label_set_text (GTK_LABEL (gen->gl_backend_vendor), "Microsoft WGL");
+      gtk_label_set_text (GTK_LABEL (gen->gl_backend_vendor), _("Microsoft WGL"));
       gtk_widget_set_visible (gen->gl_backend_version, FALSE);
 
       my_wglGetExtensionsStringARB = (PFNWGLGETEXTENSIONSSTRINGARBPROC) wglGetProcAddress("wglGetExtensionsStringARB");
 
       if (my_wglGetExtensionsStringARB)
         {
-          gtk_label_set_text (GTK_LABEL (gen->egl_extensions_row_name), "WGL extensions");
+          gtk_label_set_text (GTK_LABEL (gen->egl_extensions_row_name), _("WGL extensions"));
           append_extensions (gen->egl_extensions_list, my_wglGetExtensionsStringARB (wglGetCurrentDC ()));
         }
       else
         {
-          gtk_label_set_text (GTK_LABEL (gen->egl_extensions_row_name), "WGL extensions: none");
+          gtk_label_set_text (GTK_LABEL (gen->egl_extensions_row_name), _("WGL extensions: none"));
         }
     }
   else
@@ -2173,6 +2192,8 @@ gtk_inspector_general_class_init (GtkInspectorGeneralClass *klass)
   gtk_widget_class_bind_template_child (widget_class, GtkInspectorGeneral, media_backend);
   gtk_widget_class_bind_template_child (widget_class, GtkInspectorGeneral, im_module);
   gtk_widget_class_bind_template_child (widget_class, GtkInspectorGeneral, a11y_backend);
+  gtk_widget_class_bind_template_child (widget_class, GtkInspectorGeneral, symbol_visibility);
+  gtk_widget_class_bind_template_child (widget_class, GtkInspectorGeneral, symbol_visibility_warning);
   gtk_widget_class_bind_template_child (widget_class, GtkInspectorGeneral, gl_error);
   gtk_widget_class_bind_template_child (widget_class, GtkInspectorGeneral, gl_error_row);
   gtk_widget_class_bind_template_child (widget_class, GtkInspectorGeneral, gl_version);
@@ -2225,6 +2246,7 @@ gtk_inspector_general_set_display (GtkInspectorGeneral *gen,
   init_media (gen);
   init_im_module (gen);
   init_a11y_backend (gen);
+  init_symbol_visibility (gen);
   init_app_id (gen);
   init_env (gen);
   init_display (gen);
@@ -2250,6 +2272,7 @@ generate_dump (GdkDisplay *display)
   dump_media (display, string);
   dump_im_module (display, string);
   dump_a11y_backend (display, string);
+  dump_symbol_visibility (display, string);
   g_string_append (string, "\n</details>\n");
 
   g_string_append (string, "\n<details><summary>Application</summary>\n\n");
@@ -2308,6 +2331,23 @@ gtk_inspector_general_clip (GtkButton           *button,
 
   clipboard = gtk_widget_get_clipboard (GTK_WIDGET (gen));
   gdk_clipboard_set_text (clipboard, text);
+
+  g_free (text);
+}
+
+void
+gtk_inspector_print_general_info (GdkDisplay *display)
+{
+  char *text;
+  const char *file;
+
+  text = generate_dump (display);
+
+  file = g_getenv ("GTK_INSPECTOR_GENERAL_INFO_FILE");
+  if (file)
+    g_file_set_contents (file, text, strlen (text), NULL);
+  else
+    g_print ("%s\n", text);
 
   g_free (text);
 }

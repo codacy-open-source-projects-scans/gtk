@@ -6,9 +6,9 @@ The format is a text format that follows the [CSS syntax rules](https://drafts.c
 
 The grammar of a node text representation using [the CSS value definition syntax](https://drafts.csswg.org/css-values-3/#value-defs) looks like this:
 
-    document: <@-rule>*<node>
+    document: <@-rule>*<node>*
     @-rule: @cicp "name" { <property>* }
-    node: container [ "name" ] { <document> } | <node-type> [ "name" ] { <property>* } | "name"
+    node: container [ "name" ] { <node>* } | <node-type> [ "name" ] { <property>* } | "name"
     property: <property-name>: <node> | <value> ;
 
 Each node has its own `<node-type>` and supports a custom set of properties, each with their own `<property-name>` and syntax. The following paragraphs document each of the nodes and their properties.
@@ -150,7 +150,69 @@ Rounded rectangles use a CSS-like syntax:
 
     rounded-rect: <rect> [ "/" <number>{1,4} [ "/" <number>{1,4} ] ]
 
+# Paths
+
+The syntax for paths is as follows:
+
+    path: "name" | <contour> | [ "name" ] "{" <contour>+ "}"
+
+Paths can reference a previously defined path by name just like textures can.
+When defining a named path, the long syntax must be used even when specifying a path with a single contour.
+
+    contour: <string> | <rounded-rect> | rect { … } | rounded-rect { … } | circle { … }
+
+The string uses SVG path syntax.
+The rounded-rect can be used as a shortcut for specifying a rounded rectangle
+(if the corners are non-empty) or a rectangle.
+
+
+The following properties can be set for rect contours:
+
+| property    | syntax           | default                | printed     |
+| ----------- | ---------------- | ---------------------- | ----------- |
+| outline     | `<rect>`         | 0 0 50 50              | always      |
+
+The following properties can be set for rounded-rect contours:
+
+| property    | syntax           | default                | printed     |
+| ----------- | ---------------- | ---------------------- | ----------- |
+| outline     | `<rounded-rect>` | 0 0 50 50              | always      |
+
+The following properties can be set for circle contours:
+
+| property    | syntax           | default                | printed     |
+| ----------- | ---------------- | ---------------------- | ----------- |
+| center      | `<point>`        | 10 10                  | always      |
+| radius      | `<boolean>`      | 10                     | always      |
+
+# Snapping
+
+Various nodes have snapping properties. They are specified as up to four values
+for the top, right, bottom, and left side respectively. If omitted, the values
+for the left, bottom, or right side are set to the ones from the right, top,
+and top side respectively, just like CSS borders/padding/margin.
+
+    snap: <single-snap>{1,4}
+    single-snap: none | ceil | floor | round | grow | shrink
+
+The "grow" and "shrink" values map to one of "floor" or "ceil" depending on which
+side they are used for.
+
 # Nodes
+
+### arithmetic
+
+| property    | syntax           | default                | printed     |
+| ----------- | ---------------- | ---------------------- | ----------- |
+| bounds      | `<number>`       | 1                      | non-default |
+| snap        | `<snap>`         | none                   | non-default |
+| first       | `<node>`         | color { }              | always      |
+| second      | `<node>`         | color { }              | always      |
+| k           | `<number>{4}`    | 0 0 0 0                | always      |
+| color-state | `<color-state>`  | srgb                   | non-default |
+
+Creates a new arithmetic node, with an effect as described in the CSS
+[filter effects spec](https://www.w3.org/TR/filter-effects-1/#elementdef-fecomposite).
 
 ### container
 
@@ -178,18 +240,25 @@ Possible values for the mode property are:
 
 | property | syntax           | default                | printed     |
 | -------- | ---------------- | ---------------------- | ----------- |
-| blur     | `<number>`       | 1                      | non-default |
+| blur     | `<number>`       | 1                      | never       |
 | child    | `<node>`         | color { }              | always      |
+| radius   | `<number>{1,2}`  | 0.5                    | always      |
 
 Creates a node like `gsk_blur_node_new()` with the given properties.
 
+The "blur" property is a deprecated way to specify the blur radius
+using units of doubles of the std deviation. Use the "radius" property
+instead.
+
 ### border
 
-| property | syntax           | default                | printed     |
-| -------- | ---------------- | ---------------------- | ----------- |
-| colors   | `<color>{1,4}`   | black                  | non-default |
-| outline  | `<rounded-rect>` | 50                     | always      |
-| widths   | `<number>{1,4}`  | 1                      | non-default |
+| property    | syntax           | default                | printed     |
+| ----------- | ---------------- | ---------------------- | ----------- |
+| colors      | `<color>{1,4}`   | black                  | non-default |
+| outline     | `<rounded-rect>` | 50                     | always      |
+| snap        | `<snap>`         | none                   | non-default |
+| border-snap | `<snap>`         | none                   | non-default |
+| widths      | `<number>{1,4}`  | 1                      | non-default |
 
 Creates a node like `gsk_border_node_new()` with the given properties.
 
@@ -216,6 +285,7 @@ a base64-encoded data url of a cairo script.
 | -------- | ---------------- | ---------------------- | ----------- |
 | child    | `<node>`         | color { }              | always      |
 | clip     | `<rounded-rect>` | 50                     | always      |
+| snap     | `<snap>`         | none                   | non-default |
 
 Creates a node like `gsk_clip_node_new()` with the given properties.
 
@@ -228,6 +298,7 @@ clip property. If that rectangle is indeed rounded, a node like
 | property | syntax           | default                | printed     |
 | -------- | ---------------- | ---------------------- | ----------- |
 | bounds   | `<rect>`         | 50                     | always      |
+| snap     | `<snap>`         | none                   | non-default |
 | color    | `<color>`        | #FF00CC                | always      |
 
 Creates a node like `gsk_color_node_new()` with the given properties.
@@ -241,6 +312,7 @@ people to change it.
 | -------- | ---------------- | ---------------------- | ----------- |
 | child    | `<node>`         | color { }              | always      |
 | bounds   | `<rect>`         | *see below*            | always      |
+| snap     | `<snap>`         | none                   | non-default |
 | matrix   | `<transform>`    | none                   | non-default |
 | offset   | `<number>{4}`    | 0 0 0 0                | non-default |
 
@@ -267,7 +339,7 @@ matrix3d() production to specify all 16 values individually.
 
 Creates a node like `gsk_component_transfer_node_new()` with the given properties.
 
-Possible values for the transfer propertes are:
+Possible values for the transfer properties are:
 
     transfer: none | levels(n) | linear(m,b) | gamma(amp,exp,ofs) |
               discrete(v1,…,vn) | table(v1,…,vn)
@@ -277,6 +349,7 @@ Possible values for the transfer propertes are:
 | property          | syntax            | default        | printed     |
 | ----------------- | ----------------- | -------------- | ----------- |
 | bounds            | `<rect>`          | 50             | always      |
+| snap              | `<snap>`          | none           | non-default |
 | center            | `<point>`         | 25, 25         | always      |
 | rotation          | `<number>`        | 0              | always      |
 | stops             | `<color-stops>`   | 0 #AF0, 1 #F0C | always      |
@@ -347,12 +420,32 @@ Creates a node like `gsk_cross_fade_node_new()` with the given properties.
 
 Creates a node like `gsk_debug_node_new()` with the given properties.
 
+### displacement
+
+| property     | syntax           | default                | printed     |
+| ------------ | ---------------- | ---------------------- | ----------- |
+| bounds       | `<rect>`         | 50                     | always      |
+| snap         | `<snap>`         | none                   | non-default |
+| child        | `<node>`         | color { }              | always      |
+| displacement | `<node>`         | color { }              | always      |
+| max          | `<number>{1,2}`  | 5 5                    | non-default |
+| scale        | `<number>{1,2}`  | 10 10                  | non-default |
+| offset       | `<number>{1,2}`  | 0.5 0.5                | non-default |
+| channels     | `<channel>{2}`   | red green              | non-default |
+
+Creates a new displacement node, with an effect as described in the CSS
+[filter effects spec](https://www.w3.org/TR/filter-effects-1/#feDisplacementMapElement)
+
+Possible values for the channels property are:
+
+    channel: red | green | blue | alpha
+
 ### fill
 
 | property  | syntax          | default                | printed     |
 | --------- | --------------- | ---------------------- | ----------- |
 | child     | `<node>`        | *see below*            | always      |
-| path      | `<string>`      | ""                     | always      |
+| path      | `<path>`        | ""                     | always      |
 | fill-rule | `<fill-rule>`   | winding                | always      |
 
 Creates a node like `gsk_fill_node_new()` with the given properties.
@@ -390,6 +483,7 @@ uniforms in the shader.
 | dx       | `<number>`       | 1                      | non-default |
 | dy       | `<number>`       | 1                      | non-default |
 | outline  | `<rounded-rect>` | 50                     | always      |
+| snap     | `<snap>`         | none                   | non-default |
 | spread   | `<number>`       | 0                      | non-default |
 
 Creates a node like `gsk_inset_shadow_node_new()` with the given properties.
@@ -414,6 +508,7 @@ Possible values for the isolations property are:
 | property          | syntax            | default        | printed     |
 | ----------------- | ----------------- | -------------- | ----------- |
 | bounds            | `<rect>`          | 50             | always      |
+| snap              | `<snap>`          | none           | non-default |
 | start             | `<point>`         | 0 0            | always      |
 | end               | `<point>`         | 0 50           | always      |
 | stops             | `<color-stops>`   | 0 #AF0, 1 #F0C | always      |
@@ -463,6 +558,7 @@ Creates a node like `gsk_transform_node_new()` with the given properties.
 | dx       | `<number>`       | 1                      | non-default |
 | dy       | `<number>`       | 1                      | non-default |
 | outline  | `<rounded-rect>` | 50                     | always      |
+| snap     | `<snap>`         | none                   | non-default |
 | spread   | `<number>`       | 0                      | non-default |
 
 Creates a node like `gsk_outset_shadow_node_new()` with the given properties.
@@ -472,6 +568,7 @@ Creates a node like `gsk_outset_shadow_node_new()` with the given properties.
 | property | syntax           | default                | printed     |
 | -------- | ---------------- | ---------------------- | ----------- |
 | bounds   | `<rect>`         | 50                     | always      |
+| snap     | `<snap>`         | none                   | non-default |
 | depth    | `<number>`       | 0                      | non-default |
 
 Paste the copied contents of a previous copy node. The 0-indexed depth
@@ -482,6 +579,7 @@ parameter defines the copy node to paste from.
 | property          | syntax              | default        | printed     |
 | ----------------- | ------------------- | -------------- | ----------- |
 | bounds            | `<rect>`            | 50             | always      |
+| snap              | `<snap>`            | none           | non-default |
 |                   |                     |                |             |
 | center            | `<point>`           | 25 25          | never       |
 | hradius           | `<number>`          | 25             | never       |
@@ -517,8 +615,10 @@ in premultiplied form (as in CSS) or unpremultiplied form (as in SVG).
 | property     | syntax     | default                | printed     |
 | ------------ | ---------- | ---------------------- | ----------- |
 | bounds       | `<rect>`   | *bounds of child node* | non-default |
+| snap         | `<snap>`   | none                   | non-default |
 | child        | `<node>`   | color { }              | always      |
-| child-bounds | `<rect>`   | *bounds of child node* | non-default |
+| child-bounds | `<rect>`   | *bounds of child node* | always      |
+| child-snap   | `<snap>`   | none                   | non-default |
 
 Creates a node like `gsk_repeat_node_new()` with the given properties.
 
@@ -569,6 +669,7 @@ difference is that the default value for the "repeat" property is "repeat".
 | -------- | ---------------- | ---------------------- | ----------- |
 | child    | `<node>`         | color { }              | always      |
 | clip     | `<rounded-rect>` | 50                     | always      |
+| snap     | `<snap>`         | none                   | non-default |
 
 Creates a node like `gsk_rounded_clip_node_new()` with the given properties.
 
@@ -586,7 +687,7 @@ Creates a node like `gsk_shadow_node_new()` with the given properties.
 | property    | syntax             | default           | printed     |
 | ----------- | ------------------ | ----------------- | ----------- |
 | child       | `<node>`           | *see below*       | always      |
-| path        | `<string>`         | ""                | always      |
+| path        | `<path>`           | ""                | always      |
 | line-width  | `<number>`         | 0                 | non-default |
 | line-cap    | `<line-cap>`       | butt              | always      |
 | line-join   | `<line-join>`      | miter             | always      |
@@ -649,6 +750,7 @@ Possible value for hint-metrics are:
 | property | syntax              | default                | printed     |
 | -------- | ------------------- | ---------------------- | ----------- |
 | bounds   | `<rect>`            | 50                     | always      |
+| snap     | `<snap>`            | none                   | non-default |
 | texture  | `<string>`?`<url>`? | *see below*            | always      |
 
 Creates a node like `gsk_texture_node_new()` with the given properties.
@@ -667,6 +769,7 @@ representation for this texture is `url("data:image/png;base64,iVBORw0KGgoAAAANS
 | property | syntax           | default                | printed     |
 | -------- | ---------------- | ---------------------- | ----------- |
 | bounds   | `<rect>`         | 50                     | always      |
+| snap     | `<snap>`         | none                   | non-default |
 | texture  | `<url>`          | *see below*            | always      |
 | filter   | `filter`         | linear                 | non-default |
 
@@ -686,3 +789,23 @@ Possible values for the filter property are:
 | transform| `<transform>`    | none                   | non-default |
 
 Creates a node like `gsk_transform_node_new()` with the given properties.
+
+### turbulence
+
+| property          | syntax               | default         | printed     |
+| ----------------- | -------------------- | --------------- | ----------- |
+| bounds            | `<rect>`             | 50              | always      |
+| snap              | `<snap>`             | none            | non-default |
+| color-state       | `<color-state>`      | srgb            | non-default |
+| frequency         | `<number>{1,2}`      | 0 0             | always      |
+| octaves           | `<integer>`          | 1               | non-default |
+| seed              | `<integer>`          | 0               | non-default |
+| noise-type        | `<noise-type>`       | turbulence      | non-default |
+| stitch-tiles      | `<boolean>`          | false           | non-default |
+
+Creates a new turbulence node, with an effect as described in the CSS
+[filter effects spec](https://www.w3.org/TR/filter-effects-1/#feTurbulenceElement).
+
+Possible values for the noise-type property are:
+
+    noise-type: fractal-noise | turbulence

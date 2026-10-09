@@ -265,14 +265,6 @@ typedef struct
 } GdkAndroidSurfaceOnVisibilityData;
 
 static void
-gdk_android_surface_do_map_cb (GdkSeat    *seat,
-                               GdkSurface *surface,
-                               gpointer    user_data)
-{
-  gdk_surface_set_is_mapped (surface, TRUE);
-}
-
-static void
 gdk_android_surface_handle_map (GdkAndroidSurface *self)
 {
   GdkSurface *surface = (GdkSurface *) self;
@@ -291,19 +283,13 @@ gdk_android_surface_handle_map (GdkAndroidSurface *self)
       return;
     }
 
+  gdk_surface_set_is_mapped (surface, TRUE);
+
   if (surface->autohide)
     {
       g_debug ("Grabbing surface %p [%s]", self, G_OBJECT_TYPE_NAME (self));
-      gdk_seat_grab ((GdkSeat *) display->seat,
-                     surface,
-                     GDK_SEAT_CAPABILITY_ALL,
-                     TRUE,
-                     NULL, NULL,
-                     gdk_android_surface_do_map_cb, NULL);
-    }
-  else
-    {
-      gdk_surface_set_is_mapped (surface, TRUE);
+      gdk_seat_grab ((GdkSeat *) display->seat, surface);
+      self->popup_grab = TRUE;
     }
 }
 
@@ -475,36 +461,47 @@ gdk_android_surface_finalize (GObject *object)
 }
 
 static void
-gdk_android_surface_frame_clock_after_paint (GdkFrameClock *clock,
-                                             GdkSurface    *surface)
+gdk_android_surface_submit_frame (GdkSurface          *surface,
+                                  GdkDrawContextFrame *frame)
 {
   GdkAndroidSurface *self = (GdkAndroidSurface *)surface;
-  if (!self->surface)
-    return;
+  GdkAndroidDisplay *display = GDK_ANDROID_DISPLAY (gdk_surface_get_display (surface));
 
-  GdkFrameTimings *timings = gdk_frame_clock_get_timings (clock, gdk_frame_clock_get_frame_counter (clock));
-  if (!timings)
-    return;
+  gdk_draw_context_frame_stop_throttling (frame, 0);
+
+  if (!self->surface)
+    {
+      gdk_draw_context_frame_discarded (frame);
+      return;
+    }
 
   JNIEnv *env = gdk_android_get_env();
   (*env)->PushLocalFrame (env, 1);
   jobject view = (*env)->CallObjectMethod (env, self->surface,
                                            gdk_android_get_java_cache ()->a_view.get_display);
   if (!view)
-    goto exit;
-  gfloat refresh = (*env)->CallFloatMethod (env, view,
-                                            gdk_android_get_java_cache ()->a_display.get_refresh_rate);
-  timings->refresh_interval = 1000000.f / refresh;
+    {
+      gdk_draw_context_frame_discarded (frame);
+      goto exit;
+    }
 
-  GdkAndroidDisplay *display = GDK_ANDROID_DISPLAY (gdk_surface_get_display (surface));
+  float refresh = (*env)->CallFloatMethod (env, view,
+                                           gdk_android_get_java_cache ()->a_display.get_refresh_rate);
+  refresh = (float) G_NSEC_PER_SEC / refresh;
+
   if (display->choreographer_source)
-    timings->presentation_time =
-      gdk_android_choreographer_source_get_presentation_time (
-        (GdkAndroidChoreographerSource *) display->choreographer_source);
+    {
+      gdk_draw_context_frame_presented (frame,
+                                        gdk_android_choreographer_source_get_presentation_time (
+                                          (GdkAndroidChoreographerSource *) display->choreographer_source),
+                                        refresh);
+    }
   else
-    timings->presentation_time = 0;
+    {
+      gdk_draw_context_frame_submitted (frame,
+                                        refresh);
+    }
 
-  timings->complete = TRUE;
 exit:
   (*env)->PopLocalFrame (env, NULL);
 }
@@ -519,10 +516,6 @@ gdk_android_surface_constructed (GObject *object)
   GdkFrameClock *frame_clock = _gdk_frame_clock_idle_new ();
   gdk_surface_set_frame_clock (surface, frame_clock);
   // GDK_FRAME_CLOCK_GET_CLASS(frame_clock)->freeze(frame_clock);
-  g_signal_connect (frame_clock,
-                    "after-paint",
-                    G_CALLBACK (gdk_android_surface_frame_clock_after_paint),
-                    self);
   g_object_unref (frame_clock);
 
   gdk_android_display_add_surface (display, self);
@@ -545,12 +538,19 @@ gdk_android_surface_hide (GdkSurface *surface)
   if (!self->surface || surface->destroyed)
     return;
 
+  if (surface->autohide && self->popup_grab)
+    {
+      GdkSeat *seat;
+
+      seat = gdk_display_get_default_seat (surface->display);
+      gdk_seat_ungrab (seat, surface);
+      self->popup_grab = FALSE;
+    }
+
   JNIEnv *env = gdk_android_get_env ();
 
   if (surface->is_mapped)
     (*env)->CallVoidMethod (env, self->surface, gdk_android_get_java_cache ()->surface.set_visibility, FALSE);
-
-  _gdk_surface_clear_update_area (surface);
 }
 
 static void
@@ -632,10 +632,6 @@ gdk_android_surface_destroy (GdkSurface *surface, gboolean foreign_destroy)
   GdkAndroidDisplay *display = GDK_ANDROID_DISPLAY (gdk_surface_get_display (surface));
   g_debug ("Destroying Surface %p (foreign: %d)", (gpointer) self, foreign_destroy);
 
-  g_signal_handlers_disconnect_by_func (gdk_surface_get_frame_clock (surface),
-                                        gdk_android_surface_frame_clock_after_paint,
-                                        surface);
-
   if (!foreign_destroy && self->surface)
     {
       JNIEnv *env = gdk_android_get_env ();
@@ -680,6 +676,7 @@ gdk_android_surface_class_init (GdkAndroidSurfaceClass *klass)
   surface_class->drag_begin = gdk_android_dnd_surface_drag_begin;
   surface_class->get_scale = gdk_android_surface_get_scale;
   surface_class->compute_size = gdk_android_surface_compute_size;
+  surface_class->submit_frame = gdk_android_surface_submit_frame;
 
   klass->reposition = gdk_android_surface_reposition;
 }

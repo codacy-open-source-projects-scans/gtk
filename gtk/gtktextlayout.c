@@ -174,11 +174,6 @@ enum {
   LAST_SIGNAL
 };
 
-enum {
-  ARG_0,
-  LAST_ARG
-};
-
 #define PIXEL_BOUND(d) (((d) + PANGO_SCALE - 1) / PANGO_SCALE)
 
 static guint signals[LAST_SIGNAL] = { 0 };
@@ -197,20 +192,12 @@ gtk_text_layout_dispose (GObject *object)
 
   gtk_text_layout_set_buffer (layout, NULL);
 
-  if (layout->default_style != NULL)
-    {
-      gtk_text_attributes_unref (layout->default_style);
-      layout->default_style = NULL;
-    }
+  g_clear_pointer (&layout->default_style, gtk_text_attributes_unref);
 
   g_clear_object (&layout->ltr_context);
   g_clear_object (&layout->rtl_context);
 
-  if (layout->preedit_attrs != NULL)
-    {
-      pango_attr_list_unref (layout->preedit_attrs);
-      layout->preedit_attrs = NULL;
-    }
+  g_clear_pointer (&layout->preedit_attrs, pango_attr_list_unref);
 
   G_OBJECT_CLASS (gtk_text_layout_parent_class)->dispose (object);
 }
@@ -330,8 +317,7 @@ gtk_text_layout_set_buffer (GtkTextLayout *layout,
                                             G_CALLBACK (gtk_text_layout_before_buffer_delete_range),
                                             layout);
 
-      g_object_unref (layout->buffer);
-      layout->buffer = NULL;
+      g_clear_object (&layout->buffer);
     }
 
   if (buffer)

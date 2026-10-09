@@ -109,7 +109,7 @@ struct _GtkIMContextClass
 };
 
 GDK_AVAILABLE_IN_ALL
-GType    gtk_im_context_get_type            (void) G_GNUC_CONST;
+GType    gtk_im_context_get_type            (void);
 
 GDK_AVAILABLE_IN_ALL
 void     gtk_im_context_set_client_widget   (GtkIMContext       *context,
@@ -176,7 +176,9 @@ GDK_AVAILABLE_IN_4_14
 gboolean gtk_im_context_activate_osk (GtkIMContext *context,
                                       GdkEvent     *event);
 
+GDK_AVAILABLE_IN_4_24
+GtkWidget * gtk_im_context_get_client_widget (GtkIMContext *context);
+
 G_DEFINE_AUTOPTR_CLEANUP_FUNC(GtkIMContext, g_object_unref)
 
 G_END_DECLS
-

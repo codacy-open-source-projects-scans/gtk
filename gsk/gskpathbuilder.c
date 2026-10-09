@@ -19,14 +19,15 @@
 
 #include "config.h"
 
-#include <math.h>
-
 #include "gskpathbuilder.h"
 
 #include "gskpathprivate.h"
 #include "gskcurveprivate.h"
 #include "gskpathpointprivate.h"
 #include "gskcontourprivate.h"
+
+#include <math.h>
+#include <pango/pangocairo.h>
 
 /**
  * GskPathBuilder:
@@ -174,7 +175,7 @@ static inline gskpathop
 gsk_pathop_encode_index (GskPathOperation op,
                          gsize            index)
 {
-  return gsk_pathop_encode (op, ((GskAlignedPoint *) NULL) + index);
+  return gsk_pathop_encode (op, GSIZE_TO_POINTER (index * sizeof (GskAlignedPoint)));
 }
 
 static void
@@ -249,8 +250,7 @@ gsk_path_builder_clear (GskPathBuilder *self)
 {
   gsk_path_builder_end_current (self);
 
-  g_slist_free_full (self->contours, g_free);
-  self->contours = NULL;
+  g_clear_slist (&self->contours, g_free);
 }
 
 /**
@@ -994,14 +994,16 @@ gsk_path_builder_rel_cubic_to (GskPathBuilder *self,
  * @y1: y coordinate of control point
  * @x2: x coordinate of the end of the curve
  * @y2: y coordinate of the end of the curve
- * @weight: weight of the control point, must be greater than zero
+ * @weight: weight of the control point, must be non-negative
  *
  * Adds a [conic curve](https://en.wikipedia.org/wiki/Non-uniform_rational_B-spline)
  * from the current point to @x2, @y2 with the given @weight and @x1, @y1 as the
  * control point.
  *
  * The weight determines how strongly the curve is pulled towards the control point.
- * A conic with weight 1 is identical to a quadratic Bézier curve with the same points.
+ * A conic with weight 1 is identical to a quadratic Bézier curve with the same points,
+ * a conic with weight 0 is identical to a straight line from the start point to
+ * the end point.
  *
  * Conic curves can be used to draw ellipses and circles. They are also known as
  * rational quadratic Bézier curves.
@@ -1028,7 +1030,13 @@ gsk_path_builder_conic_to (GskPathBuilder *self,
   graphene_point_t p2 = GRAPHENE_POINT_INIT (x2, y2);
 
   g_return_if_fail (self != NULL);
-  g_return_if_fail (weight > 0);
+  g_return_if_fail (weight >= 0);
+
+  if (weight == 0)
+    {
+      gsk_path_builder_line_to (self, x2, y2);
+      return;
+    }
 
   if (weight == 1)
     {
@@ -1088,7 +1096,7 @@ gsk_path_builder_conic_to (GskPathBuilder *self,
  * @y1: y offset of control point
  * @x2: x offset of the end of the curve
  * @y2: y offset of the end of the curve
- * @weight: weight of the curve, must be greater than zero
+ * @weight: weight of the curve, must be non-negative
  *
  * Adds a [conic curve](https://en.wikipedia.org/wiki/Non-uniform_rational_B-spline)
  * from the current point to @x2, @y2 with the given @weight and @x1, @y1 as the
@@ -1109,7 +1117,7 @@ gsk_path_builder_rel_conic_to (GskPathBuilder *self,
                                float           weight)
 {
   g_return_if_fail (self != NULL);
-  g_return_if_fail (weight > 0);
+  g_return_if_fail (weight >= 0);
 
   gsk_path_builder_conic_to (self,
                              self->current_point.pt.x + x1,
@@ -1706,7 +1714,7 @@ void
 gsk_path_builder_add_op (GskPathBuilder         *builder,
                          GskPathOperation        op,
                          const graphene_point_t *pts,
-                         size_t                  n_pts,
+                         gsize                   n_pts,
                          float                   weight)
 {
   switch (op)

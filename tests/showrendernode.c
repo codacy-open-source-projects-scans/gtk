@@ -30,7 +30,7 @@ struct _GtkNodeViewClass
   GtkWidgetClass parent_class;
 };
 
-GType gtk_node_view_get_type (void) G_GNUC_CONST;
+GType gtk_node_view_get_type (void);
 
 
 G_DEFINE_TYPE(GtkNodeView, gtk_node_view, GTK_TYPE_WIDGET)
@@ -206,8 +206,7 @@ main (int argc, char **argv)
       return 1;
     }
 
-  g_option_context_free (option_context);
-  option_context = NULL;
+  g_clear_pointer (&option_context, g_option_context_free);
 
   g_message ("Compare: %d, write to filename: %s", compare_node, write_to_filename);
 

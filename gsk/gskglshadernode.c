@@ -226,6 +226,7 @@ gsk_gl_shader_node_new (GskGLShader           *shader,
   self = gsk_render_node_alloc (GSK_TYPE_GL_SHADER_NODE);
   node = (GskRenderNode *) self;
   node->preferred_depth = gdk_color_state_get_depth (GDK_COLOR_STATE_SRGB);
+  node->isolates_background = TRUE;
 
   gsk_rect_init_from_rect (&node->bounds, bounds);
   gsk_rect_normalize (&node->bounds);
@@ -300,6 +301,8 @@ gsk_gl_shader_node_get_child (const GskRenderNode *node,
  * Gets shader code for the node.
  *
  * Returns: (transfer none): the `GskGLShader` shader
+ *
+ * Deprecated: 4.16
  */
 GskGLShader *
 gsk_gl_shader_node_get_shader (const GskRenderNode *node)

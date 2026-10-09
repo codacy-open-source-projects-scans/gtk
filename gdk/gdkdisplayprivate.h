@@ -55,9 +55,10 @@ typedef enum {
   GDK_VULKAN_FEATURE_SEMAPHORE_EXPORT           = 1 << 6,
   GDK_VULKAN_FEATURE_SEMAPHORE_IMPORT           = 1 << 7,
   GDK_VULKAN_FEATURE_WIN32_SEMAPHORE            = 1 << 8,
-  GDK_VULKAN_FEATURE_INCREMENTAL_PRESENT        = 1 << 9,
-  GDK_VULKAN_FEATURE_SWAPCHAIN_MAINTENANCE      = 1 << 10,
-  GDK_VULKAN_FEATURE_PORTABILITY_SUBSET         = 1 << 11,
+  GDK_VULKAN_FEATURE_FENCE_FD                   = 1 << 9,
+  GDK_VULKAN_FEATURE_INCREMENTAL_PRESENT        = 1 << 10,
+  GDK_VULKAN_FEATURE_SWAPCHAIN_MAINTENANCE      = 1 << 11,
+  GDK_VULKAN_FEATURE_PORTABILITY_SUBSET         = 1 << 12,
 } GdkVulkanFeatures;
 
 #define GDK_VULKAN_N_FEATURES 11
@@ -65,21 +66,6 @@ typedef enum {
 #ifdef GDK_RENDERING_VULKAN
 extern const GdkDebugKey gdk_vulkan_feature_keys[];
 #endif
-
-/* Tracks information about the device grab on this display */
-typedef struct
-{
-  GdkSurface *surface;
-  gulong serial_start;
-  gulong serial_end; /* exclusive, i.e. not active on serial_end */
-  guint event_mask;
-  guint32 time;
-
-  guint activated : 1;
-  guint implicit_ungrab : 1;
-  guint owner_events : 1;
-  guint implicit : 1;
-} GdkDeviceGrabInfo;
 
 /* Tracks information about which surface and position the pointer last was in.
  * This is useful when we need to synthesize events later.
@@ -106,8 +92,6 @@ struct _GdkDisplay
   guint event_pause_count;       /* How many times events are blocked */
 
   guint closed             : 1;  /* Whether this display has been closed */
-
-  GHashTable *device_grabs;
 
   GdkClipboard *clipboard;
   GdkClipboard *primary_clipboard;
@@ -145,6 +129,7 @@ struct _GdkDisplay
   guint have_egl_dma_buf_import : 1;
   guint have_egl_dma_buf_export : 1;
   guint have_egl_gl_colorspace : 1;
+  guint have_egl_sync_fd : 1;
 
   /* atomic */ GdkDmabufFormats *dmabuf_formats;
   GdkDmabufDownloader *egl_downloader;
@@ -217,27 +202,6 @@ typedef void (* GdkDisplayPointerInfoForeach) (GdkDisplay           *display,
 
 void                _gdk_display_update_last_event    (GdkDisplay     *display,
                                                        GdkEvent       *event);
-void                _gdk_display_device_grab_update   (GdkDisplay *display,
-                                                       GdkDevice  *device,
-                                                       gulong      current_serial);
-GdkDeviceGrabInfo * _gdk_display_get_last_device_grab (GdkDisplay *display,
-                                                       GdkDevice  *device);
-GdkDeviceGrabInfo * _gdk_display_add_device_grab      (GdkDisplay       *display,
-                                                       GdkDevice        *device,
-                                                       GdkSurface        *surface,
-                                                       gboolean          owner_events,
-                                                       GdkEventMask      event_mask,
-                                                       gulong            serial_start,
-                                                       guint32           time,
-                                                       gboolean          implicit);
-GdkDeviceGrabInfo * _gdk_display_has_device_grab      (GdkDisplay       *display,
-                                                       GdkDevice        *device,
-                                                       gulong            serial);
-gboolean            _gdk_display_end_device_grab      (GdkDisplay       *display,
-                                                       GdkDevice        *device,
-                                                       gulong            serial,
-                                                       GdkSurface        *if_child,
-                                                       gboolean          implicit);
 GdkPointerSurfaceInfo * _gdk_display_get_pointer_info  (GdkDisplay       *display,
                                                        GdkDevice        *device);
 void                _gdk_display_pointer_info_foreach (GdkDisplay       *display,
@@ -248,6 +212,10 @@ void                _gdk_display_pause_events         (GdkDisplay       *display
 void                _gdk_display_unpause_events       (GdkDisplay       *display);
 
 void                gdk_display_init_dmabuf           (GdkDisplay       *self);
+
+void                gdk_display_set_prefer_vulkan     (GdkDisplay       *self,
+                                                       gboolean          prefer_vulkan);
+gboolean            gdk_display_get_prefer_vulkan     (GdkDisplay       *self);
 
 gboolean            gdk_display_prepare_vulkan        (GdkDisplay       *self,
                                                        GError          **error);
@@ -312,4 +280,3 @@ void gdk_display_set_cursor_theme          (GdkDisplay   *display,
 int gdk_display_guess_scale_factor         (GdkDisplay   *display);
 
 G_END_DECLS
-

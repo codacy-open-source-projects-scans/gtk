@@ -25,11 +25,8 @@
 #include "gtksvgvalueprivate.h"
 #include "gtksvgenumsprivate.h"
 
-G_BEGIN_DECLS
-
 gboolean      svg_path_data_parse_full  (const char   *string,
                                          SvgPathData **path_data);
-SvgPathData * svg_path_data_parse       (const char   *string);
 void          svg_path_data_free        (SvgPathData  *path_data);
 
 SvgPathData * svg_path_data_from_gsk    (GskPath      *path);

@@ -39,7 +39,7 @@ typedef struct _GtkShortcutController GtkShortcutController;
 typedef struct _GtkShortcutControllerClass GtkShortcutControllerClass;
 
 GDK_AVAILABLE_IN_ALL
-GType                   gtk_shortcut_controller_get_type                (void) G_GNUC_CONST;
+GType                   gtk_shortcut_controller_get_type                (void);
 
 GDK_AVAILABLE_IN_ALL
 GtkEventController *    gtk_shortcut_controller_new                     (void);
@@ -63,6 +63,8 @@ void                    gtk_shortcut_controller_add_shortcut            (GtkShor
 GDK_AVAILABLE_IN_ALL
 void                    gtk_shortcut_controller_remove_shortcut         (GtkShortcutController  *self,
                                                                          GtkShortcut            *shortcut);
+
+G_DEFINE_AUTOPTR_CLEANUP_FUNC(GtkShortcutController, g_object_unref)
 
 G_END_DECLS
 
