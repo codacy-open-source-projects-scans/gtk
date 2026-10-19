@@ -2253,10 +2253,12 @@ push_group (SvgElement   *shape,
             }
           else if (gsk_render_node_get_node_type (mask_child) == GSK_TRANSFORM_NODE)
             {
+              GskRenderNode *child = gsk_transform_node_get_child (mask_child);
               GskTransform *transform = gsk_transform_node_get_transform (mask_child);
 
-              if (gsk_transform_get_category (transform) >= GSK_TRANSFORM_CATEGORY_2D_TRANSLATE)
-                color_node = gsk_transform_node_get_child (mask_child);
+              if (gsk_render_node_get_node_type (child) == GSK_COLOR_NODE &&
+                  gsk_transform_get_category (transform) >= GSK_TRANSFORM_CATEGORY_2D_TRANSLATE)
+                color_node = child;
             }
         }
 
@@ -4124,7 +4126,8 @@ static gboolean
 generate_layouts (SvgElement            *self,
                   PangoFontMap          *fontmap,
                   const graphene_rect_t *viewport,
-                  graphene_rect_t       *bounds)
+                  graphene_rect_t       *bounds,
+                  graphene_point_t      *offset)
 {
   gboolean retval;
   TextChunk dummy;
@@ -4133,6 +4136,8 @@ generate_layouts (SvgElement            *self,
   double y = 0;
   XmlSpace space;
   WritingMode wmode;
+  TextAnchor anchor;
+  float dx, dy;
 
 #if 0
   print_chunks (self, TRUE);
@@ -4147,6 +4152,7 @@ generate_layouts (SvgElement            *self,
 
   space = svg_enum_get (svg_element_get_current_value (self, SVG_PROPERTY_SPACE));
   wmode = svg_enum_get (svg_element_get_current_value (self, SVG_PROPERTY_WRITING_MODE));
+  anchor = svg_enum_get (svg_element_get_current_value (self, SVG_PROPERTY_TEXT_ANCHOR));
 
   retval = do_generate_layouts (self, fontmap, space, wmode, &x, &y, &chunk, NULL, viewport, bounds);
 
@@ -4164,6 +4170,34 @@ generate_layouts (SvgElement            *self,
 #if 0
   print_chunks (self, FALSE);
 #endif
+
+  dx = dy = 0;
+  switch (anchor)
+    {
+    case TEXT_ANCHOR_START:
+      break;
+    case TEXT_ANCHOR_MIDDLE:
+      if (svg_writing_mode_is_vertical (wmode))
+        dy = - bounds->size.height / 2;
+      else
+        dx = - bounds->size.width / 2;
+      break;
+    case TEXT_ANCHOR_END:
+      if (svg_writing_mode_is_vertical (wmode))
+        dy = - bounds->size.height;
+      else
+        dx = - bounds->size.width;
+      break;
+    default:
+      g_assert_not_reached ();
+    }
+
+  graphene_rect_init (&self->bounds,
+                      bounds->origin.x + dx, bounds->origin.y + dy,
+                      bounds->size.width, bounds->size.height);
+  self->valid_bounds = TRUE;
+  offset->x = dx;
+  offset->y = dy;
 
   return retval;
 }
@@ -4184,6 +4218,24 @@ clear_layouts (SvgElement *self)
           break;
         default:
           g_assert_not_reached ();
+        }
+    }
+}
+
+void
+ensure_valid_text_bounds (SvgElement            *shape,
+                          GtkSvg                *self,
+                          const graphene_rect_t *viewport)
+{
+  if (!shape->valid_bounds)
+    {
+      graphene_rect_t bounds;
+      graphene_point_t offset;
+
+      if (generate_layouts (shape, get_fontmap (self), viewport, &bounds, &offset))
+        {
+          /* TODO: keep the layouts */
+          clear_layouts (shape);
         }
     }
 }
@@ -4759,7 +4811,7 @@ recompute_current_values (SvgElement   *shape,
                           SvgElement   *parent,
                           PaintContext *context)
 {
-  SvgComputeContext ctx;
+  SvgComputeContext ctx = { 0, };
 
   ctx.svg = context->svg;
   ctx.viewport = context->viewport;
@@ -4797,10 +4849,8 @@ paint_shape (SvgElement   *shape,
 
   if (svg_element_get_element_type (shape) == SVG_ELEMENT_TEXT)
     {
-      TextAnchor anchor;
-      WritingMode wmode;
       graphene_rect_t bounds;
-      float dx, dy;
+      graphene_point_t offset;
       GskTransform *transform = NULL;
 
       if (svg_enum_get (svg_element_get_current_value (shape, SVG_PROPERTY_DISPLAY)) == DISPLAY_NONE)
@@ -4812,36 +4862,8 @@ paint_shape (SvgElement   *shape,
             return;
         }
 
-      anchor = svg_enum_get (svg_element_get_current_value (shape, SVG_PROPERTY_TEXT_ANCHOR));
-      wmode = svg_enum_get (svg_element_get_current_value (shape, SVG_PROPERTY_WRITING_MODE));
-      if (!generate_layouts (shape, get_fontmap (context->svg), context->viewport, &bounds))
+      if (!generate_layouts (shape, get_fontmap (context->svg), context->viewport, &bounds, &offset))
         return;
-
-      dx = dy = 0;
-      switch (anchor)
-        {
-        case TEXT_ANCHOR_START:
-          break;
-        case TEXT_ANCHOR_MIDDLE:
-          if (svg_writing_mode_is_vertical (wmode))
-            dy = - bounds.size.height / 2;
-          else
-            dx = - bounds.size.width / 2;
-          break;
-        case TEXT_ANCHOR_END:
-          if (svg_writing_mode_is_vertical (wmode))
-            dy = - bounds.size.height;
-          else
-            dx = - bounds.size.width;
-          break;
-        default:
-          g_assert_not_reached ();
-        }
-
-      graphene_rect_init (&shape->bounds,
-                          bounds.origin.x + dx, bounds.origin.y + dy,
-                          bounds.size.width, bounds.size.height);
-      shape->valid_bounds = TRUE;
 
       if (context->picking.picking &&
           svg_enum_get (svg_element_get_current_value (shape, SVG_PROPERTY_POINTER_EVENTS)) == POINTER_EVENTS_BOUNDING_BOX)
@@ -4855,7 +4877,7 @@ paint_shape (SvgElement   *shape,
         }
 
       gtk_snapshot_save (context->snapshot);
-      transform = gsk_transform_translate (transform, &GRAPHENE_POINT_INIT (dx, dy));
+      transform = gsk_transform_translate (transform, &offset);
 
       gtk_snapshot_transform (context->snapshot, transform);
       push_transform (context, transform);
@@ -5228,7 +5250,7 @@ gtk_svg_apply_filter (GtkSvg                *svg,
 {
   SvgElement *filter;
   SvgElement *shape;
-  PaintContext paint_context;
+  PaintContext paint_context = { 0, };
   GskRenderNode *result;
   G_GNUC_UNUSED GskRenderNode *node;
 
@@ -5286,8 +5308,8 @@ SvgElement *
 gtk_svg_pick_element (GtkSvg                 *self,
                       const graphene_point_t *p)
 {
-  SvgComputeContext compute_context;
-  PaintContext paint_context;
+  SvgComputeContext compute_context = { 0, };
+  PaintContext paint_context = { 0, };
   graphene_rect_t viewport;
   GtkSnapshot *snapshot;
   GskRenderNode *node;
@@ -5335,6 +5357,7 @@ gtk_svg_pick_element (GtkSvg                 *self,
   paint_context.picking.points = NULL;
   paint_context.picking.done = FALSE;
   paint_context.picking.picked = NULL;
+  paint_context.picking.clipped = NULL;
 
   if (self->overflow == GTK_OVERFLOW_HIDDEN)
     gtk_snapshot_push_clip (snapshot, &viewport);
@@ -5513,8 +5536,8 @@ gtk_svg_snapshot_full (GtkSvg        *self,
 
   if (!can_reuse_node (self, width, height, colors, n_colors, weight))
     {
-      SvgComputeContext compute_context;
-      PaintContext paint_context;
+      SvgComputeContext compute_context = { 0, };
+      PaintContext paint_context = { 0, };
       SvgRendering rendering;
 
       /* If time is the only input that changed, static current values are

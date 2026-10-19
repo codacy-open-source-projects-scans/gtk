@@ -26,15 +26,6 @@
  */
 #define EPSILON 0.001
 
-/* the minimum scale required. If it's smaller than this, we treat it like 0 and
- * skip it.
- *
- * We set this to 1/100,000 because then 100,000 units would make up 1 pixel. And
- * it's unlikely that something useful results from scaling this far, considering
- * max texture size is usually 16,384 and FLOAT16 can't represent numbers this big.
- */
-#define GSK_GPU_MIN_SCALE 0.00001
-
 gboolean
 gsk_gpu_render_pass_device_to_user (GskGpuRenderPass            *self,
                                     const cairo_rectangle_int_t *device,
@@ -255,6 +246,7 @@ gsk_gpu_render_pass_new (GskGpuFrame                 *frame,
     }
 
   self->clip_mask = NULL;
+  self->clip_mask_sampler = GSK_GPU_SAMPLER_DEFAULT;
   self->clip_mask_rect = GRAPHENE_RECT_INIT (0, 0, 0, 0);
   self->clip_mask_has_opacity = FALSE;
   self->modelview = NULL;
@@ -497,6 +489,7 @@ gsk_gpu_render_pass_draw_clip_mask (GskGpuRenderPass            *self,
                                     const graphene_rect_t       *new_clip_rect,
                                     const GskRoundedRect        *new_clip_rounded,
                                     GskGpuImage                 *new_clip_mask,
+                                    GskGpuSampler                new_clip_mask_sampler,
                                     const graphene_rect_t       *new_clip_mask_rect,
                                     GskGpuRenderPassClipStorage *storage);
 
@@ -589,7 +582,7 @@ gsk_gpu_render_pass_push_transform (GskGpuRenderPass                 *self,
 
             if (storage->clip.clip.type != GSK_GPU_CLIP_NONE)
               {
-                gsk_gpu_render_pass_draw_clip_mask (self, NULL, NULL, NULL, NULL, &storage->clip);
+                gsk_gpu_render_pass_draw_clip_mask (self, NULL, NULL, NULL, GSK_GPU_SAMPLER_DEFAULT, NULL, &storage->clip);
               }
             if (!gsk_gpu_clip_is_all_clipped (&self->clip))
               {
@@ -1060,6 +1053,7 @@ gsk_gpu_render_pass_draw_clip_mask (GskGpuRenderPass            *self,
                                     const graphene_rect_t       *new_clip_rect,
                                     const GskRoundedRect        *new_clip_rounded,
                                     GskGpuImage                 *new_clip_mask,
+                                    GskGpuSampler                new_clip_mask_sampler,
                                     const graphene_rect_t       *new_clip_mask_rect,
                                     GskGpuRenderPassClipStorage *storage)
 {
@@ -1144,7 +1138,7 @@ gsk_gpu_render_pass_draw_clip_mask (GskGpuRenderPass            *self,
                           self->ccs,
                           &GSK_RECT_INIT_CAIRO (&area),
                           self->clip_mask,
-                          GSK_GPU_SAMPLER_TRANSPARENT,
+                          self->clip_mask_sampler,
                           &self->clip_mask_rect);
     }
 
@@ -1204,6 +1198,7 @@ gsk_gpu_render_pass_draw_clip_mask (GskGpuRenderPass            *self,
   gsk_gpu_render_pass_push_clip_device_rect (self, &area, storage);
   gsk_gpu_clip_init_copy (&storage->clip, &old_clip);
   storage->clip_mask = self->clip_mask;
+  storage->clip_mask_sampler = self->clip_mask_sampler;
   storage->clip_mask_rect = self->clip_mask_rect;
   storage->clip_mask_has_opacity = self->clip_mask_has_opacity;
   storage->opacity = self->opacity;
@@ -1227,7 +1222,7 @@ gsk_gpu_render_pass_push_clip_rect (GskGpuRenderPass            *self,
     return;
 
   GSK_DEBUG (FALLBACK, "push_clip_rect() needs clip mask");
-  gsk_gpu_render_pass_draw_clip_mask (self, clip, NULL, NULL, NULL, storage);
+  gsk_gpu_render_pass_draw_clip_mask (self, clip, NULL, NULL, GSK_GPU_SAMPLER_DEFAULT, NULL, storage);
 }
 
 void
@@ -1244,6 +1239,7 @@ gsk_gpu_render_pass_pop_clip_rect (GskGpuRenderPass            *self,
     {
       g_clear_object (&self->clip_mask);
       self->clip_mask = storage->clip_mask;
+      self->clip_mask_sampler = storage->clip_mask_sampler;
       self->clip_mask_rect = storage->clip_mask_rect;
       self->clip_mask_has_opacity = storage->clip_mask_has_opacity;
       self->opacity = storage->opacity;
@@ -1266,7 +1262,7 @@ gsk_gpu_render_pass_push_clip_rounded (GskGpuRenderPass            *self,
     {
       gsk_gpu_clip_init_copy (&self->clip, &storage->clip);
       GSK_DEBUG (FALLBACK, "push_clip_rounded() needs clip mask");
-      gsk_gpu_render_pass_draw_clip_mask (self, NULL, clip, NULL, NULL, storage);
+      gsk_gpu_render_pass_draw_clip_mask (self, NULL, clip, NULL, GSK_GPU_SAMPLER_DEFAULT, NULL, storage);
       return;
     }
 
@@ -1294,6 +1290,7 @@ void
 gsk_gpu_render_pass_push_clip_mask (GskGpuRenderPass            *self,
                                     const graphene_rect_t       *clip,
                                     GskGpuImage                 *clip_mask,
+                                    GskGpuSampler                clip_mask_sampler,
                                     const graphene_rect_t       *clip_mask_rect,
                                     gboolean                     has_opacity,
                                     GskGpuRenderPassClipStorage *storage)
@@ -1306,7 +1303,13 @@ gsk_gpu_render_pass_push_clip_mask (GskGpuRenderPass            *self,
       !gsk_gpu_render_pass_user_to_device (self, clip_mask_rect, &device))
     {
       GSK_DEBUG (FALLBACK, "push_clip_mask() needs to draw clip mask");
-      gsk_gpu_render_pass_draw_clip_mask (self, clip, NULL, clip_mask, clip_mask_rect, storage);
+      gsk_gpu_render_pass_draw_clip_mask (self,
+                                          clip,
+                                          NULL,
+                                          clip_mask,
+                                          clip_mask_sampler,
+                                          clip_mask_rect,
+                                          storage);
       self->clip_mask_has_opacity |= has_opacity;
       return;
     }
@@ -1314,12 +1317,14 @@ gsk_gpu_render_pass_push_clip_mask (GskGpuRenderPass            *self,
   g_assert (gsk_gpu_image_get_shader_op (clip_mask) == GDK_SHADER_DEFAULT);
 
   storage->clip_mask = self->clip_mask;
+  storage->clip_mask_sampler = self->clip_mask_sampler;
   storage->clip_mask_rect = self->clip_mask_rect;
   storage->clip_mask_has_opacity = self->clip_mask_has_opacity;
   storage->opacity = self->opacity;
   storage->modified |= GSK_GPU_GLOBAL_MASK;
 
   self->clip_mask = g_object_ref (clip_mask);
+  self->clip_mask_sampler = clip_mask_sampler;
   self->clip_mask_rect = device;
   self->clip_mask_has_opacity = has_opacity;
 

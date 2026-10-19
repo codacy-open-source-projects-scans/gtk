@@ -5,6 +5,15 @@
 
 #include "gdk/gdkmemoryformatprivate.h"
 
+/* the minimum scale required. If it's smaller than this, we treat it like 0 and
+ * skip it.
+ *
+ * We set this to 1/100,000 because then 100,000 units would make up 1 pixel. And
+ * it's unlikely that something useful results from scaling this far, considering
+ * max texture size is usually 16,384 and FLOAT16 can't represent numbers this big.
+ */
+#define GSK_GPU_MIN_SCALE 0.00001
+
 typedef struct _GskGpuBuffer            GskGpuBuffer;
 typedef struct _GskGpuCache             GskGpuCache;
 typedef struct _GskGpuCachePrivate      GskGpuCachePrivate;
@@ -164,6 +173,7 @@ typedef enum {
   GSK_GPU_OPTIMIZE_REPEAT               = 1 <<  7,
   GSK_GPU_OPTIMIZE_DUAL_BLEND           = 1 <<  8,
   GSK_GPU_OPTIMIZE_DAMAGE               = 1 <<  9,
-  GSK_GPU_OPTIMIZE_PROFILE              = 1 << 10,
+  GSK_GPU_OPTIMIZE_SHADOW               = 1 << 10,
+  GSK_GPU_OPTIMIZE_PROFILE              = 1 << 11,
 } GskGpuOptimizations;
 
